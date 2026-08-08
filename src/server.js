@@ -24,8 +24,8 @@ app.get('/', (req, res) => {
   res.json({ message: "GastroWise API is running" });
 });
 
-// Lắng nghe cổng
+// Lắng nghe cổng (Thêm '0.0.0.0' để Railway nhận dạng)
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server đang chạy trên cổng ${PORT}`);
 });
