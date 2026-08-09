@@ -7,6 +7,12 @@ const morgan = require('morgan');
 
 const authRoutes = require('./routes/auth');
 const restaurantRoutes = require('./routes/restaurants');
+const userRoutes = require('./routes/users');
+const reviewRoutes = require('./routes/reviews');
+const itineraryRoutes = require('./routes/itineraries');
+const adminRoutes = require('./routes/admin');
+const favoriteRoutes = require('./routes/favorites');
+const notificationRoutes = require('./routes/notifications');
 
 const app = express();
 
@@ -18,6 +24,12 @@ app.use(morgan('dev')); // Ghi log request ra console
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/restaurants', restaurantRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/reviews', reviewRoutes);
+app.use('/api/itineraries', itineraryRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/favorites', favoriteRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Route test nhanh
 app.get('/', (req, res) => {
