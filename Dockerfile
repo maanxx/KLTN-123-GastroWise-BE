@@ -5,12 +5,12 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Cài đặt dependencies 
-RUN npm install
+# Cài đặt dependencies (chỉ production)
+RUN npm ci --only=production
 
 # Copy source code
 COPY . .
 
-EXPOSE 3000
+EXPOSE 5000
 
-CMD ["npm", "start"]
+CMD ["npm", "run", "start:prod"]

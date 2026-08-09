@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const pool = require('../config/db');
+const User = require('../models/User');
 
 // Xử lý đăng ký tài khoản mới
 exports.register = async (req, res) => {
@@ -8,10 +8,9 @@ exports.register = async (req, res) => {
 
   try {
     // Kiểm tra xem email đã tồn tại chưa
-    const checkEmailQuery = 'SELECT id FROM users WHERE email = $1';
-    const checkEmailResult = await pool.query(checkEmailQuery, [email]);
+    const existingUser = await User.findByEmail(email);
     
-    if (checkEmailResult.rows.length > 0) {
+    if (existingUser) {
       return res.status(409).json({ message: 'Email đã tồn tại' });
     }
 
@@ -19,15 +18,13 @@ exports.register = async (req, res) => {
     const saltRounds = 10;
     const password_hash = await bcrypt.hash(password, saltRounds);
 
-    // Lưu vào cơ sở dữ liệu, role mặc định là 'user'
-    const insertUserQuery = `
-      INSERT INTO users (full_name, email, password_hash, phone)
-      VALUES ($1, $2, $3, $4)
-      RETURNING id, full_name, email, phone, avatar_url, role, created_at
-    `;
-    const insertValues = [full_name, email, password_hash, phone];
-    const userResult = await pool.query(insertUserQuery, insertValues);
-    const user = userResult.rows[0];
+    // Lưu vào cơ sở dữ liệu qua Model
+    const user = await User.create({
+      full_name,
+      email,
+      password_hash,
+      phone
+    });
 
     // Tạo JWT token
     const token = jwt.sign(
@@ -50,14 +47,11 @@ exports.login = async (req, res) => {
 
   try {
     // Tìm user theo email
-    const findUserQuery = 'SELECT * FROM users WHERE email = $1';
-    const userResult = await pool.query(findUserQuery, [email]);
+    const user = await User.findByEmail(email);
 
-    if (userResult.rows.length === 0) {
+    if (!user) {
       return res.status(401).json({ message: 'Email hoặc mật khẩu không đúng' });
     }
-
-    const user = userResult.rows[0];
 
     // So sánh mật khẩu bằng bcrypt
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
