@@ -4,7 +4,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- 1. Bảng users
 CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     full_name VARCHAR(100) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
     phone VARCHAR(20),
@@ -14,9 +14,23 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 1b. Bảng user_preferences
+CREATE TABLE IF NOT EXISTS user_preferences (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    dietary_options TEXT[],
+    favorite_cuisines TEXT[],
+    max_budget DECIMAL(12, 2) DEFAULT 500000,
+    preferred_atmosphere TEXT[],
+    max_distance INTEGER DEFAULT 10,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id)
+);
+
 -- 2. Bảng restaurants
 CREATE TABLE IF NOT EXISTS restaurants (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     owner_id UUID REFERENCES users(id) ON DELETE SET NULL,
     name VARCHAR(255) NOT NULL,
     address TEXT,
@@ -38,7 +52,7 @@ CREATE INDEX IF NOT EXISTS idx_restaurants_location ON restaurants USING GIST (l
 
 -- 3. Bảng reviews
 CREATE TABLE IF NOT EXISTS reviews (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
     rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
@@ -49,7 +63,7 @@ CREATE TABLE IF NOT EXISTS reviews (
 
 -- 4. Bảng itineraries (Lộ trình)
 CREATE TABLE IF NOT EXISTS itineraries (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title VARCHAR(255) NOT NULL,
     start_time TIMESTAMP WITH TIME ZONE,
@@ -62,7 +76,7 @@ CREATE TABLE IF NOT EXISTS itineraries (
 
 -- 5. Bảng itinerary_stops (Các điểm dừng trong Lộ trình)
 CREATE TABLE IF NOT EXISTS itinerary_stops (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     itinerary_id UUID NOT NULL REFERENCES itineraries(id) ON DELETE CASCADE,
     restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
     order_index INTEGER NOT NULL,
@@ -74,7 +88,7 @@ CREATE TABLE IF NOT EXISTS itinerary_stops (
 
 -- 6. Bảng favorites (Quán ăn yêu thích)
 CREATE TABLE IF NOT EXISTS favorites (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -83,7 +97,7 @@ CREATE TABLE IF NOT EXISTS favorites (
 
 -- 7. Bảng notifications (Thông báo)
 CREATE TABLE IF NOT EXISTS notifications (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title VARCHAR(255) NOT NULL,
     message TEXT NOT NULL,

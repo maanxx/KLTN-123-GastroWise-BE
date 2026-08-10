@@ -1,10 +1,12 @@
 // Cấu hình kết nối cơ sở dữ liệu PostgreSQL
 const { Pool } = require('pg');
 
+const isLocalhost = process.env.DATABASE_URL && process.env.DATABASE_URL.includes('localhost');
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false // Bắt buộc khi kết nối Supabase từ Railway/Serverless
+  ssl: isLocalhost ? false : {
+    rejectUnauthorized: false
   }
 });
 
