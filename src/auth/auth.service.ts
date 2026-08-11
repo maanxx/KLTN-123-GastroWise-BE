@@ -11,7 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
-import { UserDocument } from 'src/users/schemas/user.schema'; // Import thêm UserDocument
+import { UserDocument } from 'src/users/schemas/user.schema';
 import { UpdateUserDto } from 'src/users/dto/update-user.dto';
 
 @Injectable()
@@ -34,19 +34,21 @@ export class AuthService {
 
     const newUser: UserDocument = await this.usersService.create(registerDto);
 
-    // Tạo tokens
     const tokens = await this._generateTokens(
-      newUser._id.toString(), // SỬA Ở ĐÂY 1/6
+      newUser._id.toString(), 
       newUser.email,
     );
 
-    // Cập nhật refresh token đã băm vào DB
     await this.usersService.updateRefreshToken(
-      newUser._id.toString(), // SỬA Ở ĐÂY 2/6
+      newUser._id.toString(), 
       tokens.refreshToken,
     );
 
-    return tokens;
+    return {
+      token: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      user: newUser
+    };
   }
 
   // --- HÀM ĐĂNG NHẬP ---
@@ -74,7 +76,11 @@ export class AuthService {
       tokens.refreshToken,
     );
 
-    return tokens;
+    return {
+      token: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      user: user
+    };
   }
 
   // --- HÀM ĐĂNG XUẤT ---

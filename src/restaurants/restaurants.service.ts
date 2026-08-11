@@ -142,6 +142,7 @@ export class RestaurantsService {
     userLon: string = '',
     search: string = '',
     city: string = '',
+    tags: string = '',
   ): Promise<any> {
     const pageNum = Number(page) || 1;
     const limitNum = Number(limit) || 32;
@@ -178,6 +179,14 @@ export class RestaurantsService {
         case '7to8': filterQuery[scoreFieldToCheck] = { $gte: 7.0, $lt: 8.0 }; break;
         case '6to7': filterQuery[scoreFieldToCheck] = { $gte: 6.0, $lt: 7.0 }; break;
         case 'lt6': filterQuery[scoreFieldToCheck] = { $lt: 6.0 }; break;
+      }
+    }
+
+    if (tags && tags !== 'Tất cả') {
+      const tagList = tags.split(',').map(t => t.trim()).filter(Boolean);
+      if (tagList.length > 0) {
+        // Match ANY of the tags (OR logic)
+        filterQuery['tags'] = { $regex: new RegExp(tagList.join('|'), 'i') };
       }
     }
 
@@ -248,7 +257,7 @@ export class RestaurantsService {
       }
 
       if (isOpenNowBool) {
-        allCandidates = allCandidates.filter((res: any) => this.checkIsOpen(res.gioMoCua));
+        allCandidates = allCandidates.filter((res: any) => this.checkIsOpen(res.openingTime || res.gioMoCua));
       }
 
      if (isAiSearch && sortBy === 'diemTrungBinh') {
