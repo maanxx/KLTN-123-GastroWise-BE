@@ -6,6 +6,7 @@ import {
   Query,
   HttpException,
   HttpStatus,
+  Param,
 } from '@nestjs/common';
 import { ReviewsService } from './reviews.service';
 import { CreateReviewDto } from './dto/create-review.dto';
@@ -25,6 +26,11 @@ export class ReviewsController {
       throw new HttpException('Missing url parameter', HttpStatus.BAD_REQUEST);
     }
     return this.reviewsService.findByRestaurantUrl(url);
+  }
+
+  @Get('restaurant/:id')
+  async getByRestaurantId(@Param('id') id: string) {
+    return this.reviewsService.findByRestaurantId(id);
   }
 
   @Post('migrate-sentiment')

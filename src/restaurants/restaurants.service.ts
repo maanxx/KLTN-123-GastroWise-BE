@@ -4,6 +4,7 @@ import { CreateRestaurantDto } from './dto/create-restaurant.dto';
 import { UpdateRestaurantDto } from './dto/update-restaurant.dto';
 import { InjectModel } from '@nestjs/mongoose';
 import { Restaurant, RestaurantDocument } from './schemas/restaurant.schema';
+import { MenuItem, MenuItemDocument } from './schemas/menu-item.schema';
 import { Model } from 'mongoose';
 import { HttpService } from '@nestjs/axios'; 
 import { firstValueFrom } from 'rxjs';
@@ -16,8 +17,14 @@ export class RestaurantsService {
   constructor(
     @InjectModel(Restaurant.name)
     private restaurantModel: Model<RestaurantDocument>,
+    @InjectModel(MenuItem.name)
+    private menuItemModel: Model<MenuItemDocument>,
     private readonly httpService: HttpService,
   ) {}
+
+  async getMenu(id: string) {
+    return this.menuItemModel.find({ restaurantId: id }).exec();
+  }
 
   create(createRestaurantDto: CreateRestaurantDto) {
     return 'This action adds a new restaurant';

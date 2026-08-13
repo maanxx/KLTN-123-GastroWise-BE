@@ -61,6 +61,11 @@ export class RestaurantsController {
     );
   }
 
+  @Get(':id/menu')
+  getMenu(@Param('id') id: string) {
+    return this.restaurantsService.getMenu(id);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.restaurantsService.findOne(id);

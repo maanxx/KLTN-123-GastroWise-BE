@@ -43,7 +43,7 @@ URL_CONFIGS = [
     {"url": "https://shopeefood.vn/ho-chi-minh/food/danh-sach-dia-diem-phuc-vu-rice-giao-tan-noi", "tags": "CƠM HỘP"}
 ]
 
-MAX_SCROLLS_PER_PAGE = 15
+MAX_SCROLLS_PER_PAGE = 30
 REQUEST_DELAY_SECONDS = 1.0  
 
 FOODY_HEADERS = {
@@ -118,22 +118,35 @@ def collect_slugs_via_selenium() -> dict:
 def format_price(p):
     return f"{int(p):,}đ".replace(",", ".") if p else ""
 
-def fetch_restaurant_detail_and_reviews(slug: str, tags: str) -> tuple:
-    url = f"https://www.foody.vn/ho-chi-minh/{slug}"
+def parse_foody_date(date_str: str) -> datetime:
+    if not date_str:
+        return datetime.now()
+    match = re.search(r'/Date\((\d+)(?:[+-]\d+)?\)/', date_str)
+    if match:
+        timestamp_ms = int(match.group(1))
+        return datetime.fromtimestamp(timestamp_ms / 1000.0)
     try:
-        resp = requests.get(url, headers=FOODY_HEADERS, timeout=10)
+        return datetime.fromisoformat(date_str)
+    except:
+        return datetime.now()
+
+def fetch_restaurant_detail_and_reviews(slug: str, tags: str, driver) -> tuple:
+    url = f"https://www.foody.vn/ho-chi-minh/{slug}"
+    session = requests.Session()
+    try:
+        resp = session.get(url, headers=FOODY_HEADERS, timeout=10)
     except Exception as e:
-        return None, []
+        return None, [], []
     if resp.status_code != 200:
-        return None, []
+        return None, [], []
 
     match = INIT_DATA_PATTERN.search(resp.text)
     if not match:
-        return None, []
+        return None, [], []
     try:
         data = json.loads(match.group(1))
     except json.JSONDecodeError:
-        return None, []
+        return None, [], []
 
     # Format Opening Time
     opening_time_str = ""
@@ -177,6 +190,7 @@ def fetch_restaurant_detail_and_reviews(slug: str, tags: str) -> tuple:
         "slug": slug,
         "urlGoc": data.get("MicrositeUrl") or url,
         "avatarUrl": (data.get("PictureModel") or {}).get("ImageUrl"),
+        "contactPhone": data.get("Mobile") or data.get("Phone") or "",
     }
 
     # GIAI ĐOẠN 3: LẤY REVIEWS THẬT
@@ -184,23 +198,64 @@ def fetch_restaurant_detail_and_reviews(slug: str, tags: str) -> tuple:
     if restaurant_id:
         review_url = f"https://www.foody.vn/__get/Review/ResLoadMore?ResId={restaurant_id}&LastId=&Count=15&Type=1"
         try:
-            r_resp = requests.get(review_url, headers=FOODY_HEADERS, timeout=10)
+            r_resp = session.get(review_url, headers=FOODY_HEADERS, timeout=10)
             if r_resp.status_code == 200:
                 items = r_resp.json().get("Items", [])
                 for item in items:
+                    created_date_raw = item.get("CreatedDate", "")
+                    actual_date = parse_foody_date(created_date_raw)
                     reviews.append({
                         "restaurantId": str(restaurant_id),
                         "userId": str(item.get("Owner", {}).get("Id", "")),
                         "userName": item.get("Owner", {}).get("DisplayName", "Ẩn danh"),
                         "rating": float(item.get("AvgRating", 0)),
                         "comment": item.get("Description", ""),
-                        "createdAt": datetime.now(), # Hoặc parse CreatedDate nếu cần
-                        "updatedAt": datetime.now()
+                        "createdAt": actual_date,
+                        "updatedAt": actual_date
                     })
         except Exception as e:
             pass 
 
-    return info, reviews
+    # GIAI ĐOẠN 4: LẤY THỰC ĐƠN (MENU) QUA SHOPEEFOOD DOM
+    menus = []
+    if restaurant_id:
+        try:
+            driver.get(f"https://shopeefood.vn/ho-chi-minh/{slug}")
+            time.sleep(4)
+            rows = driver.find_elements(By.CSS_SELECTOR, ".item-restaurant-row")
+            for row in rows:
+                try:
+                    name_elems = row.find_elements(By.CSS_SELECTOR, ".item-restaurant-name")
+                    if not name_elems: continue
+                    name = name_elems[0].text
+                    
+                    price_elems = row.find_elements(By.CSS_SELECTOR, ".current-price")
+                    price_str = price_elems[0].text if price_elems else ""
+                    price_val = 0
+                    if price_str:
+                        price_num = re.sub(r'[^\d]', '', price_str)
+                        if price_num: price_val = float(price_num)
+                        
+                    img_elems = row.find_elements(By.CSS_SELECTOR, ".item-restaurant-img img")
+                    img_url = img_elems[0].get_attribute("src") if img_elems else ""
+                    
+                    desc_elems = row.find_elements(By.CSS_SELECTOR, ".item-restaurant-desc")
+                    desc = desc_elems[0].text if desc_elems else ""
+                    
+                    menus.append({
+                        "restaurantId_temp": str(restaurant_id),
+                        "name": name,
+                        "description": desc,
+                        "price": price_val,
+                        "image": img_url,
+                        "tags": []
+                    })
+                except:
+                    pass
+        except:
+            pass
+
+    return info, reviews, menus
 
 
 # --- MAIN ---
@@ -225,35 +280,74 @@ def run_crawler():
 
     if not slug_to_tags:
         return
-
-    # Phase 2 & 3
-    print(f"\n🕷️ [Giai đoạn 2 & 3] Bắt đầu lấy dữ liệu và Review thật từ Foody.vn...")
+        
+    # Giới hạn đúng 500 quán
+    slugs_limited = {}
+    for i, (k, v) in enumerate(slug_to_tags.items()):
+        if i >= 500: break
+        slugs_limited[k] = v
+    slug_to_tags = slugs_limited
+    
+    print(f"\n🕷️ [Giai đoạn 2, 3 & 4] Bắt đầu lấy dữ liệu, Review và Thực đơn cho {len(slug_to_tags)} quán...")
     scraped_restaurants = []
     scraped_reviews = []
+    scraped_menus = []
     total = len(slug_to_tags)
+
+    # Khởi tạo Selenium Driver cho Giai đoạn 4
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+    driver = webdriver.Chrome(options=options)
+    driver.set_page_load_timeout(15)
 
     for i, (slug, tags) in enumerate(slug_to_tags.items(), start=1):
         print(f"   [{i}/{total}] Đang tải: {slug}")
-        info, reviews = fetch_restaurant_detail_and_reviews(slug, tags)
+        info, reviews, menus = fetch_restaurant_detail_and_reviews(slug, tags, driver)
         if info and info.get("restaurantId"):
             scraped_restaurants.append(info)
             scraped_reviews.extend(reviews)
+            scraped_menus.extend(menus)
         time.sleep(REQUEST_DELAY_SECONDS) 
 
-    print(f"\n🎉 HOÀN TẤT! Lấy được {len(scraped_restaurants)} quán ăn và {len(scraped_reviews)} đánh giá (reviews) thật.")
+    print(f"\n🎉 HOÀN TẤT! Lấy được {len(scraped_restaurants)} quán ăn, {len(scraped_reviews)} đánh giá, và {len(scraped_menus)} món ăn.")
 
     if scraped_restaurants:
         print("💾 Đang ghi vào MongoDB...")
         restaurants_collection.delete_many({})
-        restaurants_collection.insert_many(scraped_restaurants)
+        res_insert = restaurants_collection.insert_many(scraped_restaurants)
         
+        # Link reviews and menus using ObjectId
+        res_id_map = {}
+        for i, info in enumerate(scraped_restaurants):
+            res_id_map[info["restaurantId"]] = res_insert.inserted_ids[i]
+            
         if scraped_reviews:
+            for rev in scraped_reviews:
+                rev["restaurantId"] = res_id_map.get(rev["restaurantId"])
             reviews_collection.delete_many({})
             reviews_collection.insert_many(scraped_reviews)
+            
+        if scraped_menus:
+            menu_items_collection = db["menu_items"]
+            for menu in scraped_menus:
+                menu["restaurantId"] = res_id_map.get(menu.pop("restaurantId_temp"))
+            menu_items_collection.delete_many({})
+            menu_items_collection.insert_many(scraped_menus)
             
         print("✅ XONG! Dữ liệu thật đã được lưu vào Database.")
     else:
         print("❌ Không có dữ liệu nào để lưu.")
+        
+    try:
+        driver.quit()
+    except:
+        pass
 
 if __name__ == "__main__":
     run_crawler()

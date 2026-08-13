@@ -24,6 +24,10 @@ export class UpdateUserDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(300) // Giới hạn độ dài Bio
+  picture?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300) 
   bio?: string;
 }

@@ -1,0 +1,363 @@
+{
+  "PictureModel": {
+    "Id": 0,
+    "Size": null,
+    "ImageUrl": "https://down-vn.img.susercontent.com/vn-11134513-7r98o-lsvhk3oc89ztb9@resize_ss576x330",
+    "FullSizeImageUrl": "https://down-vn.img.susercontent.com/vn-11134513-7r98o-lsvhk3oc89ztb9",
+    "Title": "Bò Bía Chợ Phú Nhuận - Cao Thắng",
+    "AlternateText": "Bò Bía Chợ Phú Nhuận - Cao Thắng",
+    "TotalLikes": 0,
+    "OwnerFullName": null,
+    "OwnerUserName": null,
+    "OwnerID": null,
+    "IsExisted": false,
+    "Group": 1,
+    "CreatedOn": null,
+    "MediaType": 0,
+    "Url": null,
+    "BgColor": null,
+    "PhotoDetailUrl": null
+  },
+  "BackgroundImageUrl": null,
+  "HasValidContract": false,
+  "TableNowApiEnable": true,
+  "RestaurantID": 1000070216,
+  "Name": "Bò Bía Chợ Phú Nhuận - Cao Thắng",
+  "Name_EN": null,
+  "NameUrl": null,
+  "NameUrl_EN": null,
+  "Address": "3 Cao Thắng, P. 17",
+  "CityID": 217,
+  "City": "TP. HCM",
+  "DistrictID": 17,
+  "District": "Quận Phú Nhuận",
+  "AreaID": null,
+  "Area": null,
+  "ImageURL": null,
+  "Phone": null,
+  "Website": "",
+  "PriceMin": 0.0,
+  "PriceMax": 0.0,
+  "Latitude": 10.794344,
+  "Longtitude": 106.683305,
+  "IsActive": false,
+  "IsDelete": false,
+  "TotalReview": 0,
+  "TotalView": 59,
+  "TotalViewFormat": "59",
+  "RestaurantStatus": 2,
+  "MetaTitle": "Bò Bía Chợ Phú Nhuận - Cao Thắng",
+  "MetaKeywords": "Ăn vặt,bò bía,ănchay",
+  "MetaKeywords_EN": null,
+  "MetaDescription": "Ngay chân cầu thang chợ Phú Nhuận",
+  "MetaDescription_EN": null,
+  "BackgroundUrl": null,
+  "SpecialDesc": null,
+  "TotalFavourite": 0,
+  "TotalWanted": 0,
+  "TotalPictures": 0,
+  "DistrictUrlRewiteName": "quan-phu-nhuan",
+  "AreaUrlRewiteName": null,
+  "MainCategoryRewriteName": "an-vat-via-he",
+  "TotalCheckedIn": 0,
+  "AvgPointList": [
+    {
+      "Label": "Vị trí",
+      "Point": 0.0,
+      "DisplayOrder": 1
+    },
+    {
+      "Label": "Giá cả",
+      "Point": 0.0,
+      "DisplayOrder": 2
+    },
+    {
+      "Label": "Chất lượng",
+      "Point": 0.0,
+      "DisplayOrder": 3
+    },
+    {
+      "Label": "Phục vụ",
+      "Point": 0.0,
+      "DisplayOrder": 4
+    },
+    {
+      "Label": "Không gian",
+      "Point": 0.0,
+      "DisplayOrder": 5
+    }
+  ],
+  "MicrositeUrl": "/ho-chi-minh/bo-bia-cho-phu-nhuan-cao-thang",
+  "RestaurantUrl": "ho-chi-minh/bo-bia-cho-phu-nhuan-cao-thang",
+  "Cuisines": [
+    {
+      "UrlRewriteName": "viet-nam",
+      "Name": "Món Việt",
+      "NameEn": "Vietnam",
+      "DisplayOrder": 0,
+      "Flag": 0,
+      "ParentID": 0,
+      "Icon": "foody-01-vietnam-635950402447733778.png",
+      "Id": 1
+    },
+    {
+      "UrlRewriteName": "chau-a",
+      "Name": "Món Á",
+      "NameEn": "Asian",
+      "DisplayOrder": 0,
+      "Flag": 0,
+      "ParentID": 0,
+      "Icon": "foody-36-chaua-635950399885245390.png",
+      "Id": 36
+    }
+  ],
+  "PointConfig": {
+    "Tier": 3,
+    "Description": "Medium Brands",
+    "ReviewMaxPoints": 3.0,
+    "PhotoMaxPoints": 1.0,
+    "PhotoRatioBaseReview": 1.0,
+    "CommentMaxPoints": 0.25,
+    "CommentRatioBaseReview": 1.0,
+    "LikeMaxPoints": 0.0,
+    "LikeRatioBaseReview": 1.0,
+    "VideoMaxPoints": 5.0,
+    "Id": 3
+  },
+  "CssSuffix": "",
+  "LanguageId": 1,
+  "BrandUrlRewriteName": null,
+  "BrandName": null,
+  "BrandTotalRestaurants": 326179,
+  "TotalLists": 0,
+  "IsBooking": false,
+  "IsSafety": false,
+  "ReservationId": null,
+  "ResUrlRewrite": "bo-bia-cho-phu-nhuan-cao-thang",
+  "HasMemberCard": false,
+  "MemberCardPolicy": null,
+  "MinDiscount": null,
+  "MaxDiscount": null,
+  "TimeRanges": [],
+  "BookingDiscount": 0,
+  "MasterCategoryId": 1,
+  "LstDeliveryService": [],
+  "IsToolPremium": false,
+  "MobileImageUrl": "https://down-vn.img.susercontent.com/vn-11134513-7r98o-lsvhk3oc89ztb9@resize_ss640x400",
+  "LstTargetAudience": [
+    {
+      "Id": 1,
+      "Name": "Sinh viên",
+      "Name_En": "Student",
+      "DisplayOrder": 1,
+      "Published": true
+    },
+    {
+      "Id": 2,
+      "Name": "Cặp đôi",
+      "Name_En": "Couple",
+      "DisplayOrder": 2,
+      "Published": true
+    },
+    {
+      "Id": 3,
+      "Name": "Gia đình",
+      "Name_En": "Family",
+      "DisplayOrder": 3,
+      "Published": true
+    },
+    {
+      "Id": 4,
+      "Name": "Nhóm hội",
+      "Name_En": "Group",
+      "DisplayOrder": 4,
+      "Published": true
+    },
+    {
+      "Id": 5,
+      "Name": "Giới văn phòng",
+      "Name_En": "Office workers",
+      "DisplayOrder": 5,
+      "Published": true
+    },
+    {
+      "Id": 6,
+      "Name": "Giới Manager",
+      "Name_En": "Managers",
+      "DisplayOrder": 6,
+      "Published": true
+    },
+    {
+      "Id": 7,
+      "Name": "Khách du lịch",
+      "Name_En": "Traveler",
+      "DisplayOrder": 7,
+      "Published": true
+    },
+    {
+      "Id": 8,
+      "Name": "Trẻ em",
+      "Name_En": "Kids",
+      "DisplayOrder": 0,
+      "Published": true
+    }
+  ],
+  "TotalSavedListsCurrentUser": 0,
+  "HasThitCayCategory": false,
+  "IsDisableReview": false,
+  "LstCategory": [
+    {
+      "AsciiName": "an vat via he",
+      "UrlRewriteName": "an-vat-via-he",
+      "NameEn": "Street food",
+      "Icon": "foody-11-anvat-635950388395266822.png",
+      "IconClass": "ico_anvat",
+      "CategoryGroupKey": "food",
+      "RestaurantCount": 0,
+      "Name": "Ăn vặt/vỉa hè",
+      "Id": 11
+    },
+    {
+      "AsciiName": "an chay",
+      "UrlRewriteName": "an-chay",
+      "NameEn": "Vegetarian",
+      "Icon": "foody-56-anchay-635950379675005450.png",
+      "IconClass": null,
+      "CategoryGroupKey": "food",
+      "RestaurantCount": 0,
+      "Name": "Ăn chay",
+      "Id": 56
+    }
+  ],
+  "IsInactive": true,
+  "IsAlreadyCreated": true,
+  "IsDeliveryNow": true,
+  "StickerStatus": 0,
+  "Tip": "",
+  "MobileTip": null,
+  "ListBankCards": [],
+  "SpecialAttr": 0,
+  "AvgRating": 0.0,
+  "Services": [],
+  "Location": "ho-chi-minh",
+  "ReviewOption": 0,
+  "SyncSheisId": null,
+  "ECardInfoModel": {
+    "MemberCardLevels": {
+      "Name": null,
+      "Note": null,
+      "Levers": [],
+      "StartDate": null,
+      "EndDate": null
+    },
+    "RestaurantCardLevels": [
+      {
+        "Name": "Standard",
+        "Content": "Không áp dụng",
+        "DiscountPercent": 0,
+        "ImgUrl": "/style/images/icons/ecard/Standard.png"
+      },
+      {
+        "Name": "Gold",
+        "Content": "Không áp dụng",
+        "DiscountPercent": 0,
+        "ImgUrl": "/style/images/icons/ecard/Gold.png"
+      },
+      {
+        "Name": "Premier",
+        "Content": "Không áp dụng",
+        "DiscountPercent": 0,
+        "ImgUrl": "/style/images/icons/ecard/Premier.png"
+      }
+    ]
+  },
+  "ListECoupons": [],
+  "TableNowUrl": "https://shopeefood.vn/ho-chi-minh/table/bo-bia-cho-phu-nhuan-cao-thang",
+  "AvatarVideo": {
+    "Id": 0,
+    "Title": null,
+    "TitleUrl": null,
+    "Description": null,
+    "Source": null,
+    "Avatar": null,
+    "Type": 0,
+    "SourceType": null,
+    "Width": null,
+    "Height": null,
+    "AutoPlay": null,
+    "Url": null,
+    "UrlEmbed": null,
+    "IsFeatured": false,
+    "Length": null,
+    "IsWatched": false,
+    "RestaurantImgUrl": null,
+    "IsMuted": false
+  },
+  "OpeningTime": [
+    {
+      "Id": 1000502942,
+      "RestaurantId": 1000070216,
+      "DayOfWeek": 4,
+      "CustomDate": null,
+      "TimeOpen": {
+        "Hours": 14,
+        "Minutes": 0,
+        "Seconds": 0,
+        "Milliseconds": 0,
+        "Ticks": 504000000000,
+        "Days": 0,
+        "TotalDays": 0.5833333333333333,
+        "TotalHours": 14,
+        "TotalMilliseconds": 50400000,
+        "TotalMinutes": 840,
+        "TotalSeconds": 50400
+      },
+      "TimeClose": {
+        "Hours": 22,
+        "Minutes": 0,
+        "Seconds": 0,
+        "Milliseconds": 0,
+        "Ticks": 792000000000,
+        "Days": 0,
+        "TotalDays": 0.9166666666666666,
+        "TotalHours": 22,
+        "TotalMilliseconds": 79200000,
+        "TotalMinutes": 1320,
+        "TotalSeconds": 79200
+      },
+      "IsDayOff": false,
+      "DisplayOrder": 0,
+      "TimeOpenHour": 0,
+      "TimeOpenMinute": 0,
+      "TimeCloseHour": 0,
+      "TimeCloseMinute": 0,
+      "DayOfWeekName": null,
+      "Title": "",
+      "TitleEn": null
+    }
+  ],
+  "Floor": {
+    "Id": 0,
+    "Code": null,
+    "Name": null,
+    "NameEn": null,
+    "Avatar": "https://down-vn.img.susercontent.com/vn-11134259-7r98o-lwwm6n8yj1sr5d@resize_w50",
+    "Color": null,
+    "Description": null,
+    "DescriptionEn": null
+  },
+  "ShortUrlCode": "",
+  "RestaurantCenter": {
+    "Id": 0,
+    "UrlRewriteName": null,
+    "Location": null,
+    "Url": null
+  },
+  "AccessGuide": "",
+  "Properties": [],
+  "Wifi": [],
+  "TotalDishes": 0,
+  "IsVerifiedMap": false,
+  "IsSaved": false,
+  "DeliveryId": 318937
+}

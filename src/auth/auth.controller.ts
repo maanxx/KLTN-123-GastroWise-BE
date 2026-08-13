@@ -10,6 +10,9 @@ import {
   Get,
   Res,
   Patch,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
@@ -19,8 +22,10 @@ import { Request } from 'express';
 import type { Response } from 'express'; // Import Response từ express
 import { AuthGuard } from '@nestjs/passport';
 import { UpdateUserDto } from 'src/users/dto/update-user.dto';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { extname } from 'path';
 
-// Interface mở rộng Request để TypeScript hiểu req.user
 interface RequestWithUser extends Request {
   user: {
     sub: string;
@@ -36,30 +41,22 @@ export class AuthController {
   @Get('google')
   @UseGuards(AuthGuard('google'))
   async googleAuth(@Req() req) {
-    // Hàm này chỉ để kích hoạt Guard, Passport sẽ tự chuyển hướng sang Google
   }
 
   @Get('google/callback')
   @UseGuards(AuthGuard('google'))
   async googleAuthRedirect(@Req() req, @Res() res: Response) {
-    // 1. Xử lý đăng nhập, tạo Token
     const { accessToken, refreshToken } = await this.authService.signInWithGoogle(req.user);
 
-    // 2. [QUAN TRỌNG] Xác định URL Frontend để chuyển hướng về
-    // Nếu chạy trên Render (có biến ENV), nó sẽ dùng link Vercel.
-    // Nếu chạy Local (không có biến ENV), nó sẽ dùng localhost:3000.
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
 
-    // [DEBUG LOG] In ra để kiểm tra trên Render Logs
     console.log("🚀 Redirecting Google User to:", frontendUrl);
 
-    // 3. Chuyển hướng về Frontend kèm theo Token trên URL
     res.redirect(
       `${frontendUrl}/auth/callback?accessToken=${accessToken}&refreshToken=${refreshToken}`,
     );
   }
 
-  // --- 2. ĐĂNG KÝ / ĐĂNG NHẬP THƯỜNG ---
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
   register(@Body() registerDto: RegisterDto) {
@@ -72,7 +69,6 @@ export class AuthController {
     return this.authService.login(loginDto);
   }
 
-  // --- 3. ĐĂNG XUẤT & REFRESH TOKEN ---
   @UseGuards(JwtAuthGuard)
   @Post('logout')
   @HttpCode(HttpStatus.OK)
@@ -87,7 +83,6 @@ export class AuthController {
     return this.authService.refresh(body.userId, body.refreshToken);
   }
 
-  // --- 4. PROFILE USER (GET & UPDATE) ---
   @UseGuards(JwtAuthGuard)
   @Get('profile')
   getProfile(@Req() req: RequestWithUser) {
@@ -103,5 +98,34 @@ export class AuthController {
   ) {
     const userId = req.user.sub;
     return this.authService.updateProfile(userId, updateUserDto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('avatar')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: './uploads/avatars',
+        filename: (req, file, callback) => {
+          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          const ext = extname(file.originalname);
+          callback(null, `${uniqueSuffix}${ext}`);
+        },
+      }),
+      fileFilter: (req, file, callback) => {
+        if (!file.mimetype.match(/\/(jpg|jpeg|png|gif|webp)$/)) {
+          return callback(new BadRequestException('Only image files are allowed!'), false);
+        }
+        callback(null, true);
+      },
+    }),
+  )
+  uploadAvatar(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('File is required');
+    }
+    return {
+      picture: `http://localhost:3001/uploads/avatars/${file.filename}`,
+    };
   }
 }

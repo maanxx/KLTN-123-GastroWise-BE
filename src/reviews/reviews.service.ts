@@ -60,6 +60,10 @@ export class ReviewsService {
     return this.reviewModel.find({ urlGoc: url }).sort({ createdAt: -1 }).exec();
   }
 
+  async findByRestaurantId(id: string): Promise<Review[]> {
+    return this.reviewModel.find({ restaurantId: id }).sort({ createdAt: -1 }).exec();
+  }
+
   // --- 4. Hàm Quét và Cập nhật Review cũ (Công cụ Admin) ---
   async updateAllReviewsSentiment() {
     this.logger.log('>>> BẮT ĐẦU CẬP NHẬT SENTIMENT CHO DỮ LIỆU CŨ...');

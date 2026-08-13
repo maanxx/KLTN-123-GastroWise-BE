@@ -7,6 +7,8 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
 import { RestaurantsModule } from './restaurants/restaurants.module';
 import { ReviewsModule } from './reviews/reviews.module';
+import { FavoritesModule } from './favorites/favorites.module';
+import { ItinerariesModule } from './itineraries/itineraries.module';
 
 @Module({
   imports: [
@@ -22,6 +24,8 @@ import { ReviewsModule } from './reviews/reviews.module';
     AuthModule,
     RestaurantsModule,
     ReviewsModule,
+    FavoritesModule,
+    ItinerariesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
