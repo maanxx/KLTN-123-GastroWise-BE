@@ -46,11 +46,27 @@ export class AuthController {
   @Get('google/callback')
   @UseGuards(AuthGuard('google'))
   async googleAuthRedirect(@Req() req, @Res() res: Response) {
-    const { accessToken, refreshToken } = await this.authService.signInWithGoogle(req.user);
+    const { accessToken, refreshToken } = await this.authService.signInWithGoogle(req.user as any);
 
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
 
-    console.log("🚀 Redirecting Google User to:", frontendUrl);
+    res.redirect(
+      `${frontendUrl}/auth/callback?accessToken=${accessToken}&refreshToken=${refreshToken}`,
+    );
+  }
+
+  // --- 2. FACEBOOK LOGIN ---
+  @Get('facebook')
+  @UseGuards(AuthGuard('facebook'))
+  async facebookAuth(@Req() req) {
+  }
+
+  @Get('facebook/callback')
+  @UseGuards(AuthGuard('facebook'))
+  async facebookAuthRedirect(@Req() req, @Res() res: Response) {
+    const { accessToken, refreshToken } = await this.authService.signInWithFacebook(req.user as any);
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
 
     res.redirect(
       `${frontendUrl}/auth/callback?accessToken=${accessToken}&refreshToken=${refreshToken}`,

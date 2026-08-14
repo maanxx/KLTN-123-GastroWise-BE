@@ -191,6 +191,55 @@ export class AuthService {
     return tokens;
   }
 
+  async signInWithFacebook(facebookUser: {
+    email: string;
+    firstName: string;
+    lastName: string;
+    picture?: string;
+  }) {
+    if (!facebookUser) {
+      throw new BadRequestException('Unauthenticated');
+    }
+
+    let user: UserDocument;
+
+    try {
+      if (facebookUser.email) {
+        user = await this.usersService.findOneByEmail(facebookUser.email);
+        if (facebookUser.picture && user.picture !== facebookUser.picture) {
+          user = await this.usersService.update(user._id.toString(), {
+            picture: facebookUser.picture,
+          } as any);
+        }
+      } else {
+        throw { status: 404 }; // Force creation if no email
+      }
+    } catch (error) {
+      if (error.status === 404) {
+        const fakeEmail = facebookUser.email || `${Math.random().toString(36).substring(7)}@facebook.com`;
+        user = await this.usersService.create({
+          email: fakeEmail,
+          username: fakeEmail.split('@')[0],
+          firstName: facebookUser.firstName,
+          lastName: facebookUser.lastName,
+          picture: facebookUser.picture,
+          password: Math.random().toString(36).substring(7),
+        } as any);
+      } else {
+        throw error;
+      }
+    }
+
+    const tokens = await this._generateTokens(user._id.toString(), user.email);
+    
+    await this.usersService.updateRefreshToken(
+      user._id.toString(),
+      tokens.refreshToken,
+    );
+
+    return tokens;
+  }
+
   async getProfile(userId: string) {
     const user = await this.usersService.findOne(userId);
     return user;
