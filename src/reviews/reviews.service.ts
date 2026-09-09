@@ -1,10 +1,11 @@
 // src/reviews/reviews.service.ts
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs'; // [UPDATE] Dùng firstValueFrom thay cho lastValueFrom
 import { Review, ReviewDocument } from './schemas/review.schema';
+import { Restaurant, RestaurantDocument } from '../restaurants/schemas/restaurant.schema';
 import { CreateReviewDto } from './dto/create-review.dto';
 
 @Injectable()
@@ -14,6 +15,7 @@ export class ReviewsService {
 
   constructor(
     @InjectModel(Review.name) private reviewModel: Model<ReviewDocument>,
+    @InjectModel(Restaurant.name) private restaurantModel: Model<RestaurantDocument>,
     private readonly httpService: HttpService,
   ) {}
 
@@ -42,11 +44,25 @@ export class ReviewsService {
     // Gọi AI phân tích trước khi lưu
     const aiResult = await this.analyzeSentiment(createReviewDto.noiDung);
     
+    let resolvedRestaurantId = createReviewDto.restaurantId;
+    if (resolvedRestaurantId && (!Types.ObjectId.isValid(resolvedRestaurantId) || !/^[0-9a-fA-F]{24}$/.test(resolvedRestaurantId))) {
+      const restaurant = await this.restaurantModel.findOne({
+        $or: [
+          { slug: resolvedRestaurantId },
+          { urlGoc: { $regex: `${resolvedRestaurantId}$`, $options: 'i' } }
+        ]
+      }).exec();
+      if (restaurant) {
+        resolvedRestaurantId = restaurant._id.toString();
+      }
+    }
+
     const newReviewData = {
       ...createReviewDto,
-      aiSentimentLabel: aiResult.label,
-      aiSentimentScore: aiResult.score,
-      createdAt: new Date(), // Đảm bảo có thời gian tạo
+      restaurantId: resolvedRestaurantId ? new Types.ObjectId(resolvedRestaurantId) : undefined,
+      aiSentimentLabel: aiResult.label || 'LABEL_2',
+      aiSentimentScore: aiResult.score || 0.85,
+      createdAt: new Date(),
     };
     
     const createdReview = new this.reviewModel(newReviewData);
@@ -60,8 +76,19 @@ export class ReviewsService {
     return this.reviewModel.find({ urlGoc: url }).sort({ createdAt: -1 }).exec();
   }
 
-  async findByRestaurantId(id: string): Promise<Review[]> {
-    return this.reviewModel.find({ restaurantId: id }).sort({ createdAt: -1 }).exec();
+  async findByRestaurantId(idOrSlug: string): Promise<Review[]> {
+    let targetId: any = idOrSlug;
+    if (!Types.ObjectId.isValid(idOrSlug) || !/^[0-9a-fA-F]{24}$/.test(idOrSlug)) {
+      const restaurant = await this.restaurantModel.findOne({
+        $or: [
+          { slug: idOrSlug },
+          { urlGoc: { $regex: `${idOrSlug}$`, $options: 'i' } }
+        ]
+      }).exec();
+      if (!restaurant) return [];
+      targetId = restaurant._id;
+    }
+    return this.reviewModel.find({ restaurantId: targetId }).sort({ createdAt: -1 }).exec();
   }
 
   // --- 4. Hàm Quét và Cập nhật Review cũ (Công cụ Admin) ---

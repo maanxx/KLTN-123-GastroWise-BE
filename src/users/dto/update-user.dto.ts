@@ -1,5 +1,5 @@
 // back-end/src/users/dto/update-user.dto.ts
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength, IsArray } from 'class-validator';
 
 export class UpdateUserDto {
   @IsOptional()
@@ -30,4 +30,9 @@ export class UpdateUserDto {
   @IsString()
   @MaxLength(300) 
   bio?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  preferences?: string[];
 }

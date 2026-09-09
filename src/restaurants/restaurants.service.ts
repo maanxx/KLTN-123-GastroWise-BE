@@ -5,7 +5,7 @@ import { UpdateRestaurantDto } from './dto/update-restaurant.dto';
 import { InjectModel } from '@nestjs/mongoose';
 import { Restaurant, RestaurantDocument } from './schemas/restaurant.schema';
 import { MenuItem, MenuItemDocument } from './schemas/menu-item.schema';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { HttpService } from '@nestjs/axios'; 
 import { firstValueFrom } from 'rxjs';
 import FormData from 'form-data'; 
@@ -22,8 +22,9 @@ export class RestaurantsService {
     private readonly httpService: HttpService,
   ) {}
 
-  async getMenu(id: string) {
-    return this.menuItemModel.find({ restaurantId: id }).exec();
+  async getMenu(idOrSlug: string) {
+    const restaurant = await this.findOne(idOrSlug);
+    return this.menuItemModel.find({ restaurantId: restaurant._id }).exec();
   }
 
   create(createRestaurantDto: CreateRestaurantDto) {
@@ -314,9 +315,20 @@ export class RestaurantsService {
     };
   }
 
-  async findOne(id: string): Promise<Restaurant> {
-    const restaurant = await this.restaurantModel.findById(id).exec();
-    if (!restaurant) throw new NotFoundException(`Restaurant with ID ${id} not found`);
+  async findOne(idOrSlug: string): Promise<RestaurantDocument> {
+    let restaurant: RestaurantDocument | null = null;
+    if (Types.ObjectId.isValid(idOrSlug) && /^[0-9a-fA-F]{24}$/.test(idOrSlug)) {
+      restaurant = await this.restaurantModel.findById(idOrSlug).exec();
+    }
+    if (!restaurant) {
+      restaurant = await this.restaurantModel.findOne({ slug: idOrSlug }).exec();
+    }
+    if (!restaurant) {
+      restaurant = await this.restaurantModel.findOne({
+        urlGoc: { $regex: `${idOrSlug}$`, $options: 'i' }
+      }).exec();
+    }
+    if (!restaurant) throw new NotFoundException(`Restaurant with ID or slug "${idOrSlug}" not found`);
     return restaurant;
   }
   update(id: number, updateRestaurantDto: UpdateRestaurantDto) { return `This action updates a #${id} restaurant`; }

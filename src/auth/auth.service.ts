@@ -47,7 +47,7 @@ export class AuthService {
     return {
       token: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      user: newUser
+      user: this._sanitizeUser(newUser)
     };
   }
 
@@ -66,20 +66,20 @@ export class AuthService {
 
     // 3. Tạo tokens
     const tokens = await this._generateTokens(
-      user._id.toString(), // SỬA Ở ĐÂY 3/6
+      user._id.toString(),
       user.email,
     );
 
     // 4. Cập nhật refresh token đã băm
     await this.usersService.updateRefreshToken(
-      user._id.toString(), // SỬA Ở ĐÂY 4/6
+      user._id.toString(),
       tokens.refreshToken,
     );
 
     return {
       token: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      user: user
+      user: this._sanitizeUser(user)
     };
   }
 
@@ -124,13 +124,16 @@ export class AuthService {
   private async _generateTokens(userId: string, email: string) {
     const payload = { sub: userId, email };
 
+    const jwtSecret = this.configService.get<string>('JWT_SECRET') || 'gastrowise_jwt_secret';
+    const refreshSecret = this.configService.get<string>('JWT_REFRESH_SECRET') || jwtSecret;
+
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(payload, {
-        secret: this.configService.get<string>('JWT_SECRET'),
-        expiresIn: '15m',
+        secret: jwtSecret,
+        expiresIn: '1d',
       }),
       this.jwtService.signAsync(payload, {
-        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+        secret: refreshSecret,
         expiresIn: '7d',
       }),
     ]);
@@ -191,13 +194,25 @@ export class AuthService {
     return tokens;
   }
 
+  private _sanitizeUser(user: any) {
+    if (!user) return null;
+    const userObj = user.toObject ? user.toObject() : { ...user };
+    delete (userObj as any).password;
+    delete (userObj as any).hashedRefreshToken;
+    return {
+      id: user._id ? user._id.toString() : user.id,
+      fullName: userObj.firstName ? `${userObj.lastName || ''} ${userObj.firstName}`.trim() : userObj.username || userObj.email,
+      ...userObj,
+    };
+  }
+
   async getProfile(userId: string) {
     const user = await this.usersService.findOne(userId);
-    return user;
+    return this._sanitizeUser(user);
   }
 
   async updateProfile(userId: string, updateUserDto: UpdateUserDto) {
-    // Chúng ta chỉ gọi hàm từ UsersService
-    return this.usersService.updateProfile(userId, updateUserDto);
+    const updated = await this.usersService.updateProfile(userId, updateUserDto);
+    return this._sanitizeUser(updated);
   }
 }
