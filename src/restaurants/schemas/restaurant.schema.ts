@@ -28,6 +28,9 @@ export class Restaurant {
   @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'User' })
   ownerId?: mongoose.Types.ObjectId;
 
+  @Prop({ index: true })
+  slug?: string;
+
   @Prop() description?: string;
   @Prop() contactPhone?: string;
 

@@ -24,8 +24,14 @@ export class Review {
   @Prop()
   aiSentimentScore: number;
 
-  @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true })
-  userId: mongoose.Types.ObjectId;
+  @Prop({ type: [String], default: [] })
+  hashtags: string[];
+
+  @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'User', required: false })
+  userId?: mongoose.Types.ObjectId;
+
+  @Prop()
+  userName?: string;
 
   @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', required: true })
   restaurantId: mongoose.Types.ObjectId;

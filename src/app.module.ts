@@ -12,11 +12,12 @@ import { ItinerariesModule } from './itineraries/itineraries.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }), // 2. Initialize ConfigModule
+    ConfigModule.forRoot({ isGlobal: true }), 
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
         uri: configService.get<string>('MONGODB_URI'),
+        serverSelectionTimeoutMS: 5000,
       }),
       inject: [ConfigService],
     }),
