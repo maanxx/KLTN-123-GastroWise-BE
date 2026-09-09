@@ -27,6 +27,47 @@ export class RestaurantsService {
     return this.menuItemModel.find({ restaurantId: restaurant._id }).exec();
   }
 
+  async getAllMenuItems(search?: string, restaurantId?: string) {
+    const filter: any = {};
+    if (restaurantId && restaurantId !== 'all') {
+      if (Types.ObjectId.isValid(restaurantId)) {
+        filter.restaurantId = new Types.ObjectId(restaurantId);
+      }
+    }
+    if (search) {
+      filter.name = { $regex: search, $options: 'i' };
+    }
+    return this.menuItemModel.find(filter).populate('restaurantId', 'tenQuan diaChi').exec();
+  }
+
+  async createMenuItem(restaurantId: string, dto: any) {
+    let targetRestId = restaurantId;
+    if (restaurantId && Types.ObjectId.isValid(restaurantId)) {
+      targetRestId = restaurantId;
+    } else if (restaurantId) {
+      const rest = await this.restaurantModel.findOne({ slug: restaurantId }).exec();
+      if (rest) targetRestId = rest._id.toString();
+    }
+    const item = new this.menuItemModel({
+      restaurantId: new Types.ObjectId(targetRestId),
+      name: dto.name,
+      description: dto.description || '',
+      price: Number(dto.price) || 0,
+      image: dto.image || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80',
+      isVegetarian: Boolean(dto.isVegetarian),
+      tags: dto.tags || [],
+    });
+    return item.save();
+  }
+
+  async updateMenuItem(menuId: string, dto: any) {
+    return this.menuItemModel.findByIdAndUpdate(menuId, dto, { new: true }).exec();
+  }
+
+  async deleteMenuItem(menuId: string) {
+    return this.menuItemModel.findByIdAndDelete(menuId).exec();
+  }
+
   create(createRestaurantDto: CreateRestaurantDto) {
     return 'This action adds a new restaurant';
   }
@@ -331,8 +372,25 @@ export class RestaurantsService {
     if (!restaurant) throw new NotFoundException(`Restaurant with ID or slug "${idOrSlug}" not found`);
     return restaurant;
   }
-  update(id: number, updateRestaurantDto: UpdateRestaurantDto) { return `This action updates a #${id} restaurant`; }
-  remove(id: number) { return `This action removes a #${id} restaurant`; }
+  async update(id: string, updateRestaurantDto: any): Promise<RestaurantDocument> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException(`ID nhà hàng "${id}" không hợp lệ.`);
+    }
+    const updated = await this.restaurantModel
+      .findByIdAndUpdate(id, updateRestaurantDto, { new: true })
+      .exec();
+    if (!updated) {
+      throw new NotFoundException(`Không tìm thấy nhà hàng với ID "${id}"`);
+    }
+    return updated;
+  }
+
+  async remove(id: string): Promise<any> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException(`ID nhà hàng "${id}" không hợp lệ.`);
+    }
+    return this.restaurantModel.findByIdAndDelete(id).exec();
+  }
 
   private getRandomReply(type: 'success' | 'notFound' | 'error', params?: { count?: number; keyword?: string }): string {
     const { count, keyword } = params || {};

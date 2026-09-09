@@ -4,6 +4,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs'; // [UPDATE] Dùng firstValueFrom thay cho lastValueFrom
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Review, ReviewDocument } from './schemas/review.schema';
 import { Restaurant, RestaurantDocument } from '../restaurants/schemas/restaurant.schema';
 import { CreateReviewDto } from './dto/create-review.dto';
@@ -19,23 +20,44 @@ export class ReviewsService {
     private readonly httpService: HttpService,
   ) {}
 
-  // --- 1. Hàm gọi AI (ĐÃ SỬA LỖI URL) ---
+  // --- 1. Hàm gọi AI (Sử dụng Google Gemini) ---
   async analyzeSentiment(content: string) {
-    // [QUAN TRỌNG] Lấy URL từ biến môi trường, fallback về localhost nếu chạy local
-    const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
-    
-    // [LOG] In ra để kiểm tra xem trên Render nó đang dùng link nào
-    this.logger.log(`🔍 Calling AI Sentiment at: ${aiUrl}/sentiment`);
-
     try {
-      const response = await firstValueFrom(
-        this.httpService.post(`${aiUrl}/sentiment`, { review: content })
-      );
-      return response.data; 
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        this.logger.warn('⚠️ GEMINI_API_KEY is missing. Returning neutral sentiment.');
+        return { label: 'NEUTRAL', score: 0.5, hashtags: [] };
+      }
+
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+      const prompt = `Phân tích đoạn đánh giá nhà hàng/món ăn sau đây: "${content}"
+
+Yêu cầu trả về kết quả dưới định dạng JSON chính xác với 3 trường:
+1. "label": Một trong các giá trị "POSITIVE", "NEGATIVE", "NEUTRAL".
+2. "score": Độ tự tin/mức độ tích cực từ 0.0 đến 1.0.
+3. "hashtags": Mảng các từ khóa nổi bật (tối đa 3 từ khóa, bắt đầu bằng #, ví dụ: ["#monngon", "#phucvutot"]).
+
+Quy tắc đặc biệt:
+- Nếu nhận xét mơ hồ, chứa ký tự vô nghĩa (spam), hoặc HOÀN TOÀN KHÔNG LIÊN QUAN đến ẩm thực/nhà hàng, hãy trả về label: "NEUTRAL", score: 0.5, hashtags: [].
+
+Không giải thích gì thêm, chỉ trả về JSON hợp lệ.`;
+
+      const result = await model.generateContent(prompt);
+      const responseText = result.response.text();
+      
+      const cleanJson = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+      const parsedData = JSON.parse(cleanJson);
+
+      return {
+        label: parsedData.label?.toUpperCase() || 'NEUTRAL',
+        score: parsedData.score || 0.5,
+        hashtags: parsedData.hashtags || []
+      };
     } catch (error) {
-      this.logger.error(`⚠️ Lỗi AI Service: ${error.message}`);
-      // Nếu AI chết, trả về kết quả mặc định để không làm lỗi tính năng Review
-      return { label: 'neutral', score: 0.5 };
+      this.logger.error(`⚠️ Lỗi Gemini AI Service: ${error.message}`);
+      return { label: 'NEUTRAL', score: 0.5, hashtags: [] };
     }
   }
 
@@ -60,8 +82,9 @@ export class ReviewsService {
     const newReviewData = {
       ...createReviewDto,
       restaurantId: resolvedRestaurantId ? new Types.ObjectId(resolvedRestaurantId) : undefined,
-      aiSentimentLabel: aiResult.label || 'LABEL_2',
-      aiSentimentScore: aiResult.score || 0.85,
+      aiSentimentLabel: aiResult.label || 'NEUTRAL',
+      aiSentimentScore: aiResult.score || 0.5,
+      hashtags: aiResult.hashtags || [],
       createdAt: new Date(),
     };
     
@@ -91,6 +114,49 @@ export class ReviewsService {
     return this.reviewModel.find({ restaurantId: targetId }).sort({ createdAt: -1 }).exec();
   }
 
+  async getAllReviews(query: any = {}) {
+    const page = parseInt(query.page, 10) || 1;
+    const limit = parseInt(query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+
+    const filter: any = {};
+    if (query.sentiment && query.sentiment !== 'all') {
+      filter.aiSentimentLabel = query.sentiment;
+    }
+    if (query.search) {
+      filter.$or = [
+        { noiDung: { $regex: query.search, $options: 'i' } },
+        { tenNguoiDung: { $regex: query.search, $options: 'i' } }
+      ];
+    }
+    
+    const [data, total] = await Promise.all([
+      this.reviewModel.find(filter)
+        .populate('restaurantId', 'tenQuan diaChi')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      this.reviewModel.countDocuments(filter).exec(),
+    ]);
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    };
+  }
+
+  async deleteReview(id: string) {
+    return this.reviewModel.findByIdAndDelete(id).exec();
+  }
+
+  async updateReview(id: string, dto: any) {
+    return this.reviewModel.findByIdAndUpdate(id, dto, { new: true }).exec();
+  }
+
   // --- 4. Hàm Quét và Cập nhật Review cũ (Công cụ Admin) ---
   async updateAllReviewsSentiment() {
     this.logger.log('>>> BẮT ĐẦU CẬP NHẬT SENTIMENT CHO DỮ LIỆU CŨ...');
@@ -113,6 +179,7 @@ export class ReviewsService {
 
         review.aiSentimentLabel = aiResult.label;
         review.aiSentimentScore = aiResult.score;
+        review.hashtags = aiResult.hashtags;
         await review.save();
 
         successCount++;

@@ -5,8 +5,10 @@ import {
   Body,
   Query,
   HttpException,
-  HttpStatus,
-  Param,
+    HttpStatus,
+    Param,
+    Delete,
+  Patch,
 } from '@nestjs/common';
 import { ReviewsService } from './reviews.service';
 import { CreateReviewDto } from './dto/create-review.dto';
@@ -21,16 +23,31 @@ export class ReviewsController {
   }
 
   @Get()
-  async findAll(@Query('url') url: string) {
+  async findAll(@Query('url') url?: string, @Query('search') search?: string, @Query('sentiment') sentiment?: string) {
     if (!url) {
-      throw new HttpException('Missing url parameter', HttpStatus.BAD_REQUEST);
+      return this.reviewsService.getAllReviews({ search, sentiment });
     }
     return this.reviewsService.findByRestaurantUrl(url);
+  }
+
+  @Get('all')
+  async getAll(@Query() query: any) {
+    return this.reviewsService.getAllReviews(query);
   }
 
   @Get('restaurant/:id')
   async getByRestaurantId(@Param('id') id: string) {
     return this.reviewsService.findByRestaurantId(id);
+  }
+
+  @Delete(':id')
+  async delete(@Param('id') id: string) {
+    return this.reviewsService.deleteReview(id);
+  }
+
+  @Patch(':id')
+  async update(@Param('id') id: string, @Body() dto: any) {
+    return this.reviewsService.updateReview(id, dto);
   }
 
   @Post('migrate-sentiment')

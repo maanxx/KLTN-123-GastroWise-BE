@@ -61,9 +61,32 @@ export class RestaurantsController {
     );
   }
 
+  @Get('menu/all')
+  getAllMenuItems(
+    @Query('search') search?: string,
+    @Query('restaurantId') restaurantId?: string,
+  ) {
+    return this.restaurantsService.getAllMenuItems(search, restaurantId);
+  }
+
   @Get(':id/menu')
   getMenu(@Param('id') id: string) {
     return this.restaurantsService.getMenu(id);
+  }
+
+  @Post(':id/menu')
+  createMenuItem(@Param('id') id: string, @Body() dto: any) {
+    return this.restaurantsService.createMenuItem(id, dto);
+  }
+
+  @Patch('menu/:menuId')
+  updateMenuItem(@Param('menuId') menuId: string, @Body() dto: any) {
+    return this.restaurantsService.updateMenuItem(menuId, dto);
+  }
+
+  @Delete('menu/:menuId')
+  deleteMenuItem(@Param('menuId') menuId: string) {
+    return this.restaurantsService.deleteMenuItem(menuId);
   }
 
   @Get(':id')
@@ -73,12 +96,12 @@ export class RestaurantsController {
 
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateRestaurantDto: UpdateRestaurantDto) {
-    return this.restaurantsService.update(+id, updateRestaurantDto);
+    return this.restaurantsService.update(id, updateRestaurantDto);
   }
 
   @Delete(':id')
   remove(@Param('id') id: string) {
-    return this.restaurantsService.remove(+id);
+    return this.restaurantsService.remove(id);
   }
 
   @Post('chat')

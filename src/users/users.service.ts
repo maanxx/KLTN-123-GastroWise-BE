@@ -14,8 +14,40 @@ export class UsersService {
     return createdUser.save();
   }
 
-  async findAll(): Promise<User[]> {
-    return this.userModel.find().exec();
+  async findAll(query: any = {}): Promise<any> {
+    const page = parseInt(query.page, 10) || 1;
+    const limit = parseInt(query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+
+    const filter: any = {};
+    if (query.search) {
+      filter.$or = [
+        { username: { $regex: query.search, $options: 'i' } },
+        { email: { $regex: query.search, $options: 'i' } },
+        { firstName: { $regex: query.search, $options: 'i' } },
+        { lastName: { $regex: query.search, $options: 'i' } },
+      ];
+    }
+    if (query.role && query.role !== 'all') {
+      if (query.role === 'owner') {
+        filter.role = 'merchant';
+      } else {
+        filter.role = query.role;
+      }
+    }
+
+    const [data, total] = await Promise.all([
+      this.userModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).exec(),
+      this.userModel.countDocuments(filter).exec(),
+    ]);
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    };
   }
 
   // 3. THÊM HÀM NÀY

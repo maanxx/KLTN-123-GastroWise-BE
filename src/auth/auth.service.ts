@@ -64,6 +64,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    if (user.status === 'banned') {
+      throw new ForbiddenException('Tài khoản của bạn đã bị khóa bởi Quản trị viên do vi phạm điều khoản. Vui lòng liên hệ bộ phận hỗ trợ.');
+    }
+
     // 3. Tạo tokens
     const tokens = await this._generateTokens(
       user._id.toString(),
@@ -182,6 +186,10 @@ export class AuthService {
       }
     }
 
+    if (user.status === 'banned') {
+      throw new ForbiddenException('Tài khoản của bạn đã bị khóa bởi Quản trị viên do vi phạm điều khoản.');
+    }
+
     // 3. Tạo JWT (giữ nguyên code cũ)
     const tokens = await this._generateTokens(user._id.toString(), user.email);
     
@@ -208,6 +216,9 @@ export class AuthService {
 
   async getProfile(userId: string) {
     const user = await this.usersService.findOne(userId);
+    if (user && user.status === 'banned') {
+      throw new ForbiddenException('Tài khoản của bạn đã bị khóa bởi Quản trị viên do vi phạm điều khoản.');
+    }
     return this._sanitizeUser(user);
   }
 
