@@ -226,4 +226,172 @@ export class AuthService {
     const updated = await this.usersService.updateProfile(userId, updateUserDto);
     return this._sanitizeUser(updated);
   }
+
+  // --- HÀM QUÊN MẬT KHẨU ---
+  async forgotPassword(email: string) {
+    const user = await this.usersService.findOneByEmail(email).catch(() => null);
+    if (!user) {
+      throw new BadRequestException('Email không tồn tại trong hệ thống!');
+    }
+    if (user.status === 'banned') {
+      throw new ForbiddenException('Tài khoản của bạn đang bị khóa bởi Quản trị viên!');
+    }
+
+    // Tạo mã OTP ngẫu nhiên 6 chữ số
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    // Lưu OTP vào DB
+    await this.usersService.update(user._id.toString(), {
+      resetOtp: otp,
+    } as any);
+
+    // Gửi Email thực tế qua Nodemailer nếu có cấu hình SMTP
+    try {
+      const nodemailer = require('nodemailer');
+      const smtpHost = this.configService.get<string>('SMTP_HOST') || 'smtp.gmail.com';
+      const smtpPort = parseInt(this.configService.get<string>('SMTP_PORT') || '587', 10);
+      const smtpUser = this.configService.get<string>('SMTP_USER');
+      const smtpPass = this.configService.get<string>('SMTP_PASS');
+
+      if (smtpUser && smtpPass) {
+        const transporter = nodemailer.createTransport({
+          host: smtpHost,
+          port: smtpPort,
+          secure: smtpPort === 465,
+          auth: { user: smtpUser, pass: smtpPass },
+        });
+
+        await transporter.sendMail({
+          from: `"GastroWise Support" <${smtpUser}>`,
+          to: email,
+          subject: 'Mã xác minh khôi phục mật khẩu GastroWise',
+          html: `
+            <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+              <h2 style="color: #059669;">Khôi phục mật khẩu GastroWise</h2>
+              <p>Mã xác minh OTP 6 chữ số của bạn là:</p>
+              <h1 style="font-size: 32px; letter-spacing: 5px; color: #2563eb;">${otp}</h1>
+              <p>Mã này có hiệu lực trong vòng 15 phút. Vui lòng không chia sẻ mã này cho bất kỳ ai.</p>
+            </div>
+          `,
+        });
+        console.log(`✉️ [EMAIL SENT VIA SMTP] OTP ${otp} has been sent to ${email}`);
+      } else {
+        // Tự tạo tài khoản Ethereal Mail miễn phí để test link gửi mail thật
+        const testAccount = await nodemailer.createTestAccount();
+        const transporter = nodemailer.createTransport({
+          host: 'smtp.ethereal.email',
+          port: 587,
+          secure: false,
+          auth: { user: testAccount.user, pass: testAccount.pass },
+        });
+
+        const info = await transporter.sendMail({
+          from: '"GastroWise Support" <support@gastrowise.com>',
+          to: email,
+          subject: 'Mã xác minh khôi phục mật khẩu GastroWise',
+          html: `
+            <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+              <h2 style="color: #059669;">Khôi phục mật khẩu GastroWise</h2>
+              <p>Mã xác minh OTP 6 chữ số của bạn là:</p>
+              <h1 style="font-size: 32px; letter-spacing: 5px; color: #2563eb;">${otp}</h1>
+              <p>Mã này có hiệu lực trong vòng 15 phút.</p>
+            </div>
+          `,
+        });
+        console.log(`✉️ [ETHEREAL TEST EMAIL SENT] Xem nội dung mail thật tại link: ${nodemailer.getTestMessageUrl(info)}`);
+      }
+    } catch (mailError) {
+      console.error('Lỗi khi gửi email SMTP:', mailError);
+    }
+
+    return {
+      message: `Mã xác minh OTP đã được gửi tới email ${email}. Vui lòng kiểm tra hộp thư.`,
+    };
+  }
+
+  // --- HÀM ĐẶT LẠI MẬT KHẨU BẰNG EMAIL OTP ---
+  async resetPassword(email: string, otp: string, newPassword: string) {
+    const user = await this.usersService.findOneByEmail(email).catch(() => null);
+    if (!user) {
+      throw new BadRequestException('Email không tồn tại!');
+    }
+
+    // Kiểm tra mã OTP đúng tuyệt đối từ DB
+    const storedUser = user as any;
+    if (!storedUser.resetOtp || storedUser.resetOtp !== otp) {
+      throw new BadRequestException('Mã xác minh OTP không chính xác hoặc đã hết hạn!');
+    }
+
+    const hashedPassword = await this._hashData(newPassword);
+
+    await this.usersService.update(user._id.toString(), {
+      password: hashedPassword,
+      resetOtp: null,
+    } as any);
+
+    return {
+      message: 'Đặt lại mật khẩu thành công! Vui lòng đăng nhập bằng mật khẩu mới.',
+    };
+  }
+
+  // --- HÀM TẠO MÃ QR 2FA GOOGLE AUTHENTICATOR ---
+  async generate2FA(userId: string) {
+    const user = await this.usersService.findOne(userId);
+    const { authenticator } = require('otplib');
+    const QRCode = require('qrcode');
+
+    const secret = authenticator.generateSecret();
+    const otpauthUrl = authenticator.keyuri(user.email, 'GastroWise', secret);
+    const qrCodeUrl = await QRCode.toDataURL(otpauthUrl);
+
+    // Lưu tạm secret
+    await this.usersService.update(userId, { twoFactorSecret: secret } as any);
+
+    return {
+      secret,
+      qrCodeUrl,
+    };
+  }
+
+  // --- HÀM KÍCH HOẠT 2FA ---
+  async enable2FA(userId: string, code: string) {
+    const user = await this.usersService.findOne(userId);
+    const { authenticator } = require('otplib');
+
+    if (!user.twoFactorSecret) {
+      throw new BadRequestException('Chưa tạo secret 2FA!');
+    }
+
+    const isValid = authenticator.verify({ token: code, secret: user.twoFactorSecret });
+    if (!isValid) {
+      throw new BadRequestException('Mã xác minh Authenticator 6 số không đúng!');
+    }
+
+    await this.usersService.update(userId, { isTwoFactorEnabled: true } as any);
+    return { message: 'Đã kích hoạt bảo mật 2 lớp Google Authenticator thành công!' };
+  }
+
+  // --- HÀM ĐẶT LẠI MẬT KHẨU BẰNG GOOGLE AUTHENTICATOR (2FA TOTP) ---
+  async resetPasswordWith2FA(email: string, totpCode: string, newPassword: string) {
+    const user = await this.usersService.findOneByEmail(email).catch(() => null);
+    if (!user) {
+      throw new BadRequestException('Email không tồn tại!');
+    }
+    if (!user.isTwoFactorEnabled || !user.twoFactorSecret) {
+      throw new BadRequestException('Tài khoản chưa đăng ký bảo mật 2FA Authenticator!');
+    }
+
+    const { authenticator } = require('otplib');
+    const isValid = authenticator.verify({ token: totpCode, secret: user.twoFactorSecret });
+    if (!isValid) {
+      throw new BadRequestException('Mã Google Authenticator (TOTP) không chính xác!');
+    }
+
+    const hashedPassword = await this._hashData(newPassword);
+    await this.usersService.update(user._id.toString(), { password: hashedPassword } as any);
+
+    return {
+      message: 'Đặt lại mật khẩu bằng Google Authenticator thành công!',
+    };
+  }
 }

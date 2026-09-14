@@ -73,6 +73,15 @@ export class User {
 
   @Prop({ required: true, default: 'active', enum: ['active', 'banned'] })
   status: string;
+
+  @Prop({ required: false })
+  twoFactorSecret?: string;
+
+  @Prop({ default: false })
+  isTwoFactorEnabled?: boolean;
+
+  @Prop({ required: false })
+  resetOtp?: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
