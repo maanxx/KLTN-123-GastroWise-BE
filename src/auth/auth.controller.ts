@@ -128,4 +128,46 @@ export class AuthController {
       picture: `http://localhost:3001/uploads/avatars/${file.filename}`,
     };
   }
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  forgotPassword(@Body() body: { email: string }) {
+    if (!body.email) {
+      throw new BadRequestException('Vui lòng nhập Email!');
+    }
+    return this.authService.forgotPassword(body.email);
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  resetPassword(@Body() body: { email: string; otp: string; newPassword: string }) {
+    if (!body.email || !body.newPassword) {
+      throw new BadRequestException('Vui lòng điền đầy đủ Email và Mật khẩu mới!');
+    }
+    return this.authService.resetPassword(body.email, body.otp, body.newPassword);
+  }
+
+  // --- 2FA GOOGLE AUTHENTICATOR ENDPOINTS ---
+  @UseGuards(JwtAuthGuard)
+  @Post('2fa/generate')
+  @HttpCode(HttpStatus.OK)
+  generate2FA(@Req() req: RequestWithUser) {
+    return this.authService.generate2FA(req.user.sub);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('2fa/enable')
+  @HttpCode(HttpStatus.OK)
+  enable2FA(@Req() req: RequestWithUser, @Body() body: { code: string }) {
+    return this.authService.enable2FA(req.user.sub, body.code);
+  }
+
+  @Post('2fa/reset-password')
+  @HttpCode(HttpStatus.OK)
+  resetPasswordWith2FA(@Body() body: { email: string; totpCode: string; newPassword: string }) {
+    if (!body.email || !body.totpCode || !body.newPassword) {
+      throw new BadRequestException('Vui lòng điền đầy đủ Email, Mã 2FA và Mật khẩu mới!');
+    }
+    return this.authService.resetPasswordWith2FA(body.email, body.totpCode, body.newPassword);
+  }
 }
