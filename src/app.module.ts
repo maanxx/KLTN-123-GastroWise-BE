@@ -9,6 +9,7 @@ import { RestaurantsModule } from './restaurants/restaurants.module';
 import { ReviewsModule } from './reviews/reviews.module';
 import { FavoritesModule } from './favorites/favorites.module';
 import { ItinerariesModule } from './itineraries/itineraries.module';
+import { ContactsModule } from './contacts/contacts.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { ItinerariesModule } from './itineraries/itineraries.module';
     ReviewsModule,
     FavoritesModule,
     ItinerariesModule,
+    ContactsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
