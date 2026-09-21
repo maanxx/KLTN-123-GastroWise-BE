@@ -180,6 +180,39 @@ export class RestaurantsService {
     return deg * (Math.PI / 180);
   }
 
+  private mapRestaurantToDTO(res: any) {
+    const r = res.toObject ? res.toObject() : res;
+    const rawRating = r.diemTrungBinh ? Number(r.diemTrungBinh) : (r.rating ? Number(r.rating) : 5.0);
+    const normalizedRating = rawRating > 5 ? Number((rawRating / 2).toFixed(1)) : Number(rawRating.toFixed(1));
+
+    return {
+      id: r._id ? r._id.toString() : r.id,
+      _id: r._id ? r._id.toString() : r.id,
+      name: r.tenQuan || r.name || 'Nhà hàng GastroWise',
+      tenQuan: r.tenQuan || r.name || 'Nhà hàng GastroWise',
+      address: r.diaChi || r.address || 'TP. Hồ Chí Minh',
+      diaChi: r.diaChi || r.address || 'TP. Hồ Chí Minh',
+      coverImage: r.avatarUrl || r.coverImage || r.cover_image || `https://picsum.photos/seed/${r._id || r.id}/1200/500`,
+      avatarUrl: r.avatarUrl || r.coverImage || r.cover_image || `https://picsum.photos/seed/${r._id || r.id}/1200/500`,
+      rating: normalizedRating,
+      diemTrungBinh: normalizedRating,
+      priceRange: r.giaCa || r.priceRange || '30.000đ - 150.000đ',
+      giaCa: r.giaCa || r.priceRange || '30.000đ - 150.000đ',
+      openingHours: r.gioMoCua || r.openingHours || r.openTime || '08:00 - 22:00',
+      gioMoCua: r.gioMoCua || r.openingHours || r.openTime || '08:00 - 22:00',
+      openTime: r.gioMoCua || r.openingHours || r.openTime || '08:00 - 22:00',
+      cuisineTypes: r.tags ? r.tags.split(',').map((t: string) => t.trim()) : ['Nhà hàng'],
+      tags: r.tags || '',
+      phone: r.contactPhone || r.phone || '0901 234 567',
+      contactPhone: r.contactPhone || r.phone || '0901 234 567',
+      description: r.description || '',
+      lat: r.lat,
+      lng: r.lon || r.lng,
+      shopeeUrl: r.urlGoc || null,
+      distance: r.distance,
+    };
+  }
+
   async findAll(
     page: number = 1, 
     limit: number = 32,
@@ -223,11 +256,37 @@ export class RestaurantsService {
     const scoreFieldToCheck = sortField; 
     if (rating && rating !== 'all') {
       switch (rating) {
-        case 'gte9': filterQuery[scoreFieldToCheck] = { $gte: 9.0 }; break;
-        case '8to9': filterQuery[scoreFieldToCheck] = { $gte: 8.0, $lt: 9.0 }; break;
-        case '7to8': filterQuery[scoreFieldToCheck] = { $gte: 7.0, $lt: 8.0 }; break;
-        case '6to7': filterQuery[scoreFieldToCheck] = { $gte: 6.0, $lt: 7.0 }; break;
-        case 'lt6': filterQuery[scoreFieldToCheck] = { $lt: 6.0 }; break;
+        case 'gte4_5':
+        case 'gte9':
+          filterQuery['$or'] = [
+            { [scoreFieldToCheck]: { $gte: 9.0 } },
+            { [scoreFieldToCheck]: { $gte: 4.5, $lte: 5.0 } }
+          ];
+          break;
+        case 'gte4':
+        case '8to9':
+          filterQuery['$or'] = [
+            { [scoreFieldToCheck]: { $gte: 8.0 } },
+            { [scoreFieldToCheck]: { $gte: 4.0, $lte: 5.0 } }
+          ];
+          break;
+        case 'gte3_5':
+        case '7to8':
+          filterQuery['$or'] = [
+            { [scoreFieldToCheck]: { $gte: 7.0 } },
+            { [scoreFieldToCheck]: { $gte: 3.5, $lte: 5.0 } }
+          ];
+          break;
+        case 'gte3':
+        case '6to7':
+          filterQuery['$or'] = [
+            { [scoreFieldToCheck]: { $gte: 6.0 } },
+            { [scoreFieldToCheck]: { $gte: 3.0, $lte: 5.0 } }
+          ];
+          break;
+        case 'lt6':
+          filterQuery[scoreFieldToCheck] = { $lt: 6.0 };
+          break;
       }
     }
 
@@ -335,10 +394,10 @@ export class RestaurantsService {
       }
 
       total = allCandidates.length;
-      data = allCandidates.slice(skip, skip + limitNum);
+      data = allCandidates.slice(skip, skip + limitNum).map(res => this.mapRestaurantToDTO(res));
     } else {
       total = await this.restaurantModel.countDocuments(filterQuery).exec();
-      data = await this.restaurantModel
+      const rawData = await this.restaurantModel
         .find(filterQuery)
         .sort(sortOptions)
         .skip(skip)
@@ -370,7 +429,7 @@ export class RestaurantsService {
       }).exec();
     }
     if (!restaurant) throw new NotFoundException(`Restaurant with ID or slug "${idOrSlug}" not found`);
-    return restaurant;
+    return this.mapRestaurantToDTO(restaurant) as any;
   }
   async update(id: string, updateRestaurantDto: any): Promise<RestaurantDocument> {
     if (!Types.ObjectId.isValid(id)) {
