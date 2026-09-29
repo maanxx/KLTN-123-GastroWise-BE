@@ -10,7 +10,7 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import FormData from 'form-data'; 
 
-const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:8000';
+const aiUrl = process.env.AI_SERVICE_URL;
 
 @Injectable()
 export class RestaurantsService {
@@ -124,15 +124,116 @@ export class RestaurantsService {
       // 4. [QUAN TRỌNG] Cắt lấy đúng Top 5 quán ngon nhất
       topRestaurants = topRestaurants.slice(0, 5);
 
+      const touristInfo = this.getSimilarDishesAndTouristInfo(foodName);
+
       return {
         data: topRestaurants, // Trả về danh sách 5 quán xịn nhất
         detectedFood: foodName,
+        englishName: touristInfo.englishName,
+        similarDishes: touristInfo.similarDishes,
+        touristGuide: touristInfo.touristGuide,
         total: topRestaurants.length
       };
 
     } catch (error) {
       console.error('Lỗi search by image:', error.message);
       return { data: [], message: 'Lỗi xử lý hình ảnh' };
+    }
+  }
+
+  private getSimilarDishesAndTouristInfo(foodName: string) {
+    const lower = (foodName || '').toLowerCase();
+    
+    if (lower.includes('phở') || lower.includes('pho')) {
+      return {
+        englishName: 'Vietnamese Beef Noodle Soup (Pho)',
+        similarDishes: ['Bún Bò Huế', 'Phở Gà', 'Hủ Tiếu Nam Vang', 'Mì Quảng'],
+        touristGuide: 'A world-famous Vietnamese staple featuring aromatic bone broth, flat rice noodles, fresh herbs, and tender beef slices.',
+      };
+    } else if (lower.includes('cơm') || lower.includes('com')) {
+      return {
+        englishName: 'Vietnamese Broken Rice (Com Tam)',
+        similarDishes: ['Cơm Gà Xối Mỡ', 'Cơm Niêu', 'Cơm Sườn nướng', 'Cơm Tấm Chả Trứng'],
+        touristGuide: 'Iconic Saigon street food consisting of fragrant broken rice served with marinated grilled pork chop, steamed egg loaf, and sweet fish sauce.',
+      };
+    } else if (lower.includes('bánh mì') || lower.includes('banh mi')) {
+      return {
+        englishName: 'Vietnamese Baguette Sandwich (Banh Mi)',
+        similarDishes: ['Bánh Mì Chảo', 'Bánh Xèo', 'Gỏi Cuốn', 'Bánh Cuốn'],
+        touristGuide: 'Crispy crusty baguette stuffed with savory pate, grilled meats, pickled daikon & carrots, fresh cilantro, and chili.',
+      };
+    } else if (lower.includes('bún') || lower.includes('bun')) {
+      return {
+        englishName: 'Vietnamese Rice Noodle Bowl (Bun)',
+        similarDishes: ['Phở Bò', 'Bún Bò Huế', 'Bún Riêu Cua', 'Bún Chả Hà Nội'],
+        touristGuide: 'Rich, flavorful Vietnamese noodle dish infused with herbs, savory broth, tender meats, and fresh greens.',
+      };
+    } else if (lower.includes('lẩu') || lower.includes('hotpot')) {
+      return {
+        englishName: 'Vietnamese Hotpot (Lau)',
+        similarDishes: ['Lẩu Thái Cay', 'Lẩu Hải Sản', 'Lẩu Bò', 'Nướng BBQ'],
+        touristGuide: 'Simmering communal hotpot served with fresh seafood, sliced meats, seasonal green vegetables, and noodles.',
+      };
+    }
+
+    return {
+      englishName: foodName,
+      similarDishes: ['Phở Bò', 'Bánh Mì', 'Cơm Tấm', 'Gỏi Cuốn', 'Bún Bò Huế'],
+      touristGuide: 'Delicious authentic Vietnamese dish served with traditional fresh ingredients and aromatic seasonings.',
+    };
+  }
+
+  // [MỚI] GỢI Ý MÓN ĂN THEO THỜI TIẾT REALTIME + GPS
+  async getWeatherRecommendation(userLat?: string, userLon?: string) {
+    try {
+      const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
+      const payload: any = {};
+      if (userLat && userLon) {
+        payload.user_gps = [parseFloat(userLat), parseFloat(userLon)];
+      }
+
+      const aiResponse = await firstValueFrom(
+        this.httpService.post(`${aiUrl}/weather-recommend`, payload)
+      );
+
+      const weatherData = aiResponse.data.weather;
+      const scores = aiResponse.data.scores || [];
+      const recommendedIds = scores.map((item: any) => item.id);
+
+      let restaurants: any[] = [];
+      if (recommendedIds.length > 0) {
+        const found = await this.restaurantModel
+          .find({ _id: { $in: recommendedIds } })
+          .lean()
+          .exec();
+
+        const idMap = new Map(found.map((r: any) => [r._id.toString(), r]));
+        restaurants = recommendedIds
+          .map((id: string) => idMap.get(id))
+          .filter(Boolean)
+          .slice(0, 10)
+          .map((res: any) => this.mapRestaurantToDTO(res));
+      }
+
+      return {
+        weather: weatherData,
+        data: restaurants,
+        total: restaurants.length,
+      };
+    } catch (error: any) {
+      console.error('Lỗi weather recommendation AI:', error.message);
+      return {
+        weather: {
+          temperature: 28,
+          condition_text: 'Trời nắng mát',
+          condition_code: 0,
+          banner_title: '🌤️ Món ngon dành riêng cho bạn hôm nay!',
+          banner_desc: 'Khám phá các địa điểm ẩm thực nổi tiếng được đánh giá cao nhất.',
+          weather_type: 'cool',
+        },
+        data: [],
+        total: 0,
+      };
     }
   }
 
@@ -403,6 +504,7 @@ export class RestaurantsService {
         .skip(skip)
         .limit(limitNum)
         .exec();
+      data = rawData.map(res => this.mapRestaurantToDTO(res));
     }
 
     return {

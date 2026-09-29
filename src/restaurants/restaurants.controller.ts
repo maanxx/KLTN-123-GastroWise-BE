@@ -89,6 +89,14 @@ export class RestaurantsController {
     return this.restaurantsService.deleteMenuItem(menuId);
   }
 
+  @Get('weather-recommend')
+  getWeatherRecommendation(
+    @Query('lat') lat?: string,
+    @Query('lon') lon?: string,
+  ) {
+    return this.restaurantsService.getWeatherRecommendation(lat, lon);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.restaurantsService.findOne(id);
