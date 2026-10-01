@@ -24,6 +24,7 @@ async function bootstrap() {
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
     credentials: true,
   });
-  await app.listen(process.env.PORT ?? 3001);
+  await app.listen(process.env.PORT ?? 3001, '0.0.0.0');
+  console.log(`🚀 NestJS Backend is listening on 0.0.0.0:${process.env.PORT ?? 3001}`);
 }
 bootstrap();

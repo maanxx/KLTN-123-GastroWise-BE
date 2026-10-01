@@ -54,6 +54,18 @@ export class Itinerary extends Document {
   stops: ItineraryStop[];
 
   @Prop()
+  shareToken: string;
+
+  @Prop({ default: false })
+  reminderEnabled: boolean;
+
+  @Prop({ default: '30_MIN' })
+  reminderTime: string;
+
+  @Prop({ default: 1.5 })
+  co2SavedKg: number;
+
+  @Prop({ default: Date.now })
   created_at: Date;
 }
 

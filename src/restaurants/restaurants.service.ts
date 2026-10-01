@@ -10,7 +10,7 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import FormData from 'form-data'; 
 
-const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:8000';
+const aiUrl = process.env.AI_SERVICE_URL;
 
 @Injectable()
 export class RestaurantsService {
@@ -124,15 +124,116 @@ export class RestaurantsService {
       // 4. [QUAN TRỌNG] Cắt lấy đúng Top 5 quán ngon nhất
       topRestaurants = topRestaurants.slice(0, 5);
 
+      const touristInfo = this.getSimilarDishesAndTouristInfo(foodName);
+
       return {
         data: topRestaurants, // Trả về danh sách 5 quán xịn nhất
         detectedFood: foodName,
+        englishName: touristInfo.englishName,
+        similarDishes: touristInfo.similarDishes,
+        touristGuide: touristInfo.touristGuide,
         total: topRestaurants.length
       };
 
     } catch (error) {
       console.error('Lỗi search by image:', error.message);
       return { data: [], message: 'Lỗi xử lý hình ảnh' };
+    }
+  }
+
+  private getSimilarDishesAndTouristInfo(foodName: string) {
+    const lower = (foodName || '').toLowerCase();
+    
+    if (lower.includes('phở') || lower.includes('pho')) {
+      return {
+        englishName: 'Vietnamese Beef Noodle Soup (Pho)',
+        similarDishes: ['Bún Bò Huế', 'Phở Gà', 'Hủ Tiếu Nam Vang', 'Mì Quảng'],
+        touristGuide: 'A world-famous Vietnamese staple featuring aromatic bone broth, flat rice noodles, fresh herbs, and tender beef slices.',
+      };
+    } else if (lower.includes('cơm') || lower.includes('com')) {
+      return {
+        englishName: 'Vietnamese Broken Rice (Com Tam)',
+        similarDishes: ['Cơm Gà Xối Mỡ', 'Cơm Niêu', 'Cơm Sườn nướng', 'Cơm Tấm Chả Trứng'],
+        touristGuide: 'Iconic Saigon street food consisting of fragrant broken rice served with marinated grilled pork chop, steamed egg loaf, and sweet fish sauce.',
+      };
+    } else if (lower.includes('bánh mì') || lower.includes('banh mi')) {
+      return {
+        englishName: 'Vietnamese Baguette Sandwich (Banh Mi)',
+        similarDishes: ['Bánh Mì Chảo', 'Bánh Xèo', 'Gỏi Cuốn', 'Bánh Cuốn'],
+        touristGuide: 'Crispy crusty baguette stuffed with savory pate, grilled meats, pickled daikon & carrots, fresh cilantro, and chili.',
+      };
+    } else if (lower.includes('bún') || lower.includes('bun')) {
+      return {
+        englishName: 'Vietnamese Rice Noodle Bowl (Bun)',
+        similarDishes: ['Phở Bò', 'Bún Bò Huế', 'Bún Riêu Cua', 'Bún Chả Hà Nội'],
+        touristGuide: 'Rich, flavorful Vietnamese noodle dish infused with herbs, savory broth, tender meats, and fresh greens.',
+      };
+    } else if (lower.includes('lẩu') || lower.includes('hotpot')) {
+      return {
+        englishName: 'Vietnamese Hotpot (Lau)',
+        similarDishes: ['Lẩu Thái Cay', 'Lẩu Hải Sản', 'Lẩu Bò', 'Nướng BBQ'],
+        touristGuide: 'Simmering communal hotpot served with fresh seafood, sliced meats, seasonal green vegetables, and noodles.',
+      };
+    }
+
+    return {
+      englishName: foodName,
+      similarDishes: ['Phở Bò', 'Bánh Mì', 'Cơm Tấm', 'Gỏi Cuốn', 'Bún Bò Huế'],
+      touristGuide: 'Delicious authentic Vietnamese dish served with traditional fresh ingredients and aromatic seasonings.',
+    };
+  }
+
+  // [MỚI] GỢI Ý MÓN ĂN THEO THỜI TIẾT REALTIME + GPS
+  async getWeatherRecommendation(userLat?: string, userLon?: string) {
+    try {
+      const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
+      const payload: any = {};
+      if (userLat && userLon) {
+        payload.user_gps = [parseFloat(userLat), parseFloat(userLon)];
+      }
+
+      const aiResponse = await firstValueFrom(
+        this.httpService.post(`${aiUrl}/weather-recommend`, payload)
+      );
+
+      const weatherData = aiResponse.data.weather;
+      const scores = aiResponse.data.scores || [];
+      const recommendedIds = scores.map((item: any) => item.id);
+
+      let restaurants: any[] = [];
+      if (recommendedIds.length > 0) {
+        const found = await this.restaurantModel
+          .find({ _id: { $in: recommendedIds } })
+          .lean()
+          .exec();
+
+        const idMap = new Map(found.map((r: any) => [r._id.toString(), r]));
+        restaurants = recommendedIds
+          .map((id: string) => idMap.get(id))
+          .filter(Boolean)
+          .slice(0, 10)
+          .map((res: any) => this.mapRestaurantToDTO(res));
+      }
+
+      return {
+        weather: weatherData,
+        data: restaurants,
+        total: restaurants.length,
+      };
+    } catch (error: any) {
+      console.error('Lỗi weather recommendation AI:', error.message);
+      return {
+        weather: {
+          temperature: 28,
+          condition_text: 'Trời nắng mát',
+          condition_code: 0,
+          banner_title: '🌤️ Món ngon dành riêng cho bạn hôm nay!',
+          banner_desc: 'Khám phá các địa điểm ẩm thực nổi tiếng được đánh giá cao nhất.',
+          weather_type: 'cool',
+        },
+        data: [],
+        total: 0,
+      };
     }
   }
 
@@ -180,6 +281,39 @@ export class RestaurantsService {
     return deg * (Math.PI / 180);
   }
 
+  private mapRestaurantToDTO(res: any) {
+    const r = res.toObject ? res.toObject() : res;
+    const rawRating = r.diemTrungBinh ? Number(r.diemTrungBinh) : (r.rating ? Number(r.rating) : 5.0);
+    const normalizedRating = rawRating > 5 ? Number((rawRating / 2).toFixed(1)) : Number(rawRating.toFixed(1));
+
+    return {
+      id: r._id ? r._id.toString() : r.id,
+      _id: r._id ? r._id.toString() : r.id,
+      name: r.tenQuan || r.name || 'Nhà hàng GastroWise',
+      tenQuan: r.tenQuan || r.name || 'Nhà hàng GastroWise',
+      address: r.diaChi || r.address || 'TP. Hồ Chí Minh',
+      diaChi: r.diaChi || r.address || 'TP. Hồ Chí Minh',
+      coverImage: r.avatarUrl || r.coverImage || r.cover_image || `https://picsum.photos/seed/${r._id || r.id}/1200/500`,
+      avatarUrl: r.avatarUrl || r.coverImage || r.cover_image || `https://picsum.photos/seed/${r._id || r.id}/1200/500`,
+      rating: normalizedRating,
+      diemTrungBinh: normalizedRating,
+      priceRange: r.giaCa || r.priceRange || '30.000đ - 150.000đ',
+      giaCa: r.giaCa || r.priceRange || '30.000đ - 150.000đ',
+      openingHours: r.gioMoCua || r.openingHours || r.openTime || '08:00 - 22:00',
+      gioMoCua: r.gioMoCua || r.openingHours || r.openTime || '08:00 - 22:00',
+      openTime: r.gioMoCua || r.openingHours || r.openTime || '08:00 - 22:00',
+      cuisineTypes: r.tags ? r.tags.split(',').map((t: string) => t.trim()) : ['Nhà hàng'],
+      tags: r.tags || '',
+      phone: r.contactPhone || r.phone || '0901 234 567',
+      contactPhone: r.contactPhone || r.phone || '0901 234 567',
+      description: r.description || '',
+      lat: r.lat,
+      lng: r.lon || r.lng,
+      shopeeUrl: r.urlGoc || null,
+      distance: r.distance,
+    };
+  }
+
   async findAll(
     page: number = 1, 
     limit: number = 32,
@@ -223,11 +357,37 @@ export class RestaurantsService {
     const scoreFieldToCheck = sortField; 
     if (rating && rating !== 'all') {
       switch (rating) {
-        case 'gte9': filterQuery[scoreFieldToCheck] = { $gte: 9.0 }; break;
-        case '8to9': filterQuery[scoreFieldToCheck] = { $gte: 8.0, $lt: 9.0 }; break;
-        case '7to8': filterQuery[scoreFieldToCheck] = { $gte: 7.0, $lt: 8.0 }; break;
-        case '6to7': filterQuery[scoreFieldToCheck] = { $gte: 6.0, $lt: 7.0 }; break;
-        case 'lt6': filterQuery[scoreFieldToCheck] = { $lt: 6.0 }; break;
+        case 'gte4_5':
+        case 'gte9':
+          filterQuery['$or'] = [
+            { [scoreFieldToCheck]: { $gte: 9.0 } },
+            { [scoreFieldToCheck]: { $gte: 4.5, $lte: 5.0 } }
+          ];
+          break;
+        case 'gte4':
+        case '8to9':
+          filterQuery['$or'] = [
+            { [scoreFieldToCheck]: { $gte: 8.0 } },
+            { [scoreFieldToCheck]: { $gte: 4.0, $lte: 5.0 } }
+          ];
+          break;
+        case 'gte3_5':
+        case '7to8':
+          filterQuery['$or'] = [
+            { [scoreFieldToCheck]: { $gte: 7.0 } },
+            { [scoreFieldToCheck]: { $gte: 3.5, $lte: 5.0 } }
+          ];
+          break;
+        case 'gte3':
+        case '6to7':
+          filterQuery['$or'] = [
+            { [scoreFieldToCheck]: { $gte: 6.0 } },
+            { [scoreFieldToCheck]: { $gte: 3.0, $lte: 5.0 } }
+          ];
+          break;
+        case 'lt6':
+          filterQuery[scoreFieldToCheck] = { $lt: 6.0 };
+          break;
       }
     }
 
@@ -263,14 +423,28 @@ export class RestaurantsService {
                aiIndexMap[item.id] = index;
            });
         } else {
-           return { data: [], total: 0, currentPage: pageNum, totalPages: 0 }; 
+           // [QUAN TRỌNG] Nếu AI không trả ra ID nào, tự động fallback sang MongoDB Regex
+           filterQuery['$or'] = [
+             { tenQuan: { $regex: search, $options: 'i' } },
+             { name: { $regex: search, $options: 'i' } },
+             { tags: { $regex: search, $options: 'i' } },
+             { cuisines: { $regex: search, $options: 'i' } },
+             { diaChi: { $regex: search, $options: 'i' } },
+             { address: { $regex: search, $options: 'i' } },
+           ];
+           isAiSearch = false; // Chuyển về chế độ Mongo Query bình thường
         }
       } catch (error) {
         console.error("Lỗi kết nối AI:", error.message);
         filterQuery['$or'] = [
           { tenQuan: { $regex: search, $options: 'i' } },
-          { tags: { $regex: search, $options: 'i' } }
+          { name: { $regex: search, $options: 'i' } },
+          { tags: { $regex: search, $options: 'i' } },
+          { cuisines: { $regex: search, $options: 'i' } },
+          { diaChi: { $regex: search, $options: 'i' } },
+          { address: { $regex: search, $options: 'i' } },
         ];
+        isAiSearch = false;
       }
     }
 
@@ -335,15 +509,16 @@ export class RestaurantsService {
       }
 
       total = allCandidates.length;
-      data = allCandidates.slice(skip, skip + limitNum);
+      data = allCandidates.slice(skip, skip + limitNum).map(res => this.mapRestaurantToDTO(res));
     } else {
       total = await this.restaurantModel.countDocuments(filterQuery).exec();
-      data = await this.restaurantModel
+      const rawData = await this.restaurantModel
         .find(filterQuery)
         .sort(sortOptions)
         .skip(skip)
         .limit(limitNum)
         .exec();
+      data = rawData.map(res => this.mapRestaurantToDTO(res));
     }
 
     return {
@@ -370,7 +545,7 @@ export class RestaurantsService {
       }).exec();
     }
     if (!restaurant) throw new NotFoundException(`Restaurant with ID or slug "${idOrSlug}" not found`);
-    return restaurant;
+    return this.mapRestaurantToDTO(restaurant) as any;
   }
   async update(id: string, updateRestaurantDto: any): Promise<RestaurantDocument> {
     if (!Types.ObjectId.isValid(id)) {
