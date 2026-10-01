@@ -423,14 +423,28 @@ export class RestaurantsService {
                aiIndexMap[item.id] = index;
            });
         } else {
-           return { data: [], total: 0, currentPage: pageNum, totalPages: 0 }; 
+           // [QUAN TRỌNG] Nếu AI không trả ra ID nào, tự động fallback sang MongoDB Regex
+           filterQuery['$or'] = [
+             { tenQuan: { $regex: search, $options: 'i' } },
+             { name: { $regex: search, $options: 'i' } },
+             { tags: { $regex: search, $options: 'i' } },
+             { cuisines: { $regex: search, $options: 'i' } },
+             { diaChi: { $regex: search, $options: 'i' } },
+             { address: { $regex: search, $options: 'i' } },
+           ];
+           isAiSearch = false; // Chuyển về chế độ Mongo Query bình thường
         }
       } catch (error) {
         console.error("Lỗi kết nối AI:", error.message);
         filterQuery['$or'] = [
           { tenQuan: { $regex: search, $options: 'i' } },
-          { tags: { $regex: search, $options: 'i' } }
+          { name: { $regex: search, $options: 'i' } },
+          { tags: { $regex: search, $options: 'i' } },
+          { cuisines: { $regex: search, $options: 'i' } },
+          { diaChi: { $regex: search, $options: 'i' } },
+          { address: { $regex: search, $options: 'i' } },
         ];
+        isAiSearch = false;
       }
     }
 
