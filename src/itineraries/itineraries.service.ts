@@ -110,9 +110,12 @@ export class ItinerariesService {
   }
 
   async getItineraryById(id: string, userId: string): Promise<Itinerary> {
+    if (!Types.ObjectId.isValid(id) || !/^[0-9a-fA-F]{24}$/.test(id)) {
+      throw new NotFoundException(`Lộ trình với ID "${id}" không hợp lệ hoặc không tồn tại.`);
+    }
     const itinerary = await this.itineraryModel.findById(id).populate('stops.restaurant_id').exec();
     if (!itinerary) {
-      throw new NotFoundException('Itinerary not found');
+      throw new NotFoundException('Không tìm thấy lộ trình');
     }
     // TODO: Authorize user if needed (itinerary.user_id === userId)
     return itinerary;
