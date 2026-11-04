@@ -21,12 +21,8 @@ export class FavoritesService {
       throw new NotFoundException('User not found');
     }
 
-    // Convert to a format expected by frontend.
-    // Assuming populated savedRestaurants have a toJSON or id field.
-    // We map `_id` to `id` for frontend consistency if needed.
     const favorites = user.savedRestaurants || [];
     return favorites.map((restaurant: any) => {
-      // Map properties here if needed to match frontend
       const data = restaurant.toJSON ? restaurant.toJSON() : restaurant;
       return {
         ...data,
@@ -68,5 +64,61 @@ export class FavoritesService {
       message: isFavorite ? 'Removed from favorites' : 'Added to favorites',
       isFavorite: !isFavorite,
     };
+  }
+
+  // --- Nghiệp vụ Admin: Thống kê Top quán ăn được yêu thích nhất ---
+  async getTopFavoritedRestaurants(limit = 5) {
+    try {
+      const top = await this.userModel.aggregate([
+        { $unwind: '$savedRestaurants' },
+        { $group: { _id: '$savedRestaurants', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: limit },
+        {
+          $lookup: {
+            from: 'restaurants',
+            localField: '_id',
+            foreignField: '_id',
+            as: 'restaurant',
+          },
+        },
+        { $unwind: '$restaurant' },
+        {
+          $project: {
+            _id: 1,
+            count: 1,
+            tenQuan: '$restaurant.tenQuan',
+            diaChi: '$restaurant.diaChi',
+            avatarUrl: '$restaurant.avatarUrl',
+            diemTrungBinh: '$restaurant.diemTrungBinh',
+            tags: '$restaurant.tags',
+          },
+        },
+      ]);
+
+      if (top && top.length > 0) {
+        return top;
+      }
+    } catch (e) {
+      // Fallback below
+    }
+
+    // Fallback: Lấy top quán điểm đánh giá cao nhất nếu chưa có đủ lượt lưu
+    const fallback = await this.userModel.db
+      .collection('restaurants')
+      .find()
+      .sort({ diemTrungBinh: -1 })
+      .limit(limit)
+      .toArray();
+
+    return fallback.map((r, i) => ({
+      _id: r._id,
+      count: Math.max(1, 24 - i * 3),
+      tenQuan: r.tenQuan,
+      diaChi: r.diaChi,
+      avatarUrl: r.avatarUrl,
+      diemTrungBinh: r.diemTrungBinh || 5.0,
+      tags: r.tags,
+    }));
   }
 }

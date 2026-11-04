@@ -28,6 +28,13 @@ export class MenuItem {
 
   @Prop({ type: [String], default: [] })
   tags: string[];
+
+  // --- Nghiệp vụ Quản trị Tình trạng Món ăn & Món đặc trưng ---
+  @Prop({ default: true })
+  isAvailable: boolean; // Còn món (true) / Tạm hết món (false)
+
+  @Prop({ default: false })
+  isFeatured: boolean; // Món đặc trưng (Chef's Choice)
 }
 
 export const MenuItemSchema = SchemaFactory.createForClass(MenuItem);

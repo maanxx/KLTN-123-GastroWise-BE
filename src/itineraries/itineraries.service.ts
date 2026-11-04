@@ -109,6 +109,14 @@ export class ItinerariesService {
     return this.itineraryModel.find({ user_id: new Types.ObjectId(userId) }).sort({ created_at: -1 }).exec();
   }
 
+  async getAllItineraries(): Promise<Itinerary[]> {
+    return this.itineraryModel
+      .find()
+      .populate('user_id', 'username firstName lastName email')
+      .sort({ created_at: -1 })
+      .exec();
+  }
+
   async getItineraryById(id: string, userId: string): Promise<Itinerary> {
     if (!Types.ObjectId.isValid(id) || !/^[0-9a-fA-F]{24}$/.test(id)) {
       throw new NotFoundException(`Lộ trình với ID "${id}" không hợp lệ hoặc không tồn tại.`);
@@ -119,5 +127,56 @@ export class ItinerariesService {
     }
     // TODO: Authorize user if needed (itinerary.user_id === userId)
     return itinerary;
+  }
+
+  /**
+   * Admin: Cập nhật trạng thái + tự động ghi audit trail
+   */
+  async updateStatus(id: string, newStatus: string, actorId?: string): Promise<Itinerary> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException(`ID lộ trình "${id}" không hợp lệ.`);
+    }
+
+    const now = new Date();
+    const actorObjectId = actorId && Types.ObjectId.isValid(actorId)
+      ? new Types.ObjectId(actorId)
+      : null;
+
+    const auditUpdate: Record<string, any> = { status: newStatus };
+
+    if (newStatus === 'confirmed') {
+      auditUpdate.confirmedBy = actorObjectId;
+      auditUpdate.confirmedAt = now;
+    } else if (newStatus === 'cancelled') {
+      auditUpdate.cancelledBy = actorObjectId;
+      auditUpdate.cancelledAt = now;
+    } else if (newStatus === 'completed') {
+      auditUpdate.completedBy = actorObjectId;
+      auditUpdate.completedAt = now;
+    }
+
+    const updated = await this.itineraryModel
+      .findByIdAndUpdate(id, { $set: auditUpdate }, { new: true })
+      .populate('user_id', 'username firstName lastName email')
+      .exec();
+
+    if (!updated) {
+      throw new NotFoundException('Không tìm thấy lộ trình để cập nhật.');
+    }
+    return updated;
+  }
+
+  /**
+   * Admin: Xóa lộ trình
+   */
+  async remove(id: string): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException(`ID lộ trình "${id}" không hợp lệ.`);
+    }
+    const res = await this.itineraryModel.findByIdAndDelete(id).exec();
+    if (!res) {
+      throw new NotFoundException('Không tìm thấy lộ trình để xóa.');
+    }
+    return { message: 'Đã xóa lộ trình thành công.' };
   }
 }
