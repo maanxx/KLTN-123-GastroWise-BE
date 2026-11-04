@@ -32,6 +32,19 @@ export class Contact {
 
   @Prop({ default: 'CHỜ XỬ LÝ' })
   status: string;
+
+  // ─── Audit Trail Fields ───────────────────────────────────────────────────
+  /** Tên / email admin đã xử lý contact này */
+  @Prop({ type: String, default: null })
+  resolvedBy: string | null;
+
+  /** Thời điểm bắt đầu xử lý (ĐANG XỬ LÝ) */
+  @Prop({ type: Date, default: null })
+  processingAt: Date | null;
+
+  /** Thời điểm hoàn thành xử lý (ĐÃ GIẢI QUYẾT) */
+  @Prop({ type: Date, default: null })
+  resolvedAt: Date | null;
 }
 
 export const ContactSchema = SchemaFactory.createForClass(Contact);

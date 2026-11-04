@@ -1,10 +1,20 @@
-import { Controller, Get, Post, Body, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, Request, Query } from '@nestjs/common';
 import { FavoritesService } from './favorites.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('favorites')
 export class FavoritesController {
   constructor(private readonly favoritesService: FavoritesService) {}
+
+  /**
+   * Admin / Public: Top quán ăn được lưu yêu thích nhiều nhất
+   * GET /favorites/top
+   */
+  @Get('top')
+  async getTopFavorites(@Query('limit') limit?: string) {
+    const lim = limit ? parseInt(limit, 10) : 5;
+    return this.favoritesService.getTopFavoritedRestaurants(lim);
+  }
 
   @UseGuards(JwtAuthGuard)
   @Get()

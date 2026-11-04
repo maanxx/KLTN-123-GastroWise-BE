@@ -48,7 +48,7 @@ export class Itinerary extends Document {
   start_location: { type: string, coordinates: number[] };
 
   @Prop({ default: 'generated' })
-  status: string; 
+  status: string;
 
   @Prop({ type: [ItineraryStop], default: [] })
   stops: ItineraryStop[];
@@ -67,6 +67,31 @@ export class Itinerary extends Document {
 
   @Prop({ default: Date.now })
   created_at: Date;
+
+  // ─── Audit Trail Fields ───────────────────────────────────────────────────
+  /** Admin / user nào đã xác nhận lộ trình */
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  confirmedBy: User | Types.ObjectId | null;
+
+  /** Thời điểm xác nhận */
+  @Prop({ type: Date, default: null })
+  confirmedAt: Date | null;
+
+  /** Admin / user nào đã hủy lộ trình */
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  cancelledBy: User | Types.ObjectId | null;
+
+  /** Thời điểm hủy */
+  @Prop({ type: Date, default: null })
+  cancelledAt: Date | null;
+
+  /** Admin nào đánh dấu hoàn thành */
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  completedBy: User | Types.ObjectId | null;
+
+  /** Thời điểm hoàn thành */
+  @Prop({ type: Date, default: null })
+  completedAt: Date | null;
 }
 
 export const ItinerarySchema = SchemaFactory.createForClass(Itinerary);

@@ -1,6 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Contact, ContactDocument, ContactTopic } from './schemas/contact.schema';
 import { CreateContactDto } from './dto/create-contact.dto';
@@ -190,5 +190,47 @@ Message: ${message}`;
   // TÌM TẤT CẢ LIÊN HỆ (Cho Admin Dashboard)
   async findAll() {
     return this.contactModel.find().sort({ createdAt: -1 }).exec();
+  }
+
+  // CẬP NHẬT TRẠNG THÁI LIÊN HỆ (Kèm Audit Trail)
+  async updateStatus(id: string, newStatus: string, resolvedBy?: string) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException(`ID liên hệ "${id}" không hợp lệ.`);
+    }
+
+    const now = new Date();
+    const updateData: Record<string, any> = { status: newStatus };
+
+    if (newStatus === 'ĐÃ GIẢI QUYẾT') {
+      updateData.resolvedAt = now;
+      if (resolvedBy) updateData.resolvedBy = resolvedBy;
+    } else if (newStatus === 'ĐANG XỬ LÝ') {
+      updateData.processingAt = now;
+      if (resolvedBy) updateData.resolvedBy = resolvedBy;
+    }
+
+    const updated = await this.contactModel.findByIdAndUpdate(
+      id,
+      { $set: updateData },
+      { new: true },
+    ).exec();
+
+    if (!updated) {
+      throw new NotFoundException('Không tìm thấy liên hệ để cập nhật.');
+    }
+
+    return updated;
+  }
+
+  // XÓA LIÊN HỆ
+  async remove(id: string) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException(`ID liên hệ "${id}" không hợp lệ.`);
+    }
+    const res = await this.contactModel.findByIdAndDelete(id).exec();
+    if (!res) {
+      throw new NotFoundException('Không tìm thấy liên hệ để xóa.');
+    }
+    return { message: 'Đã xóa liên hệ thành công.' };
   }
 }

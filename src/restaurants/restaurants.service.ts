@@ -37,7 +37,7 @@ export class RestaurantsService {
     if (search) {
       filter.name = { $regex: search, $options: 'i' };
     }
-    return this.menuItemModel.find(filter).populate('restaurantId', 'tenQuan diaChi').exec();
+    return this.menuItemModel.find(filter).populate('restaurantId', 'tenQuan diaChi').sort({ isFeatured: -1, createdAt: -1 }).exec();
   }
 
   async createMenuItem(restaurantId: string, dto: any) {
@@ -310,7 +310,10 @@ export class RestaurantsService {
       lat: r.lat,
       lng: r.lon || r.lng,
       shopeeUrl: r.urlGoc || null,
-      distance: r.distance,
+distance: r.distance,
+status: r.status || 'open',
+isVerified: Boolean(r.isVerified),
+isFeatured: Boolean(r.isFeatured),
     };
   }
 

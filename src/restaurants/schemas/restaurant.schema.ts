@@ -4,7 +4,7 @@ import mongoose, { HydratedDocument } from 'mongoose';
 
 export type RestaurantDocument = HydratedDocument<Restaurant>;
 
-@Schema({ collection: 'restaurants' })
+@Schema({ collection: 'restaurants', timestamps: true })
 export class Restaurant {
   @Prop() tenQuan: string;
   @Prop({ index: true }) // Thêm index để tìm kiếm nhanh hơn
@@ -39,6 +39,13 @@ export class Restaurant {
 
   @Prop({ required: true, default: 'open', enum: ['open', 'closed', 'pending'] })
   status: string;
+
+  // --- Nghiệp vụ Quản trị Nhà hàng (Admin & AI Badges) ---
+  @Prop({ default: false })
+  isVerified: boolean; // Quán ăn uy tín đã xác thực
+
+  @Prop({ default: false })
+  isFeatured: boolean; // Được AI Đề xuất ưu tiên (Featured)
 }
 
 export const RestaurantSchema = SchemaFactory.createForClass(Restaurant);

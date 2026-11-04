@@ -41,6 +41,16 @@ export class Review {
 
   @Prop({ default: 0 })
   likes: number;
+
+  // --- Nghiệp vụ Kiểm duyệt & Đánh giá nổi bật ---
+  @Prop({ default: 'active', enum: ['active', 'hidden', 'pending'] })
+  status: string;
+
+  @Prop({ default: false })
+  isFeatured: boolean;
+
+  @Prop({ default: null })
+  pinnedAt?: Date;
 }
 
 export const ReviewSchema = SchemaFactory.createForClass(Review);

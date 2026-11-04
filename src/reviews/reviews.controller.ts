@@ -30,6 +30,11 @@ export class ReviewsController {
     return this.reviewsService.findByRestaurantUrl(url);
   }
 
+  @Get('stats')
+  async getStats() {
+    return this.reviewsService.getReviewStats();
+  }
+
   @Get('all')
   async getAll(@Query() query: any) {
     return this.reviewsService.getAllReviews(query);

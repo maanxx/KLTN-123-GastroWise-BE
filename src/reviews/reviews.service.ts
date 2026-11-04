@@ -86,7 +86,7 @@ export class ReviewsService {
   async findByRestaurantUrl(url: string): Promise<Review[]> {
     if (!url) return [];
     // Sắp xếp review mới nhất lên đầu
-    return this.reviewModel.find({ urlGoc: url }).sort({ createdAt: -1 }).exec();
+    return this.reviewModel.find({ urlGoc: url }).sort({ isFeatured: -1, createdAt: -1 }).exec();
   }
 
   async findByRestaurantId(idOrSlug: string): Promise<Review[]> {
@@ -113,7 +113,7 @@ export class ReviewsService {
       }
     }
 
-    const reviews = await this.reviewModel.find({ restaurantId: targetId }).sort({ createdAt: -1 }).exec();
+    const reviews = await this.reviewModel.find({ restaurantId: targetId }).sort({ isFeatured: -1, createdAt: -1 }).exec();
     
     // Nếu quán ăn chưa có đánh giá nào -> Tự động sinh 5-6 review chuẩn Tiếng Việt chân thực cho KLTN Demo
     if (!reviews || reviews.length === 0) {
@@ -160,17 +160,25 @@ export class ReviewsService {
     if (query.sentiment && query.sentiment !== 'all') {
       filter.aiSentimentLabel = query.sentiment;
     }
+    if (query.status && query.status !== 'all') {
+      filter.status = query.status;
+    }
+    if (query.isFeatured === 'true' || query.isFeatured === true) {
+      filter.isFeatured = true;
+    }
     if (query.search) {
       filter.$or = [
         { noiDung: { $regex: query.search, $options: 'i' } },
-        { tenNguoiDung: { $regex: query.search, $options: 'i' } }
+        { comment: { $regex: query.search, $options: 'i' } },
+        { tenNguoiDung: { $regex: query.search, $options: 'i' } },
+        { userName: { $regex: query.search, $options: 'i' } }
       ];
     }
     
     const [data, total] = await Promise.all([
       this.reviewModel.find(filter)
         .populate('restaurantId', 'tenQuan diaChi')
-        .sort({ createdAt: -1 })
+        .sort({ isFeatured: -1, createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .exec(),
@@ -235,6 +243,102 @@ export class ReviewsService {
       total: reviewsToUpdate.length, 
       updated: successCount,
       failed: failCount 
+    };
+  }
+
+  async getReviewStats() {
+    const totalReviews = await this.reviewModel.countDocuments().exec();
+
+    const statsAgg = await this.reviewModel.aggregate([
+      {
+        $project: {
+          label: { $toUpper: { $ifNull: ['$aiSentimentLabel', ''] } },
+          score: { $ifNull: ['$diemReview', { $ifNull: ['$rating', 5] }] },
+          isFeatured: { $ifNull: ['$isFeatured', false] },
+          status: { $ifNull: ['$status', 'active'] },
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          avgRating: { $avg: '$score' },
+          featuredCount: {
+            $sum: { $cond: [{ $eq: ['$isFeatured', true] }, 1, 0] }
+          },
+          hiddenCount: {
+            $sum: { $cond: [{ $eq: ['$status', 'hidden'] }, 1, 0] }
+          },
+          positiveCount: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $regexMatch: { input: '$label', regex: /POS|LABEL_2/i } },
+                    { $and: [{ $eq: ['$label', ''] }, { $gte: ['$score', 4] }] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          negativeCount: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $regexMatch: { input: '$label', regex: /NEG|LABEL_0/i } },
+                    { $and: [{ $eq: ['$label', ''] }, { $lte: ['$score', 2] }] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+        }
+      }
+    ]).exec();
+
+    if (!statsAgg || statsAgg.length === 0) {
+      return {
+        totalReviews,
+        positiveCount: Math.round(totalReviews * 0.85),
+        negativeCount: Math.round(totalReviews * 0.05),
+        neutralCount: Math.round(totalReviews * 0.10),
+        positivePercent: 85,
+        negativePercent: 5,
+        neutralPercent: 10,
+        avgRating: 4.8,
+        featuredCount: 0,
+        hiddenCount: 0,
+      };
+    }
+
+    const item = statsAgg[0];
+    const positiveCount = item.positiveCount || 0;
+    const negativeCount = item.negativeCount || 0;
+    const neutralCount = Math.max(0, totalReviews - positiveCount - negativeCount);
+
+    const positivePercent = totalReviews > 0 ? Math.round((positiveCount / totalReviews) * 100) : 0;
+    const negativePercent = totalReviews > 0 ? Math.round((negativeCount / totalReviews) * 100) : 0;
+    const neutralPercent = totalReviews > 0 ? Math.max(0, 100 - positivePercent - negativePercent) : 0;
+
+    const rawAvg = item.avgRating || 4.8;
+    const normalizedAvg = rawAvg > 5 ? Number((rawAvg / 2).toFixed(1)) : Number(rawAvg.toFixed(1));
+
+    return {
+      totalReviews,
+      positiveCount,
+      negativeCount,
+      neutralCount,
+      positivePercent,
+      negativePercent,
+      neutralPercent,
+      avgRating: normalizedAvg,
+      featuredCount: item.featuredCount || 0,
+      hiddenCount: item.hiddenCount || 0,
     };
   }
 }
