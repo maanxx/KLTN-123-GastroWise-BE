@@ -6,6 +6,21 @@ import { Restaurant } from '../restaurants/schemas/restaurant.schema';
 import { GenerateItineraryDto } from './dto/generate-itinerary.dto';
 import { v4 as uuidv4 } from 'uuid';
 
+function calculateHaversineDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return 1.5;
+  const R = 6371; // km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 @Injectable()
 export class ItinerariesService {
   constructor(
@@ -18,7 +33,7 @@ export class ItinerariesService {
     const prompt = dto.prompt.toLowerCase();
     
     // Map of common keywords to tags/categories
-    const keywordMap = {
+    const keywordMap: Record<string, string> = {
       'chay': 'ĐỒ CHAY',
       'uống': 'ĐỒ UỐNG',
       'tráng miệng': 'TRÁNG MIỆNG',
@@ -31,6 +46,11 @@ export class ItinerariesService {
       'cafe': 'CAFE',
       'cà phê': 'CAFE',
       'trà sữa': 'TRÀ SỮA',
+      'phở': 'PHỞ',
+      'bún': 'BÚN',
+      'cơm': 'CƠM',
+      'bánh mì': 'BÁNH MÌ',
+      'mì': 'MÌ',
     };
 
     let selectedTag = '';
@@ -42,51 +62,105 @@ export class ItinerariesService {
     }
 
     // Determine district if mentioned (e.g., "quận 1", "q1", "thủ đức")
-    let districtFilter: string | null = null;
-    const districtMatch = prompt.match(/quận (\d+)|q(\d+)|thủ đức|tân bình|phú nhuận/i);
-    if (districtMatch) {
-      districtFilter = districtMatch[0];
+    let districtRegex: string | null = null;
+    let districtDisplay: string | null = null;
+    const qNumMatch = prompt.match(/(?:quận|q\.?)\s*(\d+)/i);
+    if (qNumMatch) {
+      districtRegex = `(quận|q\\.?)\\s*0?${qNumMatch[1]}\\b`;
+      districtDisplay = `Quận ${qNumMatch[1]}`;
+    } else {
+      const nameDistricts = [
+        'thủ đức', 'bình thạnh', 'gò vấp', 'phú nhuận', 'tân bình', 
+        'tân phú', 'bình tân', 'nhà bè', 'hóc môn', 'củ chi', 'cần giờ', 'bình chánh'
+      ];
+      for (const name of nameDistricts) {
+        if (prompt.includes(name)) {
+          districtRegex = name;
+          districtDisplay = name.charAt(0).toUpperCase() + name.slice(1);
+          break;
+        }
+      }
     }
 
-    // 2. Query Database
-    const query: any = {};
+    // 2. Query Database (exclude closed restaurants)
+    const query: any = { status: { $ne: 'closed' } };
+    if (districtRegex) {
+      query.diaChi = { $regex: new RegExp(districtRegex, 'i') };
+    }
     if (selectedTag) {
       query.tags = { $regex: new RegExp(selectedTag, 'i') };
-    }
-    if (districtFilter) {
-      query.quan = { $regex: new RegExp(districtFilter, 'i') };
+    } else {
+      // Clean prompt by removing common conversational filler words
+      const cleanPrompt = prompt
+        .replace(/(?:tôi|muốn|tìm|gợi ý|quán|nhà hàng|cho|mình|ở|tại|khu vực|ăn|uống|đi|giúp|với|nhé|nào|được)/gi, ' ')
+        .trim();
+      const keywords = cleanPrompt.split(/\s+/).filter((w) => w.length > 1);
+      if (keywords.length > 0) {
+        const searchPattern = keywords.slice(0, 3).join('|');
+        query.$or = [
+          { tenQuan: { $regex: new RegExp(searchPattern, 'i') } },
+          { tags: { $regex: new RegExp(searchPattern, 'i') } },
+          { description: { $regex: new RegExp(searchPattern, 'i') } },
+        ];
+      }
     }
 
-    // If no tags or district found, just search by the prompt text directly in tenQuan
-    if (!selectedTag && !districtFilter) {
-      query.tenQuan = { $regex: new RegExp(prompt.split(' ')[0], 'i') };
-    }
-
-    // Find top 3 restaurants matching criteria (sort by rating)
-    const restaurants = await this.restaurantModel
+    // Find top 3 restaurants matching criteria (prioritize isFeatured and high rating)
+    let restaurants = await this.restaurantModel
       .find(query)
-      .sort({ diemTrungBinh: -1 })
+      .sort({ isFeatured: -1, diemTrungBinh: -1 })
       .limit(3)
       .exec();
 
     if (!restaurants || restaurants.length === 0) {
-      // Fallback: Just return top rated if nothing matches
-      const fallback = await this.restaurantModel.find().sort({ diemTrungBinh: -1 }).limit(3).exec();
-      restaurants.push(...fallback);
+      // Try relaxing: keeping district filter if present
+      const fallbackQuery: any = { status: { $ne: 'closed' } };
+      if (districtRegex) {
+        fallbackQuery.diaChi = { $regex: new RegExp(districtRegex, 'i') };
+      }
+      restaurants = await this.restaurantModel
+        .find(fallbackQuery)
+        .sort({ isFeatured: -1, diemTrungBinh: -1 })
+        .limit(3)
+        .exec();
     }
 
-    // 3. Create Itinerary Stops
-    const stops = restaurants.map((r, index) => ({
-      stop_id: uuidv4(),
-      restaurant_id: r._id,
-      order_index: index,
-      restaurant_name: r.tenQuan,
-      restaurant_lat: r.lat,
-      restaurant_lng: r.lon,
-    }));
+    if (!restaurants || restaurants.length === 0) {
+      // Final fallback: Just return top rated available restaurants
+      restaurants = await this.restaurantModel
+        .find({ status: { $ne: 'closed' } })
+        .sort({ isFeatured: -1, diemTrungBinh: -1 })
+        .limit(3)
+        .exec();
+    }
+
+    // 3. Create Itinerary Stops & Calculate Route Distance / CO2
+    const userLat = dto.lat || 10.7769;
+    const userLng = dto.lng || 106.7009;
+    let totalDistKm = 0;
+    let prevLat = userLat;
+    let prevLng = userLng;
+
+    const stops = restaurants.map((r, index) => {
+      if (r.lat && r.lon) {
+        totalDistKm += calculateHaversineDistanceKm(prevLat, prevLng, r.lat, r.lon);
+        prevLat = r.lat;
+        prevLng = r.lon;
+      }
+      return {
+        stop_id: uuidv4(),
+        restaurant_id: r._id,
+        order_index: index,
+        restaurant_name: r.tenQuan,
+        restaurant_lat: r.lat,
+        restaurant_lng: r.lon,
+      };
+    });
+
+    const co2Saved = Math.max(0.5, Math.round((totalDistKm * 0.18 + 0.4) * 10) / 10);
 
     // Generate Title
-    const title = `Lộ trình ${selectedTag ? selectedTag.toLowerCase() : 'khám phá'} ${districtFilter ? `tại ${districtFilter.toUpperCase()}` : ''}`;
+    const title = `Lộ trình ${selectedTag ? selectedTag.toLowerCase() : 'ẩm thực'} ${districtDisplay ? `tại ${districtDisplay}` : 'Sài Gòn'}`;
 
     // 4. Save to DB
     const newItinerary = new this.itineraryModel({
@@ -96,9 +170,10 @@ export class ItinerariesService {
       start_time: dto.start_time,
       end_time: dto.end_time,
       budget: dto.budget || 0,
-      start_location: { type: 'Point', coordinates: [dto.lng || 106.7009, dto.lat || 10.7769] },
+      start_location: { type: 'Point', coordinates: [userLng, userLat] },
       status: 'generated',
       stops: stops,
+      co2SavedKg: co2Saved,
       created_at: new Date(),
     });
 
