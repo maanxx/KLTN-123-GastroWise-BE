@@ -10,16 +10,24 @@ import { ReviewsModule } from './reviews/reviews.module';
 import { FavoritesModule } from './favorites/favorites.module';
 import { ItinerariesModule } from './itineraries/itineraries.module';
 import { ContactsModule } from './contacts/contacts.module';
+import { InteractionsModule } from './interactions/interactions.module';
+import { TasteDnaModule } from './taste-dna/taste-dna.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }), 
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        uri: configService.get<string>('MONGODB_URI'),
-        serverSelectionTimeoutMS: 5000,
-      }),
+      useFactory: async (configService: ConfigService) => {
+        const uri = configService.get<string>('MONGODB_URI');
+        if (!uri) {
+          throw new Error('MONGODB_URI environment variable is required');
+        }
+        return {
+          uri,
+          serverSelectionTimeoutMS: 5000,
+        };
+      },
       inject: [ConfigService],
     }),
     UsersModule,
@@ -29,6 +37,8 @@ import { ContactsModule } from './contacts/contacts.module';
     FavoritesModule,
     ItinerariesModule,
     ContactsModule,
+    InteractionsModule,
+    TasteDnaModule,
   ],
   controllers: [AppController],
   providers: [AppService],

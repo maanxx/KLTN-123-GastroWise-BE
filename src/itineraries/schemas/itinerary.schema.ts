@@ -22,6 +22,31 @@ export class ItineraryStop {
 
   @Prop()
   restaurant_lng: number;
+
+  // --- [Phase 2 - TASK-P3-01] Smart Route Optimization & TSPTW Attributes ---
+  @Prop({ default: 'main', enum: ['starter', 'main', 'dessert', 'cafe'] })
+  meal_type?: string;
+
+  @Prop()
+  arrival_time?: string; // Ví dụ: "11:30"
+
+  @Prop()
+  departure_time?: string; // Ví dụ: "12:30"
+
+  @Prop({ default: 45 })
+  dining_duration_mins?: number;
+
+  @Prop({ default: 15 })
+  transit_time_mins?: number;
+
+  @Prop({ default: 1.5 })
+  distance_to_next_km?: number;
+
+  @Prop({ default: 50000 })
+  estimated_cost?: number;
+
+  @Prop()
+  tags?: string;
 }
 
 @Schema({ timestamps: true })
@@ -65,33 +90,53 @@ export class Itinerary extends Document {
   @Prop({ default: 1.5 })
   co2SavedKg: number;
 
+  // --- [Phase 2 - TASK-P3-01 & TASK-BIZ-02] Metrics Tối ưu Lộ trình ---
+  @Prop({ default: 5.2 })
+  total_distance_km?: number;
+
+  @Prop({ default: 150 })
+  total_duration_mins?: number;
+
+  @Prop({ default: 150000 })
+  total_cost?: number;
+
+  @Prop({ default: 100000 })
+  remaining_budget?: number;
+
+  @Prop({ default: 3 })
+  desired_stops?: number;
+
+  @Prop({ default: 'motorbike', enum: ['motorbike', 'car', 'walking'] })
+  routing_mode?: string;
+
+  @Prop({ default: 'OR-Tools TSPTW' })
+  optimizedBy?: string;
+
   @Prop({ default: Date.now })
   created_at: Date;
 
   // ─── Audit Trail Fields ───────────────────────────────────────────────────
-  /** Admin / user nào đã xác nhận lộ trình */
   @Prop({ type: Types.ObjectId, ref: 'User', default: null })
   confirmedBy: User | Types.ObjectId | null;
 
-  /** Thời điểm xác nhận */
   @Prop({ type: Date, default: null })
   confirmedAt: Date | null;
 
-  /** Admin / user nào đã hủy lộ trình */
   @Prop({ type: Types.ObjectId, ref: 'User', default: null })
   cancelledBy: User | Types.ObjectId | null;
 
-  /** Thời điểm hủy */
   @Prop({ type: Date, default: null })
   cancelledAt: Date | null;
 
-  /** Admin nào đánh dấu hoàn thành */
   @Prop({ type: Types.ObjectId, ref: 'User', default: null })
   completedBy: User | Types.ObjectId | null;
 
-  /** Thời điểm hoàn thành */
   @Prop({ type: Date, default: null })
   completedAt: Date | null;
 }
 
 export const ItinerarySchema = SchemaFactory.createForClass(Itinerary);
+
+// [TASK-PERF-01] Compound indexes for efficient user itinerary retrieval
+ItinerarySchema.index({ user_id: 1, created_at: -1 });
+ItinerarySchema.index({ user_id: 1, createdAt: -1 });

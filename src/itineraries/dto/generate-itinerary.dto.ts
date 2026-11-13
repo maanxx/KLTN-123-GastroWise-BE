@@ -24,4 +24,17 @@ export class GenerateItineraryDto {
   @IsOptional()
   @IsNumber()
   lng?: number;
+
+  @IsOptional()
+  @IsNumber()
+  stop_count?: number;
+
+  @IsOptional()
+  @IsString()
+  routing_mode?: string;
+
+  @IsOptional()
+  @IsNumber()
+  duration_mins?: number;
 }
+

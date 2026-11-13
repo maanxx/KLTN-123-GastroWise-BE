@@ -5,14 +5,14 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
-import { UsersService } from 'src/users/users.service';
+import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
-import { UserDocument } from 'src/users/schemas/user.schema';
-import { UpdateUserDto } from 'src/users/dto/update-user.dto';
+import { UserDocument } from '../users/schemas/user.schema';
+import { UpdateUserDto } from '../users/dto/update-user.dto';
 
 @Injectable()
 export class AuthService {
@@ -37,6 +37,7 @@ export class AuthService {
     const tokens = await this._generateTokens(
       newUser._id.toString(), 
       newUser.email,
+      newUser.role || 'user',
     );
 
     await this.usersService.updateRefreshToken(
@@ -46,6 +47,7 @@ export class AuthService {
 
     return {
       token: tokens.accessToken,
+      accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       user: this._sanitizeUser(newUser)
     };
@@ -72,6 +74,7 @@ export class AuthService {
     const tokens = await this._generateTokens(
       user._id.toString(),
       user.email,
+      user.role || 'user',
     );
 
     // 4. Cập nhật refresh token đã băm
@@ -82,6 +85,7 @@ export class AuthService {
 
     return {
       token: tokens.accessToken,
+      accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       user: this._sanitizeUser(user)
     };
@@ -94,7 +98,7 @@ export class AuthService {
 
   // --- HÀM LÀM MỚI TOKEN ---
   async refresh(userId: string, refreshToken: string) {
-    const user: UserDocument = await this.usersService.findOne(userId); // Giả định findOne trả về UserDocument
+    const user: UserDocument = await this.usersService.findOne(userId);
     if (!user || !user.hashedRefreshToken) {
       throw new ForbiddenException('Access Denied');
     }
@@ -106,12 +110,13 @@ export class AuthService {
 
     // Tạo tokens mới
     const tokens = await this._generateTokens(
-      user._id.toString(), // SỬA Ở ĐÂY 5/6
+      user._id.toString(),
       user.email,
+      user.role || 'user',
     );
     // Cập nhật token mới vào DB
     await this.usersService.updateRefreshToken(
-      user._id.toString(), // SỬA Ở ĐÂY 6/6
+      user._id.toString(),
       tokens.refreshToken,
     );
 
@@ -125,8 +130,8 @@ export class AuthService {
   }
 
   // --- HÀM PRIVATE: Tạo Tokens ---
-  private async _generateTokens(userId: string, email: string) {
-    const payload = { sub: userId, email };
+  private async _generateTokens(userId: string, email: string, role: string = 'user') {
+    const payload = { sub: userId, email, role };
 
     const jwtSecret = this.configService.get<string>('JWT_SECRET') || 'gastrowise_jwt_secret';
     const refreshSecret = this.configService.get<string>('JWT_REFRESH_SECRET') || jwtSecret;
@@ -161,15 +166,12 @@ export class AuthService {
       // 1. Thử tìm user bằng email
       user = await this.usersService.findOneByEmail(googleUser.email);
 
-      // === BỔ SUNG LOGIC CẬP NHẬT TẠI ĐÂY ===
       // Nếu user đã tồn tại, kiểm tra xem có cần cập nhật avatar từ Google không
       if (googleUser.picture && user.picture !== googleUser.picture) {
         user = await this.usersService.update(user._id.toString(), {
           picture: googleUser.picture,
-        } as any); // Cast 'as any' hoặc đảm bảo UpdateUserDto có trường 'picture'
+        } as any);
       }
-      // =======================================
-
     } catch (error) {
       // 2. Nếu không tìm thấy (NotFoundException), thì tạo user mới
       if (error.status === 404) {
@@ -180,7 +182,7 @@ export class AuthService {
           lastName: googleUser.lastName,
           picture: googleUser.picture,
           password: Math.random().toString(36).substring(7),
-        } as any); // Cast 'as any' nếu CreateUserDto báo lỗi thiếu trường
+        } as any);
       } else {
         throw error;
       }
@@ -190,10 +192,9 @@ export class AuthService {
       throw new ForbiddenException('Tài khoản của bạn đã bị khóa bởi Quản trị viên do vi phạm điều khoản.');
     }
 
-    // 3. Tạo JWT (giữ nguyên code cũ)
-    const tokens = await this._generateTokens(user._id.toString(), user.email);
+    // 3. Tạo JWT
+    const tokens = await this._generateTokens(user._id.toString(), user.email, user.role || 'user');
     
-    // ... phần còn lại giữ nguyên
     await this.usersService.updateRefreshToken(
       user._id.toString(),
       tokens.refreshToken,

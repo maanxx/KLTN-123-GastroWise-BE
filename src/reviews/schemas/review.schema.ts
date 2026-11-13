@@ -54,3 +54,7 @@ export class Review {
 }
 
 export const ReviewSchema = SchemaFactory.createForClass(Review);
+
+// [TASK-PERF-01] Compound indexes for high-performance review listing and moderation
+ReviewSchema.index({ restaurantId: 1, createdAt: -1 });
+ReviewSchema.index({ restaurantId: 1, status: 1, createdAt: -1 });

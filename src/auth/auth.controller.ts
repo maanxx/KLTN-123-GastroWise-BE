@@ -21,10 +21,10 @@ import { JwtAuthGuard } from './jwt-auth.guard';
 import { Request } from 'express';
 import type { Response } from 'express'; // Import Response từ express
 import { AuthGuard } from '@nestjs/passport';
-import { UpdateUserDto } from 'src/users/dto/update-user.dto';
+import { UpdateUserDto } from '../users/dto/update-user.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
-import { extname } from 'path';
+import { extname, join } from 'path';
 
 interface RequestWithUser extends Request {
   user: {
@@ -105,7 +105,10 @@ export class AuthController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        destination: './uploads/avatars',
+        destination: (req, file, callback) => {
+          const uploadPath = join(__dirname, '..', '..', 'uploads', 'avatars');
+          callback(null, uploadPath);
+        },
         filename: (req, file, callback) => {
           const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
           const ext = extname(file.originalname);

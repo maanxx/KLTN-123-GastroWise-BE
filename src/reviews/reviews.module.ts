@@ -5,6 +5,8 @@ import { ReviewsController } from './reviews.controller';
 import { Review, ReviewSchema } from './schemas/review.schema';
 import { Restaurant, RestaurantSchema } from '../restaurants/schemas/restaurant.schema';
 import { HttpModule } from '@nestjs/axios';
+import { TasteDnaModule } from '../taste-dna/taste-dna.module';
+import { InteractionsModule } from '../interactions/interactions.module';
 
 @Module({
   imports: [
@@ -13,6 +15,8 @@ import { HttpModule } from '@nestjs/axios';
       { name: Restaurant.name, schema: RestaurantSchema },
     ]),
     HttpModule,
+    TasteDnaModule,
+    InteractionsModule,
   ],
   controllers: [ReviewsController],
   providers: [ReviewsService],

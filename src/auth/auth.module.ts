@@ -2,17 +2,18 @@
 import { Module } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
-import { UsersModule } from 'src/users/users.module'; // 1. Import UsersModule
-import { JwtModule } from '@nestjs/jwt'; // 2. Import JwtModule
-import { ConfigModule, ConfigService } from '@nestjs/config'; // 3. Import Config
+import { UsersModule } from '../users/users.module';
+import { JwtModule } from '@nestjs/jwt';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './jwt.strategy'; 
 import { GoogleStrategy } from './google.strategy';
+import { RolesGuard } from './roles.guard';
 
 @Module({
   imports: [
-    UsersModule, // 4. Thêm UsersModule
-    PassportModule, // 5. Thêm PassportModule
+    UsersModule,
+    PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -23,6 +24,7 @@ import { GoogleStrategy } from './google.strategy';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, GoogleStrategy], 
+  providers: [AuthService, JwtStrategy, GoogleStrategy, RolesGuard],
+  exports: [AuthService, JwtStrategy, RolesGuard, JwtModule, PassportModule],
 })
 export class AuthModule {}

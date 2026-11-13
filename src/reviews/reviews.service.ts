@@ -3,24 +3,26 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { HttpService } from '@nestjs/axios';
-import { firstValueFrom } from 'rxjs'; // [UPDATE] Dùng firstValueFrom thay cho lastValueFrom
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { firstValueFrom } from 'rxjs';
 import { Review, ReviewDocument } from './schemas/review.schema';
 import { Restaurant, RestaurantDocument } from '../restaurants/schemas/restaurant.schema';
 import { CreateReviewDto } from './dto/create-review.dto';
+import { TasteDnaService } from '../taste-dna/taste-dna.service';
+import { InteractionsService } from '../interactions/interactions.service';
 
 @Injectable()
 export class ReviewsService {
-  // Logger giúp debug trên Render dễ hơn
   private readonly logger = new Logger(ReviewsService.name);
 
   constructor(
     @InjectModel(Review.name) private reviewModel: Model<ReviewDocument>,
     @InjectModel(Restaurant.name) private restaurantModel: Model<RestaurantDocument>,
     private readonly httpService: HttpService,
+    private readonly tasteDnaService: TasteDnaService,
+    private readonly interactionsService: InteractionsService,
   ) {}
 
-  // --- 1. Hàm gọi Python AI Microservice Phân Tích Cảm Thuyết (100% Self-Contained Local AI) ---
+  // --- 1. Hàm gọi Python AI Microservice Phân Tích Cảm Thuyết ---
   async analyzeSentiment(content: string) {
     try {
       const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
@@ -35,11 +37,10 @@ export class ReviewsService {
           hashtags: aiResponse.data.hashtags || []
         };
       }
-    } catch (pythonAiErr) {
+    } catch (pythonAiErr: any) {
       this.logger.warn(`⚠️ Python AI Microservice offline. Trả về nhãn NEUTRAL mặc định: ${pythonAiErr.message}`);
     }
 
-    // Local rule-based fallback nếu Python AI service tạm thời không phản hồi
     const lower = (content || '').toLowerCase();
     const isPos = lower.includes('ngon') || lower.includes('thích') || lower.includes('tốt') || lower.includes('tuyệt');
     const isNeg = lower.includes('dở') || lower.includes('tệ') || lower.includes('mặn') || lower.includes('bẩn');
@@ -51,9 +52,8 @@ export class ReviewsService {
     };
   }
 
-  // --- 2. Hàm tạo mới Review ---
+  // --- 2. Hàm tạo mới Review & Tự động Reinforce Taste DNA (TASK-P1-02) ---
   async create(createReviewDto: CreateReviewDto): Promise<Review> {
-    // Gọi AI phân tích trước khi lưu
     const aiResult = await this.analyzeSentiment(createReviewDto.noiDung);
     
     let resolvedRestaurantId = createReviewDto.restaurantId;
@@ -79,13 +79,86 @@ export class ReviewsService {
     };
     
     const createdReview = new this.reviewModel(newReviewData);
-    return createdReview.save();
+    const savedReview = await createdReview.save();
+
+    // 1. Tự động tính toán lại điểm trung bình và số lượng review cho Nhà hàng
+    if (resolvedRestaurantId && Types.ObjectId.isValid(resolvedRestaurantId)) {
+      try {
+        const stats = await this.reviewModel.aggregate([
+          { $match: { restaurantId: new Types.ObjectId(resolvedRestaurantId) } },
+          {
+            $group: {
+              _id: '$restaurantId',
+              avgRating: { $avg: '$diemReview' },
+              totalReviews: { $sum: 1 },
+            },
+          },
+        ]);
+
+        if (stats.length > 0) {
+          const rawAvg = stats[0].avgRating || 5.0;
+          const normalizedAvg = Number(rawAvg.toFixed(1));
+          await this.restaurantModel.updateOne(
+            { _id: new Types.ObjectId(resolvedRestaurantId) },
+            {
+              $set: {
+                diemTrungBinh: normalizedAvg,
+                reviewsCount: stats[0].totalReviews,
+              },
+            },
+          );
+        }
+      } catch (statErr: any) {
+        this.logger.warn(`Không thể cập nhật điểm trung bình nhà hàng: ${statErr.message}`);
+      }
+    }
+
+    // 2. Ghi nhận sự kiện tương tác vào telemetry pipeline (TASK-P0-02)
+    const userIdStr = createReviewDto.userId ? createReviewDto.userId.toString() : undefined;
+    if (resolvedRestaurantId) {
+      await this.interactionsService.recordEvent(userIdStr, {
+        eventType: 'review_submit',
+        targetType: 'restaurant',
+        targetId: resolvedRestaurantId,
+        metadata: {
+          rating: createReviewDto.diemReview,
+          sentiment: aiResult.label,
+        },
+      });
+    }
+
+    // 3. Dynamic Taste DNA Reinforcement via EMA (TASK-P1-02)
+    if (userIdStr && (createReviewDto.diemReview >= 4.0 || aiResult.label === 'POSITIVE')) {
+      try {
+        const restDoc = resolvedRestaurantId ? await this.restaurantModel.findById(resolvedRestaurantId).lean() : null;
+        if (restDoc) {
+          const tagStr = (restDoc.tags || '').toLowerCase();
+          const nameStr = (restDoc.tenQuan || '').toLowerCase();
+          const combined = `${tagStr} ${nameStr}`;
+
+          const tasteAdjustment: any = {};
+          if (/cay|lẩu|nướng|ớt|sa tế/i.test(combined)) tasteAdjustment.spicy = 0.85;
+          if (/ngọt|chè|trà sữa|bánh ngọt|kem/i.test(combined)) tasteAdjustment.sweet = 0.85;
+          if (/chua|canh chua|gỏi|me/i.test(combined)) tasteAdjustment.sour = 0.80;
+          if (/kho|mặn|mắm/i.test(combined)) tasteAdjustment.salty = 0.75;
+          if (/phở|bún|cơm|hủ tiếu|mì|nước dùng/i.test(combined)) tasteAdjustment.umami = 0.85;
+
+          if (Object.keys(tasteAdjustment).length > 0) {
+            await this.tasteDnaService.applyFeedbackEma(userIdStr, tasteAdjustment, 0.15);
+            this.logger.log(`[Taste DNA Reinforcement] Đã cập nhật khẩu vị cho user ${userIdStr} sau review tích cực.`);
+          }
+        }
+      } catch (dnaErr: any) {
+        this.logger.warn(`Không thể cập nhật Taste DNA từ review: ${dnaErr.message}`);
+      }
+    }
+
+    return savedReview;
   }
 
   // --- 3. Hàm tìm kiếm theo URL nhà hàng ---
   async findByRestaurantUrl(url: string): Promise<Review[]> {
     if (!url) return [];
-    // Sắp xếp review mới nhất lên đầu
     return this.reviewModel.find({ urlGoc: url }).sort({ isFeatured: -1, createdAt: -1 }).exec();
   }
 
@@ -115,7 +188,6 @@ export class ReviewsService {
 
     const reviews = await this.reviewModel.find({ restaurantId: targetId }).sort({ isFeatured: -1, createdAt: -1 }).exec();
     
-    // Nếu quán ăn chưa có đánh giá nào -> Tự động sinh 5-6 review chuẩn Tiếng Việt chân thực cho KLTN Demo
     if (!reviews || reviews.length === 0) {
       return this.generateFallbackReviews(targetId, targetName, targetCuisine) as any;
     }
@@ -147,7 +219,7 @@ export class ReviewsService {
       aiSentimentLabel: user.label,
       aiSentimentScore: user.sentiment,
       hashtags: user.tags,
-      createdAt: new Date(Date.now() - (idx + 1) * 86400000 * 2), // Trôi về vài ngày trước
+      createdAt: new Date(Date.now() - (idx + 1) * 86400000 * 2),
     })) as any;
   }
 
@@ -206,7 +278,6 @@ export class ReviewsService {
   async updateAllReviewsSentiment() {
     this.logger.log('>>> BẮT ĐẦU CẬP NHẬT SENTIMENT CHO DỮ LIỆU CŨ...');
 
-    // Tìm các review chưa có nhãn
     const reviewsToUpdate = await this.reviewModel.find({
       aiSentimentLabel: { $exists: false } 
     }).exec();
@@ -231,7 +302,7 @@ export class ReviewsService {
         if (successCount % 10 === 0) {
           this.logger.log(`   Running... Đã cập nhật ${successCount} review.`);
         }
-      } catch (e) {
+      } catch (e: any) {
         failCount++;
         this.logger.error(`   Fail ID ${review._id}: ${e.message}`);
       }

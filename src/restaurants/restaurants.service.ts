@@ -1,5 +1,5 @@
 // src/restaurants/restaurants.service.ts
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, OnApplicationBootstrap, Logger, Optional, Inject } from '@nestjs/common';
 import { CreateRestaurantDto } from './dto/create-restaurant.dto';
 import { UpdateRestaurantDto } from './dto/update-restaurant.dto';
 import { InjectModel } from '@nestjs/mongoose';
@@ -9,18 +9,83 @@ import { Model, Types } from 'mongoose';
 import { HttpService } from '@nestjs/axios'; 
 import { firstValueFrom } from 'rxjs';
 import FormData from 'form-data'; 
+import { TasteDnaService } from '../taste-dna/taste-dna.service';
+import { InteractionsService } from '../interactions/interactions.service';
 
 const aiUrl = process.env.AI_SERVICE_URL;
 
 @Injectable()
-export class RestaurantsService {
+export class RestaurantsService implements OnApplicationBootstrap {
+  private readonly logger = new Logger(RestaurantsService.name);
+
   constructor(
     @InjectModel(Restaurant.name)
     private restaurantModel: Model<RestaurantDocument>,
     @InjectModel(MenuItem.name)
     private menuItemModel: Model<MenuItemDocument>,
     private readonly httpService: HttpService,
+    @Optional()
+    private readonly tasteDnaService?: TasteDnaService,
+    @Optional()
+    private readonly interactionsService?: InteractionsService,
   ) {}
+
+  async onApplicationBootstrap() {
+    await this.ensureGeoJsonLocations();
+  }
+
+  /**
+   * Tự động chuẩn hóa GeoJSON Point coordinates cho các nhà hàng có lat/lon
+   */
+  async ensureGeoJsonLocations() {
+    try {
+      const pendingCount = await this.restaurantModel.countDocuments({
+        $or: [
+          { 'location.coordinates': { $exists: false } },
+          { 'location.coordinates': { $size: 0 } },
+          { location: null },
+        ],
+        lat: { $exists: true, $ne: null },
+        lon: { $exists: true, $ne: null },
+      });
+
+      if (pendingCount > 0) {
+        this.logger.log(`[GeoJSON Normalization] Tìm thấy ${pendingCount} nhà hàng chưa có Point coordinates. Đang chuẩn hóa...`);
+        const cursor = this.restaurantModel.find({
+          $or: [
+            { 'location.coordinates': { $exists: false } },
+            { 'location.coordinates': { $size: 0 } },
+            { location: null },
+          ],
+          lat: { $exists: true, $ne: null },
+          lon: { $exists: true, $ne: null },
+        }).cursor();
+
+        let updated = 0;
+        for await (const doc of cursor) {
+          const lat = typeof doc.lat === 'string' ? parseFloat((doc.lat as string).replace(',', '.')) : Number(doc.lat);
+          const lon = typeof doc.lon === 'string' ? parseFloat((doc.lon as string).replace(',', '.')) : Number(doc.lon);
+          if (!isNaN(lat) && !isNaN(lon) && lat !== 0 && lon !== 0) {
+            await this.restaurantModel.updateOne(
+              { _id: doc._id },
+              {
+                $set: {
+                  location: {
+                    type: 'Point',
+                    coordinates: [lon, lat], // [longitude, latitude]
+                  },
+                },
+              },
+            );
+            updated++;
+          }
+        }
+        this.logger.log(`[GeoJSON Normalization] Đã cập nhật thành công ${updated} nhà hàng.`);
+      }
+    } catch (err: any) {
+      this.logger.warn(`[GeoJSON Normalization] Cảnh báo: ${err.message}`);
+    }
+  }
 
   async getMenu(idOrSlug: string) {
     const restaurant = await this.findOne(idOrSlug);
@@ -68,8 +133,86 @@ export class RestaurantsService {
     return this.menuItemModel.findByIdAndDelete(menuId).exec();
   }
 
-  create(createRestaurantDto: CreateRestaurantDto) {
-    return 'This action adds a new restaurant';
+  async create(createRestaurantDto: any): Promise<RestaurantDocument> {
+    const lat = Number(createRestaurantDto.lat) || 10.7769;
+    const lon = Number(createRestaurantDto.lon) || 106.7009;
+    const restaurantData: any = {
+      ...createRestaurantDto,
+      location: {
+        type: 'Point',
+        coordinates: [lon, lat],
+      },
+    };
+    const created = new this.restaurantModel(restaurantData);
+    return created.save();
+  }
+
+  async findNearby(
+    lat: number,
+    lon: number,
+    radiusKm: number = 5,
+    limit: number = 20,
+    tags?: string,
+    search?: string,
+  ) {
+    const radiusMeters = Math.max(1, Number(radiusKm) || 5) * 1000;
+    const matchStage: any = {
+      status: { $ne: 'closed' },
+    };
+
+    if (tags && tags !== 'all' && tags !== 'Tất cả') {
+      const tagList = tags.split(',').map((t) => t.trim()).filter(Boolean);
+      if (tagList.length > 0) {
+        matchStage.tags = { $regex: new RegExp(tagList.join('|'), 'i') };
+      }
+    }
+
+    if (search && search.trim()) {
+      matchStage.$or = [
+        { tenQuan: { $regex: search.trim(), $options: 'i' } },
+        { diaChi: { $regex: search.trim(), $options: 'i' } },
+        { tags: { $regex: search.trim(), $options: 'i' } },
+      ];
+    }
+
+    try {
+      const pipeline: any[] = [
+        {
+          $geoNear: {
+            near: {
+              type: 'Point',
+              coordinates: [Number(lon), Number(lat)],
+            },
+            distanceField: 'distanceMeters',
+            maxDistance: radiusMeters,
+            spherical: true,
+            query: matchStage,
+          },
+        },
+        { $limit: Math.min(100, Math.max(1, Number(limit) || 20)) },
+      ];
+
+      const results = await this.restaurantModel.aggregate(pipeline).exec();
+      return results.map((item) => {
+        const dto = this.mapRestaurantToDTO(item);
+        dto.distance = Number(((item.distanceMeters || 0) / 1000).toFixed(2));
+        return dto;
+      });
+    } catch (error: any) {
+      this.logger.warn(`Fallback từ $geoNear sang Haversine query: ${error.message}`);
+      const candidates = await this.restaurantModel.find(matchStage).limit(100).lean().exec();
+      const withDist = candidates
+        .map((item: any) => {
+          const dto = this.mapRestaurantToDTO(item);
+          const dist = this.getDistanceFromLatLonInKm(lat, lon, item.lat || 0, item.lon || 0);
+          dto.distance = Number(dist.toFixed(2));
+          return dto;
+        })
+        .filter((item: any) => item.distance <= radiusKm);
+
+      withDist.sort((a: any, b: any) => a.distance - b.distance);
+      return withDist.slice(0, Number(limit) || 20);
+    }
   }
 
   // [MỚI] HÀM XỬ LÝ SEARCH ẢNH
@@ -79,7 +222,6 @@ export class RestaurantsService {
 
       const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:8000';
       
-      // [QUAN TRỌNG] Log ra console để xem Backend đang kết nối đi đâu
       console.log("------------------------------------------------");
       console.log("📸 ĐANG GỌI AI SERVICE...");
       console.log("🔗 URL được dùng:", aiUrl);
@@ -104,8 +246,6 @@ export class RestaurantsService {
         return { data: [], message: 'Không nhận diện được món ăn' };
       }
 
-      // 2. [QUAN TRỌNG] Gọi hàm findAll lấy số lượng lớn (50 quán)
-      // Lý do: Để đảm bảo không bỏ sót quán ngon nào chỉ vì AI xếp hạng độ liên quan khác
       const result = await this.findAll(
         1,               // page
         50,              // limit: Lấy 50 để lọc
@@ -117,17 +257,14 @@ export class RestaurantsService {
         foodName         // search query (Tên món AI đoán)
       );
 
-      // 3. [QUAN TRỌNG] Tự sắp xếp lại theo điểm trung bình (Cao -> Thấp)
       let topRestaurants = result.data || [];
       topRestaurants.sort((a: any, b: any) => (b.diemTrungBinh || 0) - (a.diemTrungBinh || 0));
-
-      // 4. [QUAN TRỌNG] Cắt lấy đúng Top 5 quán ngon nhất
       topRestaurants = topRestaurants.slice(0, 5);
 
       const touristInfo = this.getSimilarDishesAndTouristInfo(foodName);
 
       return {
-        data: topRestaurants, // Trả về danh sách 5 quán xịn nhất
+        data: topRestaurants,
         detectedFood: foodName,
         englishName: touristInfo.englishName,
         similarDishes: touristInfo.similarDishes,
@@ -135,7 +272,7 @@ export class RestaurantsService {
         total: topRestaurants.length
       };
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Lỗi search by image:', error.message);
       return { data: [], message: 'Lỗi xử lý hình ảnh' };
     }
@@ -237,6 +374,185 @@ export class RestaurantsService {
     }
   }
 
+  /**
+   * [TASK-P2-01 & TASK-P2-02] Gợi ý nhà hàng cá nhân hóa đa tầng (Hybrid Recommendation):
+   * Kết hợp Taste DNA 6 chiều, SVD Collaborative Filtering, Ngữ cảnh thời tiết & Khoảng cách.
+   */
+  async getPersonalizedRecommendations(
+    userId?: string,
+    userLat?: string | number,
+    userLon?: string | number,
+    maxPrice?: number,
+    limit: number = 10,
+  ) {
+    try {
+      let tasteVector: number[] | undefined = undefined;
+      let dietaryExclusions: string[] = [];
+
+      // 1. Lấy Taste DNA vector nếu user đã đăng nhập
+      if (userId && this.tasteDnaService) {
+        try {
+          const profile = await this.tasteDnaService.getProfile(userId);
+          if (profile) {
+            tasteVector = [
+              profile.spicy ?? 0.5,
+              profile.sweet ?? 0.5,
+              profile.sour ?? 0.5,
+              profile.salty ?? 0.5,
+              profile.umami ?? 0.5,
+              profile.bitter ?? 0.5,
+            ];
+            dietaryExclusions = profile.dietaryRestrictions || [];
+          }
+        } catch (e: any) {
+          this.logger.warn(`Không lấy được Taste DNA cho user ${userId}: ${e.message}`);
+        }
+      }
+
+      // 2. Lấy thông tin thời tiết để kết hợp ngữ cảnh
+      const weatherRec = await this.getWeatherRecommendation(
+        userLat ? String(userLat) : undefined,
+        userLon ? String(userLon) : undefined,
+      );
+      const weatherType = weatherRec?.weather?.weather_type || 'cool';
+      const temperature = weatherRec?.weather?.temperature || 28;
+
+      // 3. Chuẩn bị payload gửi sang FastAPI Hybrid Engine
+      const aiBaseUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
+      const payload: any = {
+        user_id: userId || '',
+        limit: Number(limit) || 10,
+        weather_type: weatherType,
+        temperature: Number(temperature),
+        dietary_exclusions: dietaryExclusions,
+      };
+
+      if (userLat !== undefined && userLon !== undefined) {
+        const latNum = Number(userLat);
+        const lonNum = Number(userLon);
+        if (!isNaN(latNum) && !isNaN(lonNum) && latNum !== 0 && lonNum !== 0) {
+          payload.user_gps = [latNum, lonNum];
+        }
+      }
+
+      if (tasteVector) {
+        payload.taste_vector = tasteVector;
+      }
+
+      if (maxPrice && Number(maxPrice) > 0) {
+        payload.max_price = Number(maxPrice);
+      }
+
+      // 4. Gọi FastAPI /v1/recommendation/recommend/hybrid
+      const aiRes = await firstValueFrom(
+        this.httpService.post(`${aiBaseUrl}/v1/recommendation/recommend/hybrid`, payload)
+      );
+
+      const items = aiRes.data?.items || [];
+      const recommendedIds = items.map((it: any) => it.id);
+
+      if (recommendedIds.length > 0) {
+        const found = await this.restaurantModel
+          .find({ _id: { $in: recommendedIds } })
+          .lean()
+          .exec();
+
+        const docMap = new Map(found.map((r: any) => [r._id.toString(), r]));
+        const itemMetaMap = new Map(items.map((it: any) => [it.id, it]));
+
+        const hydrated = recommendedIds
+          .map((id: string) => {
+            const rawDoc = docMap.get(id);
+            if (!rawDoc) return null;
+            const dto: any = this.mapRestaurantToDTO(rawDoc);
+            const meta: any = itemMetaMap.get(id) || {};
+            dto.aiScore = meta.score || 0;
+            dto.tasteScore = meta.taste_score || 0;
+            dto.cfScore = meta.cf_score || 0;
+            dto.envScore = meta.env_score || 1.0;
+            dto.explanation = meta.explanation || 'Gợi ý hợp khẩu vị của bạn';
+            dto.matchReasons = meta.match_reasons || [dto.explanation];
+            if (meta.distance_km !== undefined) {
+              dto.distance = meta.distance_km;
+            }
+            return dto;
+          })
+          .filter(Boolean);
+
+        return {
+          success: true,
+          total: hydrated.length,
+          isColdStart: aiRes.data?.is_cold_start ?? true,
+          appliedWeights: aiRes.data?.applied_weights,
+          data: hydrated,
+        };
+      }
+
+      // Fallback nếu AI trả về 0 kết quả
+      return this.getFallbackRecommendations(userLat, userLon, limit);
+    } catch (error: any) {
+      this.logger.warn(`AI Hybrid Recommendation lỗi, kích hoạt fallback: ${error.message}`);
+      return this.getFallbackRecommendations(userLat, userLon, limit);
+    }
+  }
+
+  /**
+   * Fallback an toàn khi AI Microservice bảo trì hoặc không có kết nối
+   */
+  async getFallbackRecommendations(userLat?: any, userLon?: any, limit: number = 10) {
+    let fallbackList: any[] = [];
+    if (userLat && userLon) {
+      try {
+        fallbackList = await this.findNearby(Number(userLat), Number(userLon), 15, limit);
+      } catch {}
+    }
+
+    if (!fallbackList || fallbackList.length === 0) {
+      const topRated = await this.restaurantModel
+        .find({})
+        .sort({ diemTrungBinh: -1, reviewsCount: -1 })
+        .limit(limit)
+        .lean()
+        .exec();
+      fallbackList = topRated.map((r: any) => this.mapRestaurantToDTO(r));
+    }
+
+    const enriched = fallbackList.map((r: any) => ({
+      ...r,
+      aiScore: 0.85,
+      tasteScore: 0.80,
+      explanation: '⭐ Địa điểm ẩm thực nổi tiếng được yêu thích trên GastroWise',
+      matchReasons: ['⭐ Đánh giá cao', '🌟 Quán nổi bật'],
+    }));
+
+    return {
+      success: true,
+      total: enriched.length,
+      isColdStart: true,
+      data: enriched,
+    };
+  }
+
+  /**
+   * Đồng bộ ma trận tương tác sang AI microservice để huấn luyện lại SVD
+   */
+  async syncInteractionsToAi() {
+    if (!this.interactionsService) {
+      return { success: false, message: 'InteractionsService chưa sẵn sàng' };
+    }
+    try {
+      const interactions = await this.interactionsService.getMatrixExport(5000);
+      const aiBaseUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
+      const res = await firstValueFrom(
+        this.httpService.post(`${aiBaseUrl}/v1/recommendation/cf/train`, { interactions })
+      );
+      return res.data;
+    } catch (err: any) {
+      this.logger.error(`Lỗi đồng bộ interaction matrix sang AI: ${err.message}`);
+      return { success: false, error: err.message };
+    }
+  }
+
   // --- CÁC HÀM CŨ GIỮ NGUYÊN BÊN DƯỚI ---
 
   private checkIsOpen(gioMoCua: string): boolean {
@@ -309,11 +625,12 @@ export class RestaurantsService {
       description: r.description || '',
       lat: r.lat,
       lng: r.lon || r.lng,
+      location: r.location,
       shopeeUrl: r.urlGoc || null,
-distance: r.distance,
-status: r.status || 'open',
-isVerified: Boolean(r.isVerified),
-isFeatured: Boolean(r.isFeatured),
+      distance: r.distance,
+      status: r.status || 'open',
+      isVerified: Boolean(r.isVerified),
+      isFeatured: Boolean(r.isFeatured),
     };
   }
 
@@ -397,7 +714,6 @@ isFeatured: Boolean(r.isFeatured),
     if (tags && tags !== 'Tất cả') {
       const tagList = tags.split(',').map(t => t.trim()).filter(Boolean);
       if (tagList.length > 0) {
-        // Match ANY of the tags (OR logic)
         filterQuery['tags'] = { $regex: new RegExp(tagList.join('|'), 'i') };
       }
     }
@@ -426,7 +742,6 @@ isFeatured: Boolean(r.isFeatured),
                aiIndexMap[item.id] = index;
            });
         } else {
-           // [QUAN TRỌNG] Nếu AI không trả ra ID nào, tự động fallback sang MongoDB Regex
            filterQuery['$or'] = [
              { tenQuan: { $regex: search, $options: 'i' } },
              { name: { $regex: search, $options: 'i' } },
@@ -435,9 +750,9 @@ isFeatured: Boolean(r.isFeatured),
              { diaChi: { $regex: search, $options: 'i' } },
              { address: { $regex: search, $options: 'i' } },
            ];
-           isAiSearch = false; // Chuyển về chế độ Mongo Query bình thường
+           isAiSearch = false;
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error("Lỗi kết nối AI:", error.message);
         filterQuery['$or'] = [
           { tenQuan: { $regex: search, $options: 'i' } },
@@ -486,14 +801,11 @@ isFeatured: Boolean(r.isFeatured),
         allCandidates = allCandidates.filter((res: any) => this.checkIsOpen(res.openingTime || res.gioMoCua));
       }
 
-     if (isAiSearch && sortBy === 'diemTrungBinh') {
+      if (isAiSearch && sortBy === 'diemTrungBinh') {
          allCandidates.sort((a: any, b: any) => {
-            // [FIX] Nếu user chọn Tăng dần (ASC), sort theo điểm số thực tế
             if (order === 'asc') {
                 return (a.diemTrungBinh || 0) - (b.diemTrungBinh || 0);
             }
-
-            // [FIX] Mặc định (DESC) hoặc không chọn: Ưu tiên độ phù hợp AI (Index thấp đứng trước)
             const idxA = aiIndexMap[a._id.toString()] ?? 9999;
             const idxB = aiIndexMap[b._id.toString()] ?? 9999;
             return idxA - idxB;
@@ -550,10 +862,25 @@ isFeatured: Boolean(r.isFeatured),
     if (!restaurant) throw new NotFoundException(`Restaurant with ID or slug "${idOrSlug}" not found`);
     return this.mapRestaurantToDTO(restaurant) as any;
   }
+
   async update(id: string, updateRestaurantDto: any): Promise<RestaurantDocument> {
     if (!Types.ObjectId.isValid(id)) {
       throw new NotFoundException(`ID nhà hàng "${id}" không hợp lệ.`);
     }
+
+    // Tự động đồng bộ GeoJSON Point location nếu lat hoặc lon thay đổi
+    if (updateRestaurantDto.lat !== undefined || updateRestaurantDto.lon !== undefined) {
+      const existing = await this.restaurantModel.findById(id).lean();
+      const newLat = updateRestaurantDto.lat !== undefined ? Number(updateRestaurantDto.lat) : Number(existing?.lat || 0);
+      const newLon = updateRestaurantDto.lon !== undefined ? Number(updateRestaurantDto.lon) : Number(existing?.lon || 0);
+      if (!isNaN(newLat) && !isNaN(newLon) && newLat !== 0 && newLon !== 0) {
+        updateRestaurantDto.location = {
+          type: 'Point',
+          coordinates: [newLon, newLat],
+        };
+      }
+    }
+
     const updated = await this.restaurantModel
       .findByIdAndUpdate(id, updateRestaurantDto, { new: true })
       .exec();
@@ -600,22 +927,87 @@ isFeatured: Boolean(r.isFeatured),
     return list[randomIndex];
   }
 
-  async chatWithAI(message: string, userLat?: string, userLon?: string) {
+  /**
+   * [TASK-P5-01] AI Natural Language Food Copilot Chatbot:
+   * Kết nối với FastAPI NLU Service để phân tích ý định (Intent), trích xuất thực thể (Slots),
+   * gắn Action Card tương tác (Lập tour, Thẻ dinh dưỡng, Tìm gần đây) và hydrate dữ liệu quán ăn.
+   */
+  async chatWithAI(message: string, userLat?: string, userLon?: string, userId?: string) {
     try {
-      // 1. Gọi logic findAll lấy 50 quán để sort
+      let tasteVector: number[] | undefined = undefined;
+      if (userId && this.tasteDnaService) {
+        try {
+          const profile = await this.tasteDnaService.getProfile(userId);
+          if (profile) {
+            tasteVector = [
+              profile.spicy ?? 0.5,
+              profile.sweet ?? 0.5,
+              profile.sour ?? 0.5,
+              profile.salty ?? 0.5,
+              profile.umami ?? 0.5,
+              profile.bitter ?? 0.5,
+            ];
+          }
+        } catch {}
+      }
+
+      const aiBaseUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
+      const payload: any = { message };
+      if (userLat && userLon) {
+        const lat = parseFloat(userLat);
+        const lon = parseFloat(userLon);
+        if (!isNaN(lat) && !isNaN(lon) && lat !== 0 && lon !== 0) {
+          payload.user_gps = [lat, lon];
+        }
+      }
+      if (tasteVector) {
+        payload.taste_vector = tasteVector;
+      }
+
+      // Gọi NLU Copilot endpoint
+      const aiResponse = await firstValueFrom(
+        this.httpService.post(`${aiBaseUrl}/v1/copilot/message`, payload)
+      );
+
+      const copilotData = aiResponse.data;
+      let hydratedResults: any[] = [];
+
+      if (copilotData.results && copilotData.results.length > 0) {
+        const candidateIds = copilotData.results.map((r: any) => r.id);
+        const docs = await this.restaurantModel.find({ _id: { $in: candidateIds } }).lean().exec();
+        const docMap = new Map(docs.map((d: any) => [d._id.toString(), d]));
+
+        hydratedResults = copilotData.results.map((r: any) => {
+          const doc: any = docMap.get(r.id);
+          if (doc) {
+            const dto: any = this.mapRestaurantToDTO(doc);
+            dto.explanation = r.explanation;
+            dto.distance = r.distance_km;
+            return dto;
+          }
+          return r;
+        });
+      }
+
+      return {
+        reply: copilotData.reply,
+        intent: copilotData.intent,
+        entities: copilotData.entities,
+        action_card: copilotData.action_card,
+        data: hydratedResults,
+        results: hydratedResults,
+      };
+    } catch (error: any) {
+      this.logger.warn(`Lỗi AI Copilot NLU, chuyển sang fallback regex search: ${error.message}`);
       const result = await this.findAll(
         1, 50, 'diemTrungBinh', 'desc', 'all', 'false', userLat, userLon, message
       );
 
-      // 2. Sort thủ công theo rating
       let topRestaurants = result.data || [];
       topRestaurants.sort((a: any, b: any) => (b.diemTrungBinh || 0) - (a.diemTrungBinh || 0));
-
-      // 3. Lấy Top 5
       topRestaurants = topRestaurants.slice(0, 5);
       const count = topRestaurants.length;
 
-      // 4. [MỚI] Chọn câu trả lời ngẫu nhiên
       let replyText = "";
       if (count > 0) {
         replyText = this.getRandomReply('success', { count, keyword: message });
@@ -625,14 +1017,17 @@ isFeatured: Boolean(r.isFeatured),
 
       return {
         reply: replyText,
-        results: topRestaurants
-      };
-
-    } catch (error) {
-      console.error("Chatbot Error:", error);
-      return {
-        reply: this.getRandomReply('error'),
-        results: []
+        intent: 'search_food',
+        entities: {},
+        action_card: {
+          type: 'search_results_action',
+          title: `Kết quả cho: ${message}`,
+          button_text: 'Xem thêm địa điểm',
+          action: 'open_explore_search',
+          query: message,
+        },
+        data: topRestaurants,
+        results: topRestaurants,
       };
     }
   }

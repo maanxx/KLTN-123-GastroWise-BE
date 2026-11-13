@@ -13,10 +13,28 @@ export class Restaurant {
   @Prop() diaChi: string;
   @Prop() gioMoCua: string;
   @Prop() giaCa: string;
-  @Prop() tags: string; 
+  @Prop() tags: string;
 
   @Prop() lat: number;
   @Prop() lon: number;
+
+  // --- GeoJSON 2dsphere Location Support (Phase 2 Geospatial) ---
+  @Prop({
+    type: {
+      type: String,
+      enum: ['Point'],
+      default: 'Point',
+    },
+    coordinates: {
+      type: [Number], // [longitude, latitude]
+      default: [106.7009, 10.7769],
+    },
+  })
+  location?: {
+    type: string;
+    coordinates: [number, number]; // [longitude, latitude]
+  };
+
   @Prop() diemKhongGian: number;
   @Prop() diemViTri: number;
   @Prop() diemChatLuong: number;
@@ -49,3 +67,12 @@ export class Restaurant {
 }
 
 export const RestaurantSchema = SchemaFactory.createForClass(Restaurant);
+
+// Đăng ký 2dsphere Index để tìm kiếm địa không gian ($geoNear, $near, $geoWithin)
+RestaurantSchema.index({ location: '2dsphere' });
+
+// [TASK-PERF-01] Compound index for status filtering and rating sorting
+RestaurantSchema.index({ status: 1, diemTrungBinh: -1 });
+
+// [TASK-PERF-01] Text index for full-text search across restaurant name and tags
+RestaurantSchema.index({ tenQuan: 'text', tags: 'text' });

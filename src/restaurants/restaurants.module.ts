@@ -2,10 +2,12 @@
 import { Module } from '@nestjs/common';
 import { RestaurantsService } from './restaurants.service';
 import { RestaurantsController } from './restaurants.controller';
-import { MongooseModule } from '@nestjs/mongoose'; // 1. Import
+import { MongooseModule } from '@nestjs/mongoose';
 import { Restaurant, RestaurantSchema } from './schemas/restaurant.schema'; 
 import { MenuItem, MenuItemSchema } from './schemas/menu-item.schema';
 import { HttpModule } from '@nestjs/axios';
+import { TasteDnaModule } from '../taste-dna/taste-dna.module';
+import { InteractionsModule } from '../interactions/interactions.module';
 
 @Module({
   imports: [
@@ -14,8 +16,11 @@ import { HttpModule } from '@nestjs/axios';
       { name: MenuItem.name, schema: MenuItemSchema },
     ]),
     HttpModule,
+    TasteDnaModule,
+    InteractionsModule,
   ],
   controllers: [RestaurantsController],
   providers: [RestaurantsService],
+  exports: [RestaurantsService],
 })
 export class RestaurantsModule {}
