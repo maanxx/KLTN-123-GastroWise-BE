@@ -55,6 +55,11 @@ graph TB
     Core -->|Internal REST: /predict-food| AI
 ```
 
+> [!NOTE]
+> **Data Access Architectural Evolution (Interim vs Target State):**  
+> - **Interim State (Phase 0–3):** AI Microservice reads directly from MongoDB Atlas `restaurants` collection using least-privilege credentials (`gastrowise_ai_service`).  
+> - **Target State (Phase 4 / Production):** Zero Database Sharing is enforced. AI terminates all direct MongoDB connections; Core Service exclusively owns the catalog and streams candidate profiles directly in HTTP request payloads (`/recommend/hybrid`, `/routes/optimize`).
+
 ---
 
 ## 2. CLEAN ARCHITECTURE WITHIN INDEPENDENT SERVICES

@@ -1,8 +1,8 @@
 # GASTROWISE – SERVICE BOUNDARIES & ANTI-CORRUPTION LAYER SPECIFICATION
 **Thesis:** Xây dựng hệ thống thông tin trải nghiệm ẩm thực thông minh (GastroWise)  
 **Author:** Senior Software Architect & Tech Lead  
-**Audit Date:** November 17, 2026  
-**Status:** PHASE 0 COMPLETED — BOUNDARY PROTOCOLS FORMALIZED  
+**Last Updated:** November 17, 2026 (Architecture Review Remediation)  
+**Status:** REVISED & FORMALIZED — BOUNDARY PROTOCOLS & SECURITY GAPS IDENTIFIED  
 
 ---
 
@@ -10,7 +10,9 @@
 
 To preserve the independence of Core, Planning, and AI services, all inter-service boundaries adhere to three architectural rules:
 
-1. **Zero Database Sharing:** No service connects to or executes queries against another service's database.
+1. **Zero Database Sharing Principle:**
+   - **Target State (Pure Microservices Architecture):** No service connects to or executes queries against another service's database. Core Service exclusively provides restaurant candidate representations to Planning and AI via REST or asynchronous data push.
+   - **Interim Transition State (Phase 0 - Phase 3):** To support high-performance startup loading of the 178-venue vector space for TF-IDF and SVD without building complex sync pipelines immediately, the AI Service is granted strictly isolated, read-only `find` access to `restaurants` collection via MongoDB Atlas least-privilege user `gastrowise_ai_service`. In Phase 4 (Milestone 4 / ADR-05), this direct connection is deprecated and replaced by REST-based candidate streaming.
 2. **Zero Code Dependency:** No service imports another service's internal domain models, controllers, or repositories.
 3. **Anti-Corruption Layer (ACL):** Services protect their domain integrity by translating foreign API representations through dedicated adapter interfaces.
 
@@ -109,11 +111,15 @@ Client Request
 
 All log entries across Core, Planning, and AI format output with `[CorrelationId: req_...]` to enable seamless end-to-end distributed transaction tracing.
 
-### 3.2. Internal Service Authentication Protocol
-- **Outbound Request:** The calling service injects header:
-  `X-Internal-Service-Key: <256-bit-hex-secret>`
-- **Inbound Guard:** The receiving service enforces `InternalAuthGuard`:
-  Uses constant-time comparison (`crypto.timingSafeEqual`) to prevent timing side-channel attacks.
+### 3.2. Mutual Internal Authentication Protocol (Current Gap vs Target State)
+- **CURRENT AUDITED STATE (VULNERABILITY GAP):**
+  - AI Service FastAPI has `allow_origins=["*"]` and checks **zero** authorization headers.
+  - Backend NestJS makes HTTP calls without injecting any mutual authentication token.
+  - Public can call AI Service directly on port 5000 bypassing business orchestration.
+- **TARGET SECURED STATE (P0 IMPLEMENTATION):**
+  - **Core $\rightarrow$ AI:** Header `X-Internal-AI-Key: <SECRET_AI_INTERNAL_KEY>` verified by FastAPI `Security(verify_internal_key)`.
+  - **Planning $\rightarrow$ Core:** Header `X-Internal-Service-Key: <SECRET_CORE_INTERNAL_KEY>` verified by NestJS `InternalAuthGuard`.
+  - Constant-time comparison (`crypto.timingSafeEqual` in Node.js, `secrets.compare_digest` in Python) to prevent timing side-channel attacks.
 
 ---
 
@@ -136,4 +142,3 @@ All log entries across Core, Planning, and AI format output with `[CorrelationId
 1. **State CLOSED:** Normal operation. Requests flow to downstream service (AI or Core).
 2. **State OPEN:** Downstream service is failing. Circuit trips open immediately. All subsequent requests divert instantly to fallback heuristics (Greedy route planner / Rating sort) without waiting for HTTP timeouts.
 3. **State HALF-OPEN:** After 15 seconds, a single canary probe request is sent. If it succeeds, the circuit closes; if it fails, the circuit resets to OPEN.
-

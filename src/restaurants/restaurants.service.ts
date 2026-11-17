@@ -220,7 +220,7 @@ export class RestaurantsService implements OnApplicationBootstrap {
     try {
       if (!file) throw new Error("Không có file được tải lên");
 
-      const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:8000';
+      const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
       
       console.log("------------------------------------------------");
       console.log("📸 ĐANG GỌI AI SERVICE...");

@@ -42,6 +42,9 @@ lerna-debug.log*
 .env.production.local
 .env.local
 
+# Remediate & migration scripts with potential credentials
+scripts/remediate*.js
+
 # temp directory
 .temp
 .tmp

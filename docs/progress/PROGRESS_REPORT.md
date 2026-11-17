@@ -123,6 +123,10 @@ Chi tiết tại `docs/progress/KNOWN_ISSUES.md`:
    - Quyết định: `ItineraryStop` lưu bản sao dữ liệu (`restaurant_name`, `lat`, `lng`, `cost`) thay vì dùng Mongoose populate cross-database.
 4. **ADR-04: Anti-Corruption Layer (ACL) qua REST:**
    - Quyết định: Planning Service giao tiếp với Core Service qua HTTP REST API nội bộ có xác thực `X-Internal-Service-Key`, không chia sẻ code model.
+5. **ADR-05: Lộ trình quyền truy cập Database của AI Service (Interim vs Target):**
+   - Quyết định: Giai đoạn Interim (Phase 0–3) AI đọc trực tiếp collection `restaurants` qua user least-privilege `gastrowise_ai_service`. Giai đoạn Target (Phase 4) chuyển sang Zero Database Sharing (Core Service cung cấp candidates qua REST).
+6. **ADR-06: Quy trình Migration Database 4 giai đoạn an toàn:**
+   - Quyết định: Bắt buộc Pre-migration snapshot `mongodump`, thực thi split bằng `$merge`, kiểm tra Parity Check `countDocuments()` 100%, bảo lưu `gastrowise` làm đường lui rollback tức thì.
 
 ---
 
