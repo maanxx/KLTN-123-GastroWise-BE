@@ -1,7 +1,6 @@
 # ==============================================================================
 # GASTROWISE MICROSERVICES ARCHITECTURE DOCKER COMPOSE TOPOLOGY
 # ==============================================================================
-version: "3.9"
 
 networks:
   gastrowise_network:

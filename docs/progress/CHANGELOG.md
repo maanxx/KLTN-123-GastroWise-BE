@@ -1,6 +1,19 @@
 # GASTROWISE — MICROSERVICES MIGRATION CHANGELOG
 
-## [Milestone 1.1: Resolve Security Review Conditions] — refactor/microservices-backend — 2026-11-20
+## [Milestone 2.2: Docker Orchestration & Network Validation] — refactor/microservices-backend — 2026-11-20
+
+### Infrastructure & DevOps
+- **Docker Compose Optimization:**
+  - `docker-compose.yml`: Removed obsolete `version: "3.9"` attribute for clean Compose v5 resolution.
+  - Verified service definitions, port bindings, internal network bridges, and environment variable bindings (`docker-compose config --quiet` exit code `0`).
+- **Build Context Protection:**
+  - Created `.dockerignore` for `KLTN-123-GastroWise-BE` (excluding Windows `node_modules/`, `dist/`, `.git/`, test logs).
+  - Created `.dockerignore` for `KLTN-123-GastroWise-AI` (excluding `__pycache__/`, `.venv/`, `.env`, datasets).
+- **Documentation & Safety:**
+  - Created `docs/infrastructure/MILESTONE_2_2_DOCKER_NETWORK_VALIDATION_REPORT.md`.
+  - Triggered Controlled Safety Stop at Phase 5: Halted container creation before connecting to remote MongoDB Atlas cluster detected in `.env`, pending local test database configuration and Docker Desktop daemon launch.
+
+## [Milestone 2.1: Independent Service Build Validation] — refactor/microservices-backend — 2026-11-20
 
 ### Security Fixes & Improvements
 - **Anti-Corruption Layer Hardening:**

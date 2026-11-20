@@ -1,31 +1,25 @@
 # GASTROWISE — NEXT TASKS & VERIFICATION ROADMAP
 
 **Branch:** `refactor/microservices-backend`  
-**Current Phase Completed:** Milestone 1 & Milestone 1.1 (Security Review Conditions Resolved)  
-**Next Phase:** Milestone 2 (Data Flow & Domain Boundary Optimization) — *Awaiting Human Review*  
+**Current Phase Completed:** Milestone 2.2 (Docker Orchestration & Network Validation Audit)  
+**Next Phase:** Milestone 2.3 (Runtime & Health Check Validation with Isolated Local Database)  
 
 ---
 
-## 1. COMPLETED IN MILESTONE 1 & 1.1
-- [x] Removed all insecure default secrets from `docker-compose.yml`, `auth.service.ts`, `core-api.client.ts`, `ai-api.client.ts`.
-- [x] Hardened mutual service authentication with constant-time verification and missing server configuration checks.
-- [x] Structured error differentiation in `CoreApiClient` (401/403, 503/timeout/refused, 500, 404).
-- [x] Eliminated silent fallback in `AiApiClient` on authentication failure.
-- [x] Standardized JWT validation (`issuer: 'gastrowise-auth'`, `audience: 'gastrowise-api'`).
-- [x] Fixed DTO whitelist stripping in `CreateReviewDto` and entrypoint ValidationPipe.
-- [x] Added 22 security unit tests (`security.spec.ts`, `jwt.strategy.spec.ts`, `internal-auth.guard.spec.ts`).
-- [x] Completed Independent Verification Review: PASS WITH CONDITIONS (`MILESTONE_1_VERIFICATION_REVIEW.md`).
-- [x] **Milestone 1.1:** Resolved Condition 1 (rethrow `UnauthorizedException` in `ItinerariesService`).
-- [x] **Milestone 1.1:** Resolved Condition 2 (constructor fail-fast check in `RestaurantsService` and `ReviewsService` header injection).
-- [x] Documented results in `docs/security/MILESTONE_1_1_CONDITIONS_RESOLUTION.md`.
+## 1. COMPLETED IN MILESTONES 1, 1.1, 2.1 & 2.2
+- [x] **Milestone 1:** Removed all insecure default secrets, hardened mutual auth guard, standardized JWT validation.
+- [x] **Milestone 1.1:** Resolved Condition 1 (`UnauthorizedException` rethrown in `ItinerariesService`) and Condition 2 (`RestaurantsService` constructor fail-fast).
+- [x] **Milestone 2.1:** Verified independent builds for Core Service, Planning Service, Shared Library, and AI Service (100% PASS).
+- [x] **Milestone 2.2:** Validated Docker Compose topology, resolved missing AI Dockerfile, added `.dockerignore` files, and executed strict safety stop before live container startup.
 
 ---
 
-## 2. PENDING TASKS FOR MILESTONE 2 (UPON APPROVAL)
-- [ ] Evaluate secret rotation mechanisms (dual-key or versioning headers).
-- [ ] Implement token-bucket rate limiting on internal provider endpoints.
-- [ ] Refine domain boundary data caching in Planning Service ACL.
-- [ ] Staging dual-run verification against MongoDB staging cluster.
+## 2. PENDING TASKS FOR MILESTONE 2.3 (UPON DOCKER DAEMON & LOCAL DB ACTIVATION)
+- [ ] Launch Docker Desktop daemon in Windows session.
+- [ ] Ensure local isolated MongoDB container/endpoint is configured (never connect to remote cloud Atlas cluster).
+- [ ] Execute `docker compose up -d` in isolated staging environment.
+- [ ] Perform live HTTP health checks across Gateway (:8080), Core (:3001), Planning (:3003), and AI (:5000).
+- [ ] Verify inter-service DNS resolution and mutual authentication over Docker bridge network.
 
 ---
 
