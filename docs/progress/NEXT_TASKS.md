@@ -1,26 +1,28 @@
 # GASTROWISE — NEXT TASKS & VERIFICATION ROADMAP
 
 **Branch:** `refactor/microservices-backend`  
-**Current Phase Completed:** Phases 1–8 (Services Extraction, ACL, Gateway, DevOps, Security Hardening)  
-**Next Phase:** Phase 9–10 (Staging Verification & Production Migration Gate)  
+**Current Phase Completed:** Milestone 1 (Security & Configuration Hardening)  
+**Next Phase:** Milestone 2 (Data Flow & Domain Boundary Optimization) — *Awaiting Human Review*  
 
 ---
 
-## 1. PENDING STAGING VERIFICATION TASKS
+## 1. COMPLETED IN MILESTONE 1
+- [x] Removed all insecure default secrets from `docker-compose.yml`, `auth.service.ts`, `core-api.client.ts`, `ai-api.client.ts`.
+- [x] Hardened mutual service authentication with constant-time verification and missing server configuration checks.
+- [x] Structured error differentiation in `CoreApiClient` (401/403, 503/timeout/refused, 500, 404).
+- [x] Eliminated silent fallback in `AiApiClient` on authentication failure.
+- [x] Standardized JWT validation (`issuer: 'gastrowise-auth'`, `audience: 'gastrowise-api'`).
+- [x] Fixed DTO whitelist stripping in `CreateReviewDto` and entrypoint ValidationPipe.
+- [x] Added 22 security unit tests (`security.spec.ts`, `jwt.strategy.spec.ts`, `internal-auth.guard.spec.ts`).
+- [x] Documented results in `docs/security/SECURITY_HARDENING_REPORT.md`.
 
-- [ ] **Dual-Run Staging Verification:**
-  - Spin up `docker-compose up --build -d` in staging environment.
-  - Verify Nginx Gateway health check: `curl http://localhost:8080/health`.
-  - Verify Core Service health check: `curl http://localhost:3001/health`.
-  - Verify Planning Service health check: `curl http://localhost:3003/health`.
-- [ ] **Frontend Client Sanity Testing:**
-  - Run Customer Web (`KLTN-123-GastroWise-FE`) against Gateway (`http://localhost:8080`).
-  - Run Admin Web (`KLTN-123-GastroWise-Admin-FE`) against Gateway (`http://localhost:8080`).
-  - Run Mobile App (`KLTN-123-GastroWise-Mobile`) with `EXPO_PUBLIC_API_URL=http://<ip>:8080/api/v1`.
-- [ ] **Staging Database Partitioning Execution:**
-  - Run `ts-node scripts/db-split-dryrun.ts` against staging MongoDB cluster.
-  - Create `gastro_core` and `gastro_planning` databases via `$merge` pipeline.
-  - Validate collection document count parity.
+---
+
+## 2. PENDING TASKS FOR MILESTONE 2 (UPON APPROVAL)
+- [ ] Evaluate secret rotation mechanisms (dual-key or versioning headers).
+- [ ] Implement token-bucket rate limiting on internal provider endpoints.
+- [ ] Refine domain boundary data caching in Planning Service ACL.
+- [ ] Staging dual-run verification against MongoDB staging cluster.
 
 ---
 

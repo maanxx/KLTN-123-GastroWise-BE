@@ -15,7 +15,13 @@ export class InternalAuthGuard implements CanActivate {
       | undefined;
     const expected = process.env.INTERNAL_SERVICE_KEY;
 
-    if (!provided || !expected) {
+    if (!expected) {
+      throw new UnauthorizedException(
+        'Internal service key is not configured on the server',
+      );
+    }
+
+    if (!provided) {
       throw new UnauthorizedException(
         'Missing internal service key credentials',
       );

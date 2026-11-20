@@ -49,4 +49,14 @@ describe('InternalAuthGuard (Mutual Service Auth)', () => {
     });
     expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
   });
+
+  it('should throw UnauthorizedException when server has no INTERNAL_SERVICE_KEY configured', () => {
+    delete process.env.INTERNAL_SERVICE_KEY;
+    const context = createMockContext({
+      'x-internal-service-key': 'some-key',
+    });
+    expect(() => guard.canActivate(context)).toThrow(
+      'Internal service key is not configured on the server',
+    );
+  });
 });

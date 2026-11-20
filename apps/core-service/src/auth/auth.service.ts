@@ -139,8 +139,12 @@ export class AuthService {
   ) {
     const payload = { sub: userId, email, role };
 
-    const jwtSecret =
-      this.configService.get<string>('JWT_SECRET') || 'gastrowise_jwt_secret';
+    const jwtSecret = this.configService.get<string>('JWT_SECRET');
+    if (!jwtSecret) {
+      throw new Error(
+        'Missing mandatory security configuration: JWT_SECRET must be set in environment variables',
+      );
+    }
     const refreshSecret =
       this.configService.get<string>('JWT_REFRESH_SECRET') || jwtSecret;
 
@@ -148,10 +152,14 @@ export class AuthService {
       this.jwtService.signAsync(payload, {
         secret: jwtSecret,
         expiresIn: '1d',
+        issuer: 'gastrowise-auth',
+        audience: 'gastrowise-api',
       }),
       this.jwtService.signAsync(payload, {
         secret: refreshSecret,
         expiresIn: '7d',
+        issuer: 'gastrowise-auth',
+        audience: 'gastrowise-api',
       }),
     ]);
 

@@ -1,6 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  UnauthorizedException,
+  ServiceUnavailableException,
+  BadGatewayException,
+  NotFoundException,
+} from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
+import { randomUUID } from 'crypto';
 import {
   RestaurantCandidateDto,
   TasteDnaProfileDto,
@@ -16,18 +24,107 @@ export class CoreApiClient {
 
   constructor(private readonly httpService: HttpService) {
     this.baseUrl = process.env.CORE_SERVICE_URL || 'http://127.0.0.1:3001';
-    this.internalKey =
-      process.env.INTERNAL_SERVICE_KEY || 'default-secret-change-in-production';
+    const key = process.env.INTERNAL_SERVICE_KEY;
+    if (!key) {
+      throw new Error(
+        'Missing mandatory security configuration: INTERNAL_SERVICE_KEY must be set in environment variables',
+      );
+    }
+    this.internalKey = key;
   }
 
   private getHeaders(correlationId?: string): Record<string, string> {
     const headers: Record<string, string> = {
       'X-Internal-Service-Key': this.internalKey,
+      'X-Correlation-Id': correlationId || randomUUID(),
     };
-    if (correlationId) {
-      headers['X-Correlation-Id'] = correlationId;
-    }
     return headers;
+  }
+
+  private handleError(
+    method: string,
+    url: string,
+    err: any,
+    startTime: number,
+    correlationId?: string,
+  ): never {
+    const durationMs = Date.now() - startTime;
+    const cid = correlationId || 'unknown';
+    const timestamp = new Date().toISOString();
+
+    if (err.response) {
+      const status = err.response.status;
+      const data = err.response.data;
+
+      this.logger.error(
+        JSON.stringify({
+          timestamp,
+          level: 'ERROR',
+          context: 'CoreApiClient',
+          method,
+          url,
+          status,
+          durationMs,
+          correlationId: cid,
+          message: data?.message || err.message,
+        }),
+      );
+
+      if (status === 401 || status === 403) {
+        throw new UnauthorizedException(
+          `Core Service authentication failed (HTTP ${status}) [cid: ${cid}]: ${data?.message || err.message}`,
+        );
+      }
+      if (status === 404) {
+        throw new NotFoundException(
+          `Core Service resource not found [cid: ${cid}]: ${data?.message || err.message}`,
+        );
+      }
+      if (status >= 500) {
+        throw new BadGatewayException(
+          `Core Service returned server error (HTTP ${status}) [cid: ${cid}]: ${data?.message || err.message}`,
+        );
+      }
+      throw new BadGatewayException(
+        `Core Service communication error (HTTP ${status}) [cid: ${cid}]: ${data?.message || err.message}`,
+      );
+    }
+
+    const isTimeout =
+      err.code === 'ECONNABORTED' ||
+      err.code === 'ETIMEDOUT' ||
+      err.message?.includes('timeout');
+    const isRefused = err.code === 'ECONNREFUSED';
+
+    this.logger.error(
+      JSON.stringify({
+        timestamp,
+        level: 'ERROR',
+        context: 'CoreApiClient',
+        method,
+        url,
+        code: err.code || 'UNKNOWN',
+        durationMs,
+        correlationId: cid,
+        message: err.message,
+      }),
+    );
+
+    if (isTimeout) {
+      throw new ServiceUnavailableException(
+        `Core Service request timed out after ${durationMs}ms [cid: ${cid}]`,
+      );
+    }
+
+    if (isRefused) {
+      throw new ServiceUnavailableException(
+        `Core Service connection refused at ${this.baseUrl} [cid: ${cid}]`,
+      );
+    }
+
+    throw new BadGatewayException(
+      `Core Service communication failed [cid: ${cid}]: ${err.message}`,
+    );
   }
 
   async getCandidates(params?: {
@@ -38,14 +135,17 @@ export class CoreApiClient {
     limit?: number;
     correlationId?: string;
   }): Promise<RestaurantCandidateDto[]> {
+    const startTime = Date.now();
+    const cid = params?.correlationId || randomUUID();
+    const url = `${this.baseUrl}/api/v1/internal/restaurants/candidates`;
+
     try {
-      const url = `${this.baseUrl}/api/v1/internal/restaurants/candidates`;
       const response = await firstValueFrom(
         this.httpService.get<{
           candidates: RestaurantCandidateDto[];
           total: number;
         }>(url, {
-          headers: this.getHeaders(params?.correlationId),
+          headers: this.getHeaders(cid),
           params: {
             tags: params?.tags,
             lat: params?.lat,
@@ -58,8 +158,10 @@ export class CoreApiClient {
       );
       return response.data?.candidates || [];
     } catch (err: any) {
-      this.logger.error(`CoreApiClient: getCandidates failed: ${err.message}`);
-      return [];
+      if (err.response?.status === 404) {
+        return [];
+      }
+      this.handleError('GET', url, err, startTime, cid);
     }
   }
 
@@ -67,20 +169,23 @@ export class CoreApiClient {
     id: string,
     correlationId?: string,
   ): Promise<RestaurantCandidateDto | null> {
+    const startTime = Date.now();
+    const cid = correlationId || randomUUID();
+    const url = `${this.baseUrl}/api/v1/internal/restaurants/${id}`;
+
     try {
-      const url = `${this.baseUrl}/api/v1/internal/restaurants/${id}`;
       const response = await firstValueFrom(
         this.httpService.get<RestaurantCandidateDto>(url, {
-          headers: this.getHeaders(correlationId),
+          headers: this.getHeaders(cid),
           timeout: 3000,
         }),
       );
       return response.data || null;
     } catch (err: any) {
-      this.logger.warn(
-        `CoreApiClient: getRestaurantById(${id}) failed: ${err.message}`,
-      );
-      return null;
+      if (err.response?.status === 404) {
+        return null;
+      }
+      this.handleError('GET', url, err, startTime, cid);
     }
   }
 
@@ -88,20 +193,23 @@ export class CoreApiClient {
     userId: string,
     correlationId?: string,
   ): Promise<TasteDnaProfileDto | null> {
+    const startTime = Date.now();
+    const cid = correlationId || randomUUID();
+    const url = `${this.baseUrl}/api/v1/internal/taste-dna/${userId}`;
+
     try {
-      const url = `${this.baseUrl}/api/v1/internal/taste-dna/${userId}`;
       const response = await firstValueFrom(
         this.httpService.get<TasteDnaProfileDto>(url, {
-          headers: this.getHeaders(correlationId),
+          headers: this.getHeaders(cid),
           timeout: 3000,
         }),
       );
       return response.data || null;
     } catch (err: any) {
-      this.logger.warn(
-        `CoreApiClient: getTasteDna(${userId}) failed: ${err.message}`,
-      );
-      return null;
+      if (err.response?.status === 404) {
+        return null;
+      }
+      this.handleError('GET', url, err, startTime, cid);
     }
   }
 
@@ -110,18 +218,20 @@ export class CoreApiClient {
     dto: TasteDnaFeedbackDto,
     correlationId?: string,
   ): Promise<boolean> {
+    const startTime = Date.now();
+    const cid = correlationId || randomUUID();
+    const url = `${this.baseUrl}/api/v1/internal/taste-dna/${userId}/feedback`;
+
     try {
-      const url = `${this.baseUrl}/api/v1/internal/taste-dna/${userId}/feedback`;
       await firstValueFrom(
         this.httpService.post(url, dto, {
-          headers: this.getHeaders(correlationId),
+          headers: this.getHeaders(cid),
           timeout: 3000,
         }),
       );
       return true;
     } catch (err: any) {
-      this.logger.warn(`CoreApiClient: applyFeedback failed: ${err.message}`);
-      return false;
+      this.handleError('POST', url, err, startTime, cid);
     }
   }
 
@@ -129,18 +239,24 @@ export class CoreApiClient {
     dto: RecordInteractionEventDto,
     correlationId?: string,
   ): Promise<boolean> {
+    const startTime = Date.now();
+    const cid = correlationId || randomUUID();
+    const url = `${this.baseUrl}/api/v1/internal/interactions/event`;
+
     try {
-      const url = `${this.baseUrl}/api/v1/internal/interactions/event`;
       await firstValueFrom(
         this.httpService.post(url, dto, {
-          headers: this.getHeaders(correlationId),
+          headers: this.getHeaders(cid),
           timeout: 2000,
         }),
       );
       return true;
     } catch (err: any) {
+      if (err.response?.status === 401 || err.response?.status === 403) {
+        this.handleError('POST', url, err, startTime, cid);
+      }
       this.logger.warn(
-        `CoreApiClient: recordInteraction failed: ${err.message}`,
+        `CoreApiClient: recordInteraction failed non-critically (${err.message}) [cid: ${cid}]`,
       );
       return false;
     }

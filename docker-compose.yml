@@ -43,9 +43,9 @@ services:
       - NODE_ENV=production
       - MONGODB_URI_CORE=${MONGODB_URI_CORE:-mongodb://host.docker.internal:27017/gastro_core}
       - CORE_DB_NAME=gastro_core
-      - JWT_SECRET=${JWT_SECRET:-changeme-production-secret-min-32-chars}
-      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:-internal-sec-key-gastrowise-2026}
-      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:-ai-secret-key-gastrowise-2026}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
+      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:?INTERNAL_SERVICE_KEY must be set}
+      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:?INTERNAL_AI_KEY must be set}
       - AI_SERVICE_URL=http://ai-service:5000
     networks:
       - gastrowise_network
@@ -67,9 +67,9 @@ services:
       - NODE_ENV=production
       - MONGODB_URI_PLANNING=${MONGODB_URI_PLANNING:-mongodb://host.docker.internal:27017/gastro_planning}
       - PLANNING_DB_NAME=gastro_planning
-      - JWT_SECRET=${JWT_SECRET:-changeme-production-secret-min-32-chars}
-      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:-internal-sec-key-gastrowise-2026}
-      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:-ai-secret-key-gastrowise-2026}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
+      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:?INTERNAL_SERVICE_KEY must be set}
+      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:?INTERNAL_AI_KEY must be set}
       - CORE_SERVICE_URL=http://core-service:3001
       - AI_SERVICE_URL=http://ai-service:5000
     networks:
@@ -88,7 +88,7 @@ services:
       - "5000"
     environment:
       - PORT=5000
-      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:-ai-secret-key-gastrowise-2026}
+      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:?INTERNAL_AI_KEY must be set}
       - MONGODB_URI=${MONGODB_URI_AI:-mongodb://host.docker.internal:27017/gastrowise}
     networks:
       - gastrowise_network

@@ -7,11 +7,11 @@ Bảng theo dõi toàn bộ các vấn đề kỹ thuật, lỗi kiến trúc, l
 
 | Issue ID | Tiêu đề vấn đề | Mức độ | Phân loại | Thành phần ảnh hưởng | Trạng thái | Kế hoạch xử lý |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **ISSUE-01** | Lệch tiền tố URL gọi AI Microservice gây lỗi 404 Fallback | **P0** | Bug Core | `KLTN-123-GastroWise-BE`<br/>`KLTN-123-GastroWise-AI` | **OPEN** | Milestone 4 (Week 5) |
-| **ISSUE-02** | Lỗ hổng Broken Access Control ở endpoint xóa/sửa Review (`DELETE`/`PATCH`) | **P0** | Security | `KLTN-123-GastroWise-BE` | **OPEN** | Milestone 2 (Week 3) |
-| **ISSUE-03** | Thiếu xác thực Mutual Service Auth ở AI Service (`X-Internal-AI-Key`) | **P0** | Security | `KLTN-123-GastroWise-AI`<br/>`KLTN-123-GastroWise-BE` | **OPEN** | Milestone 4 (Week 5) |
-| **ISSUE-04** | Lộ lọt dữ liệu ma trận hành vi người dùng tại `GET /interactions/matrix` | **P0** | Security | `KLTN-123-GastroWise-BE` | **OPEN** | Milestone 2 (Week 3) |
-| **ISSUE-05** | Khớp nối chặt cross-domain trong `ItinerariesService` (DB Coupling) | **P1** | Architecture | `KLTN-123-GastroWise-BE` | **OPEN** | Milestone 3 (Week 4) |
+| **ISSUE-01** | Lệch tiền tố URL gọi AI Microservice gây lỗi 404 Fallback | **P0** | Bug Core | `KLTN-123-GastroWise-BE`<br/>`KLTN-123-GastroWise-AI` | **RESOLVED IN MICROSERVICES** | Dual-mount routes in AI + corrected Core URLs |
+| **ISSUE-02** | Lỗ hổng Broken Access Control ở endpoint xóa/sửa Review (`DELETE`/`PATCH`) | **P0** | Security | `KLTN-123-GastroWise-BE` | **RESOLVED IN MICROSERVICES** | Enforced JwtAuthGuard + owner/admin verification |
+| **ISSUE-03** | Thiếu xác thực Mutual Service Auth ở AI Service (`X-Internal-AI-Key`) | **P0** | Security | `KLTN-123-GastroWise-AI`<br/>`KLTN-123-GastroWise-BE` | **RESOLVED IN MICROSERVICES** | Added X-Internal-AI-Key dependency and ACL client |
+| **ISSUE-04** | Lộ lọt dữ liệu ma trận hành vi người dùng tại `GET /interactions/matrix` | **P0** | Security | `KLTN-123-GastroWise-BE` | **RESOLVED IN MICROSERVICES** | Protected with @Roles('admin') |
+| **ISSUE-05** | Khớp nối chặt cross-domain trong `ItinerariesService` (DB Coupling) | **P1** | Architecture | `KLTN-123-GastroWise-BE` | **RESOLVED IN MICROSERVICES** | Extracted to planning-service with CoreApiClient ACL |
 | **ISSUE-06** | Lỗi hiển thị "5.4★" Rating Badge do thiếu chuẩn hóa thang điểm 10 $\rightarrow$ 5 | **P1** | Data/Algo | `KLTN-123-GastroWise-AI` | **OPEN** | Milestone 4 (Week 5) |
 | **ISSUE-07** | Quy trình migration database `$out` thiếu backup, validation & rollback | **P1** | Database | `docs/architecture` | **RESOLVED IN DOCS** | Đã chuẩn hóa quy trình 4 bước |
 | **ISSUE-08** | Mâu thuẫn quyền truy cập database của AI (Interim vs Target State) | **P1** | Architecture | `docs/architecture` | **RESOLVED IN DOCS** | Phân định rõ Interim vs Target |

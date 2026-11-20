@@ -10,13 +10,17 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     const secret = configService.get<string>('JWT_SECRET');
 
     if (!secret) {
-      throw new Error('Thiếu JWT_SECRET trong tệp .env');
+      throw new Error(
+        'Missing mandatory security configuration: JWT_SECRET must be set in environment variables',
+      );
     }
 
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       secretOrKey: secret,
+      issuer: 'gastrowise-auth',
+      audience: 'gastrowise-api',
     });
   }
 

@@ -1,49 +1,41 @@
 # GASTROWISE — MICROSERVICES MIGRATION PROGRESS REPORT
 
-**Milestone:** Phase 1–8 Microservices Migration Implementation  
+**Milestone:** Milestone 1: Security & Configuration Hardening  
 **Branch:** `refactor/microservices-backend`  
 **Repository:** [KLTN-123-GastroWise-BE](https://github.com/maanxx/KLTN-123-GastroWise-BE)  
 **Date:** November 20, 2026  
-**Status:** ✅ IMPLEMENTATION COMPLETED & INDEPENDENT BUILDS VERIFIED  
+**Status:** ✅ MILESTONE 1 COMPLETED & VERIFIED  
 
 ---
 
-## 1. MILESTONE OBJECTIVES ACHIEVED
+## 1. MILESTONE 1 OBJECTIVES ACHIEVED
 
-1. **Prepared Migration Branch:** Created `refactor/microservices-backend` from `main`. Original `main` branch remains untouched.
-2. **Established Monorepo Foundation:** Reconfigured NestJS repository into a clean monorepo architecture (`apps/core-service`, `apps/planning-service`, `libs/shared`).
-3. **Extracted Core Service (`apps/core-service`):**
-   - Autonomous bootstrap entrypoint on port `3001` with global prefix `/api/v1`.
-   - Exclusive database ownership of `gastro_core`.
-   - Independent `/health` endpoint.
-   - Built and verified independent compilation (`npm run build:core`).
-   - Fixed P0 Review BOLA security gap (added `JwtAuthGuard` + owner/admin verification on PATCH/DELETE).
-   - Fixed P0 Interaction Matrix exposure (restricted `GET /interactions/matrix` to `@Roles('admin')`).
-   - Fixed P0 AI endpoint route mismatch (corrected URLs to `/recommend/hybrid`, `/cf/train`, `/copilot/message`).
-   - Implemented `InternalProviderModule` exposing `/internal/restaurants/*`, `/internal/taste-dna/*`, `/internal/interactions/*` protected by `InternalAuthGuard`.
-4. **Extracted Planning Service (`apps/planning-service`):**
-   - Autonomous bootstrap entrypoint on port `3003` with global prefix `/api/v1`.
-   - Exclusive database ownership of `gastro_planning`.
-   - Independent `/health` endpoint.
-   - Built and verified independent compilation (`npm run build:planning`).
-   - Strict Boundary Enforcement: ZERO imports of Core schemas (`Restaurant`, `User`, `TasteDnaProfile`).
-   - Anti-Corruption Layer (ACL) implemented: `CoreApiClient` (calls Core internal REST) and `AiApiClient` (calls AI Route Optimizer with 3500ms timeout & circuit breaker fallback to Gastronomic Greedy heuristic).
-   - Snapshot Value Object Pattern: `ItineraryStop` stores immutable venue attributes directly, eliminating cross-database joins.
-5. **AI Microservice Hardening (`KLTN-123-GastroWise-AI`):**
-   - Implemented ADR-07 dual-route compatibility mounts (`/v1/recommendation` and canonical routes) in `app/api/v1/router.py`.
-   - Added timing-safe `X-Internal-AI-Key` mutual authentication guard (`app/core/auth.py`).
-6. **API Gateway Configured (`nginx/nginx.conf`):**
-   - Port 8080 ingress router.
-   - Priority 1: `/api/v1/itineraries/*` $\rightarrow$ Planning Service (:3003).
-   - Priority 2: `/api/v1/auth/*` $\rightarrow$ Core Service (:3001) with strict rate limiting (5 req/s).
-   - Priority 3: `/api/v1/*` $\rightarrow$ Core Service (:3001) with standard rate limiting (30 req/s).
-   - Backward-compatibility rewrites for legacy prefix-less routes.
-   - `X-Correlation-Id` distributed tracing propagation.
-7. **Containerization & DevOps:**
-   - Multi-stage Dockerfile for Core Service (`apps/core-service/Dockerfile`).
-   - Multi-stage Dockerfile for Planning Service (`apps/planning-service/Dockerfile`).
-   - Production Docker Compose topology (`docker-compose.yml`).
-   - Safe database split validation dry-run script (`scripts/db-split-dryrun.ts`).
+1. **Eliminated Insecure Default Fallback Secrets:**
+   - Updated `docker-compose.yml` to require mandatory environment variables (`${VAR:?VAR must be set}`).
+   - Removed fallback keys in `apps/planning-service/src/acl/core-api.client.ts` and `apps/planning-service/src/acl/ai-api.client.ts`.
+   - Removed fallback secret in `apps/core-service/src/auth/auth.service.ts`.
+   - Configured fast failure on startup if mandatory keys (`JWT_SECRET`, `INTERNAL_SERVICE_KEY`, `INTERNAL_AI_KEY`) are missing.
+2. **Hardened Mutual Service Authentication Mesh:**
+   - Updated `InternalAuthGuard` to verify server configuration presence and reject invalid keys using timing-safe comparisons (`crypto.timingSafeEqual`).
+   - CoreApiClient and AiApiClient consistently send configured keys and propagate `X-Correlation-Id`.
+3. **Implemented Structured Error Handling in ACL Clients:**
+   - Differentiated HTTP 401/403 (`UnauthorizedException`), timeouts/network refuse (`ServiceUnavailableException`), 5xx crashes (`BadGatewayException`), and 404 (`[]`).
+   - Eliminated silent heuristic fallback on auth failures in `AiApiClient`.
+   - Structured JSON logging with latency, timestamps, status codes, and correlation IDs.
+4. **Standardized JWT Token Validation & Generation:**
+   - Configured `issuer: 'gastrowise-auth'`, `audience: 'gastrowise-api'`, and `ignoreExpiration: false` across both Core and Planning services.
+   - Standardized extracted user payload interface (`userId`, `sub`, `email`, `role`).
+5. **Fixed DTO Whitelist Stripping:**
+   - Added `class-validator` annotations to `CreateReviewDto`.
+   - Configured `ValidationPipe({ whitelist: false, transform: true })` across services.
+6. **Executed Comprehensive Security Test Suites:**
+   - Added `apps/planning-service/src/acl/security.spec.ts` (10 tests).
+   - Added `apps/core-service/src/auth/jwt.strategy.spec.ts` (3 tests).
+   - Added `apps/planning-service/src/auth/jwt.strategy.spec.ts` (3 tests).
+   - Expanded `libs/shared/src/guards/internal-auth.guard.spec.ts` (5 tests).
+   - All 22 security unit tests passed (100% PASS).
+   - Full monorepo microservices regression suite passed: 15 suites, 71 tests (100% PASS).
+   - Both Core Service and Planning Service compiled cleanly with exit code 0.
 
 ---
 
@@ -60,10 +52,19 @@
 ### 2.2. Unit Test Execution
 | Test Suite | File | Tests | Result |
 | :--- | :--- | :---: | :---: |
+| Mutual Service InternalAuthGuard | `libs/shared/src/guards/internal-auth.guard.spec.ts` | 5 | ✅ PASS |
+| ACL Security & Fault Tolerance | `apps/planning-service/src/acl/security.spec.ts` | 10 | ✅ PASS |
+| Core Service JWT Strategy | `apps/core-service/src/auth/jwt.strategy.spec.ts` | 3 | ✅ PASS |
+| Planning Service JWT Strategy | `apps/planning-service/src/auth/jwt.strategy.spec.ts` | 3 | ✅ PASS |
 | Haversine Math & Transit Floors | `libs/shared/src/utils/geo.utils.spec.ts` | 2 | ✅ PASS |
-| Mutual Service InternalAuthGuard | `libs/shared/src/guards/internal-auth.guard.spec.ts` | 4 | ✅ PASS |
 | Core Service Health Controller | `apps/core-service/src/health/health.controller.spec.ts` | 1 | ✅ PASS |
 | Planning Service Health Controller | `apps/planning-service/src/health/health.controller.spec.ts` | 1 | ✅ PASS |
 | Planning Itineraries Service (ACL) | `apps/planning-service/src/itineraries/itineraries.service.spec.ts` | 8 | ✅ PASS |
 | Planning Itineraries Controller | `apps/planning-service/src/itineraries/itineraries.controller.spec.ts` | 4 | ✅ PASS |
-| **Total Microservices Test Suites** | **6 Suites** | **20 Tests** | **✅ 100% PASS** |
+| Core Service Auth Controller | `apps/core-service/src/auth/auth.controller.spec.ts` | 5 | ✅ PASS |
+| Core Service Auth Service | `apps/core-service/src/auth/auth.service.spec.ts` | 7 | ✅ PASS |
+| Core Service Roles Guard | `apps/core-service/src/auth/roles.guard.spec.ts` | 4 | ✅ PASS |
+| Core Service Users Controller | `apps/core-service/src/users/users.controller.spec.ts` | 5 | ✅ PASS |
+| Core Service Users Service | `apps/core-service/src/users/users.service.spec.ts` | 8 | ✅ PASS |
+| Core Service Taste DNA Service | `apps/core-service/src/taste-dna/taste-dna.service.spec.ts` | 5 | ✅ PASS |
+| **Total Microservices Regression Suite** | **15 Suites** | **71 Tests** | **✅ 100% PASS** |

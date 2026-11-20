@@ -1,6 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
+import { randomUUID } from 'crypto';
 import {
   RouteOptimizationResult,
   OptimizedStopResult,
@@ -15,38 +20,60 @@ import {
 export class AiApiClient {
   private readonly logger = new Logger(AiApiClient.name);
   private readonly aiUrl: string;
-  private readonly internalAiKey?: string;
+  private readonly internalAiKey: string;
 
   constructor(private readonly httpService: HttpService) {
     this.aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
-    this.internalAiKey = process.env.INTERNAL_AI_KEY;
+    const key = process.env.INTERNAL_AI_KEY;
+    if (!key) {
+      throw new Error(
+        'Missing mandatory security configuration: INTERNAL_AI_KEY must be set in environment variables',
+      );
+    }
+    this.internalAiKey = key;
   }
 
   private getHeaders(correlationId?: string): Record<string, string> {
-    const headers: Record<string, string> = {};
-    if (this.internalAiKey) {
-      headers['X-Internal-AI-Key'] = this.internalAiKey;
-    }
-    if (correlationId) {
-      headers['X-Correlation-Id'] = correlationId;
-    }
+    const headers: Record<string, string> = {
+      'X-Internal-AI-Key': this.internalAiKey,
+      'X-Correlation-Id': correlationId || randomUUID(),
+    };
     return headers;
   }
 
   /**
    * Gọi AI Microservice (OR-Tools TSPTW) với Circuit Breaker và 3500ms timeout
    * Tự động fallback sang Gastronomic Greedy Heuristic nếu AI offline hoặc timeout
+   * KHÔNG fallback khi gặp lỗi Authentication (401/403)
    */
   async optimizeRoute(
     request: RouteOptimizeRequest,
     correlationId?: string,
   ): Promise<RouteOptimizationResult> {
+    const cid = correlationId || randomUUID();
+    const startTime = Date.now();
+    const url = `${this.aiUrl}/routes/optimize`;
+
     try {
-      const url = `${this.aiUrl}/routes/optimize`;
       const response = await firstValueFrom(
         this.httpService.post<any>(url, request, {
-          headers: this.getHeaders(correlationId),
+          headers: this.getHeaders(cid),
           timeout: 3500,
+        }),
+      );
+
+      const durationMs = Date.now() - startTime;
+      this.logger.log(
+        JSON.stringify({
+          timestamp: new Date().toISOString(),
+          level: 'INFO',
+          context: 'AiApiClient',
+          method: 'POST',
+          url,
+          status: 200,
+          durationMs,
+          correlationId: cid,
+          solver: response.data?.solver || 'OR-Tools TSPTW',
         }),
       );
 
@@ -66,8 +93,43 @@ export class AiApiClient {
         };
       }
     } catch (err: any) {
+      const durationMs = Date.now() - startTime;
+      const status = err.response?.status;
+
+      // CRITICAL SECURITY CHECK: If authentication failed (401/403), NEVER fall back silently!
+      if (status === 401 || status === 403) {
+        this.logger.error(
+          JSON.stringify({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            context: 'AiApiClient',
+            method: 'POST',
+            url,
+            status,
+            durationMs,
+            correlationId: cid,
+            message: 'CRITICAL: AI Service internal authentication failed. Keys mismatched or rejected.',
+          }),
+        );
+        throw new UnauthorizedException(
+          `AI Service authentication failed (HTTP ${status}) [cid: ${cid}]: ${err.response?.data?.detail || err.message}`,
+        );
+      }
+
+      // Circuit Breaker: Timeout (3500ms), 5xx or connection refused -> Fall back to Gastronomic Greedy Heuristic
       this.logger.warn(
-        `AI Route Optimizer unavailable (${err.message}). Tripping circuit breaker to Greedy Heuristic.`,
+        JSON.stringify({
+          timestamp: new Date().toISOString(),
+          level: 'WARN',
+          context: 'AiApiClient',
+          method: 'POST',
+          url,
+          status: status || 'NETWORK_ERROR',
+          code: err.code || 'UNKNOWN',
+          durationMs,
+          correlationId: cid,
+          message: `AI Route Optimizer unavailable (${err.message}). Tripping circuit breaker to Greedy Heuristic.`,
+        }),
       );
     }
 
@@ -91,7 +153,6 @@ export class AiApiClient {
     let order = 0;
 
     while (remaining.length > 0) {
-      // Find nearest candidate
       let bestIdx = 0;
       let minDist = Infinity;
       for (let i = 0; i < remaining.length; i++) {

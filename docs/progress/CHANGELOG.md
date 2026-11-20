@@ -1,5 +1,30 @@
 # GASTROWISE — MICROSERVICES MIGRATION CHANGELOG
 
+## [Milestone 1: Security & Configuration Hardening] — refactor/microservices-backend — 2026-11-20
+
+### Security & Hardening
+- **Secrets Management:**
+  - `docker-compose.yml`: Removed default fallbacks; enforced `${VAR:?VAR must be set}` for `JWT_SECRET`, `INTERNAL_SERVICE_KEY`, and `INTERNAL_AI_KEY`.
+  - `apps/core-service/src/auth/auth.service.ts`: Removed `'gastrowise_jwt_secret'` fallback; required explicit `JWT_SECRET`.
+  - `apps/planning-service/src/acl/core-api.client.ts`: Removed fallback; required `INTERNAL_SERVICE_KEY`.
+  - `apps/planning-service/src/acl/ai-api.client.ts`: Required `INTERNAL_AI_KEY`.
+- **Service Mesh Mutual Authentication:**
+  - `libs/shared/src/guards/internal-auth.guard.ts`: Enforced server-side secret configuration check and constant-time string comparison (`crypto.timingSafeEqual`).
+- **ACL Error Handling & Fault Tolerance:**
+  - `apps/planning-service/src/acl/core-api.client.ts`: Differentiated 401/403, 5xx, timeouts, connection refused, and 404; structured JSON logging.
+  - `apps/planning-service/src/acl/ai-api.client.ts`: Prevented silent heuristic fallback on auth failures; added structured JSON logging and correlation tracking.
+- **JWT Standardization:**
+  - `apps/core-service/src/auth/jwt.strategy.ts` & `apps/planning-service/src/auth/jwt.strategy.ts`: Added validation for `issuer: 'gastrowise-auth'` and `audience: 'gastrowise-api'`.
+  - `apps/core-service/src/auth/auth.service.ts`: Updated `_generateTokens` to sign with standard issuer and audience.
+- **Input Validation Fix:**
+  - `apps/core-service/src/reviews/dto/create-review.dto.ts`: Added `class-validator` decorators.
+  - `apps/core-service/src/main.ts` & `apps/planning-service/src/main.ts`: Configured `ValidationPipe({ whitelist: false, transform: true })`.
+- **Test Coverage:**
+  - Added `apps/planning-service/src/acl/security.spec.ts` (10 tests).
+  - Added `apps/core-service/src/auth/jwt.strategy.spec.ts` (3 tests).
+  - Added `apps/planning-service/src/auth/jwt.strategy.spec.ts` (3 tests).
+  - Expanded `libs/shared/src/guards/internal-auth.guard.spec.ts` (5 tests).
+
 ## [Unreleased] — refactor/microservices-backend — 2026-11-20
 
 ### Added
