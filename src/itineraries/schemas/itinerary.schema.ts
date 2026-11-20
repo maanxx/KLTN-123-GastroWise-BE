@@ -69,8 +69,11 @@ export class Itinerary extends Document {
   @Prop()
   budget: number;
 
-  @Prop({ type: { type: String, enum: ['Point'], default: 'Point' }, coordinates: { type: [Number] } })
-  start_location: { type: string, coordinates: number[] };
+  @Prop({
+    type: { type: String, enum: ['Point'], default: 'Point' },
+    coordinates: { type: [Number] },
+  })
+  start_location: { type: string; coordinates: number[] };
 
   @Prop({ default: 'generated' })
   status: string;

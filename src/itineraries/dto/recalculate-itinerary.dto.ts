@@ -21,4 +21,3 @@ export class RecalculateItineraryDto {
   @IsNumber()
   lng?: number;
 }
-

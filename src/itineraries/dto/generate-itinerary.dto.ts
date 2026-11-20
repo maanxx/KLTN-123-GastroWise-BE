@@ -37,4 +37,3 @@ export class GenerateItineraryDto {
   @IsNumber()
   duration_mins?: number;
 }
-

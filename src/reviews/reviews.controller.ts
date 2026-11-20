@@ -5,9 +5,9 @@ import {
   Body,
   Query,
   HttpException,
-    HttpStatus,
-    Param,
-    Delete,
+  HttpStatus,
+  Param,
+  Delete,
   Patch,
 } from '@nestjs/common';
 import { ReviewsService } from './reviews.service';
@@ -23,7 +23,11 @@ export class ReviewsController {
   }
 
   @Get()
-  async findAll(@Query('url') url?: string, @Query('search') search?: string, @Query('sentiment') sentiment?: string) {
+  async findAll(
+    @Query('url') url?: string,
+    @Query('search') search?: string,
+    @Query('sentiment') sentiment?: string,
+  ) {
     if (!url) {
       return this.reviewsService.getAllReviews({ search, sentiment });
     }

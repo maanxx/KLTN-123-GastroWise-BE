@@ -23,7 +23,9 @@ export class TasteDnaService {
       throw new NotFoundException(`User ID "${userId}" không hợp lệ.`);
     }
 
-    let profile = await this.tasteDnaModel.findOne({ userId: new Types.ObjectId(userId) }).exec();
+    let profile = await this.tasteDnaModel
+      .findOne({ userId: new Types.ObjectId(userId) })
+      .exec();
 
     if (!profile) {
       profile = new this.tasteDnaModel({
@@ -50,7 +52,10 @@ export class TasteDnaService {
   /**
    * Cập nhật các giá trị khẩu vị thủ công từ thanh trượt radar chart trên mobile
    */
-  async updateProfile(userId: string, dto: UpdateTasteDnaDto): Promise<TasteDnaDocument> {
+  async updateProfile(
+    userId: string,
+    dto: UpdateTasteDnaDto,
+  ): Promise<TasteDnaDocument> {
     const profile = await this.getProfile(userId);
 
     if (dto.spicy !== undefined) profile.spicy = dto.spicy;
@@ -60,10 +65,14 @@ export class TasteDnaService {
     if (dto.umami !== undefined) profile.umami = dto.umami;
     if (dto.bitter !== undefined) profile.bitter = dto.bitter;
 
-    if (dto.favoriteCuisines !== undefined) profile.favoriteCuisines = dto.favoriteCuisines;
-    if (dto.dietaryRestrictions !== undefined) profile.dietaryRestrictions = dto.dietaryRestrictions;
-    if (dto.dislikedIngredients !== undefined) profile.dislikedIngredients = dto.dislikedIngredients;
-    if (dto.budgetPreference !== undefined) profile.budgetPreference = dto.budgetPreference;
+    if (dto.favoriteCuisines !== undefined)
+      profile.favoriteCuisines = dto.favoriteCuisines;
+    if (dto.dietaryRestrictions !== undefined)
+      profile.dietaryRestrictions = dto.dietaryRestrictions;
+    if (dto.dislikedIngredients !== undefined)
+      profile.dislikedIngredients = dto.dislikedIngredients;
+    if (dto.budgetPreference !== undefined)
+      profile.budgetPreference = dto.budgetPreference;
 
     // Tăng độ tin cậy khi người dùng chủ động tinh chỉnh
     profile.confidenceScore = Math.min(1.0, profile.confidenceScore + 0.1);
@@ -74,7 +83,10 @@ export class TasteDnaService {
   /**
    * Xử lý kết quả bảng khảo sát khẩu vị ban đầu (Onboarding Questionnaire)
    */
-  async submitQuiz(userId: string, dto: TasteQuizDto): Promise<TasteDnaDocument> {
+  async submitQuiz(
+    userId: string,
+    dto: TasteQuizDto,
+  ): Promise<TasteDnaDocument> {
     const profile = await this.getProfile(userId);
 
     // Chuyển đổi mức độ cay sang thang điểm 0.0 - 1.0
@@ -123,22 +135,39 @@ export class TasteDnaService {
    */
   async applyFeedbackEma(
     userId: string,
-    targetTaste: { spicy?: number; sweet?: number; sour?: number; salty?: number; umami?: number; bitter?: number },
+    targetTaste: {
+      spicy?: number;
+      sweet?: number;
+      sour?: number;
+      salty?: number;
+      umami?: number;
+      bitter?: number;
+    },
     weight: number = 0.15,
   ) {
     try {
       const profile = await this.getProfile(userId);
       const alpha = Math.max(0.05, Math.min(0.3, weight));
 
-      if (targetTaste.spicy !== undefined) profile.spicy = (1 - alpha) * profile.spicy + alpha * targetTaste.spicy;
-      if (targetTaste.sweet !== undefined) profile.sweet = (1 - alpha) * profile.sweet + alpha * targetTaste.sweet;
-      if (targetTaste.sour !== undefined) profile.sour = (1 - alpha) * profile.sour + alpha * targetTaste.sour;
-      if (targetTaste.salty !== undefined) profile.salty = (1 - alpha) * profile.salty + alpha * targetTaste.salty;
-      if (targetTaste.umami !== undefined) profile.umami = (1 - alpha) * profile.umami + alpha * targetTaste.umami;
-      if (targetTaste.bitter !== undefined) profile.bitter = (1 - alpha) * profile.bitter + alpha * targetTaste.bitter;
+      if (targetTaste.spicy !== undefined)
+        profile.spicy = (1 - alpha) * profile.spicy + alpha * targetTaste.spicy;
+      if (targetTaste.sweet !== undefined)
+        profile.sweet = (1 - alpha) * profile.sweet + alpha * targetTaste.sweet;
+      if (targetTaste.sour !== undefined)
+        profile.sour = (1 - alpha) * profile.sour + alpha * targetTaste.sour;
+      if (targetTaste.salty !== undefined)
+        profile.salty = (1 - alpha) * profile.salty + alpha * targetTaste.salty;
+      if (targetTaste.umami !== undefined)
+        profile.umami = (1 - alpha) * profile.umami + alpha * targetTaste.umami;
+      if (targetTaste.bitter !== undefined)
+        profile.bitter =
+          (1 - alpha) * profile.bitter + alpha * targetTaste.bitter;
 
       profile.interactionCount += 1;
-      profile.confidenceScore = Math.min(1.0, 0.4 + profile.interactionCount * 0.03);
+      profile.confidenceScore = Math.min(
+        1.0,
+        0.4 + profile.interactionCount * 0.03,
+      );
 
       return profile.save();
     } catch (err: any) {
@@ -146,4 +175,3 @@ export class TasteDnaService {
     }
   }
 }
-

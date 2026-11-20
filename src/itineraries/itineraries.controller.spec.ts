@@ -40,18 +40,35 @@ describe('ItinerariesController', () => {
   });
 
   it('should call reorderStops on PATCH :id/reorder', async () => {
-    mockItinerariesService.reorderStops.mockResolvedValue({ _id: 'itin-1', status: 'generated' });
+    mockItinerariesService.reorderStops.mockResolvedValue({
+      _id: 'itin-1',
+      status: 'generated',
+    });
     const req = { user: { userId: 'user-1', role: 'user' } };
-    const res = await controller.reorderStops(req, 'itin-1', { stop_ids: ['s2', 's1'] });
-    expect(mockItinerariesService.reorderStops).toHaveBeenCalledWith('itin-1', ['s2', 's1'], 'user-1', 'user');
+    const res = await controller.reorderStops(req, 'itin-1', {
+      stop_ids: ['s2', 's1'],
+    });
+    expect(mockItinerariesService.reorderStops).toHaveBeenCalledWith(
+      'itin-1',
+      ['s2', 's1'],
+      'user-1',
+      'user',
+    );
     expect(res).toBeDefined();
   });
 
   it('should call addStop on POST :id/stops', async () => {
     mockItinerariesService.addStop.mockResolvedValue({ _id: 'itin-1' });
     const req = { user: { userId: 'user-1', role: 'user' } };
-    const res = await controller.addStop(req, 'itin-1', { restaurant_id: 'rest-1' });
-    expect(mockItinerariesService.addStop).toHaveBeenCalledWith('itin-1', { restaurant_id: 'rest-1' }, 'user-1', 'user');
+    const res = await controller.addStop(req, 'itin-1', {
+      restaurant_id: 'rest-1',
+    });
+    expect(mockItinerariesService.addStop).toHaveBeenCalledWith(
+      'itin-1',
+      { restaurant_id: 'rest-1' },
+      'user-1',
+      'user',
+    );
     expect(res).toBeDefined();
   });
 
@@ -59,16 +76,28 @@ describe('ItinerariesController', () => {
     mockItinerariesService.removeStop.mockResolvedValue({ _id: 'itin-1' });
     const req = { user: { userId: 'user-1', role: 'user' } };
     const res = await controller.removeStop(req, 'itin-1', 'stop-1');
-    expect(mockItinerariesService.removeStop).toHaveBeenCalledWith('itin-1', 'stop-1', 'user-1', 'user');
+    expect(mockItinerariesService.removeStop).toHaveBeenCalledWith(
+      'itin-1',
+      'stop-1',
+      'user-1',
+      'user',
+    );
     expect(res).toBeDefined();
   });
 
   it('should call recalculateItinerary on POST :id/recalculate', async () => {
-    mockItinerariesService.recalculateItinerary.mockResolvedValue({ _id: 'itin-1' });
+    mockItinerariesService.recalculateItinerary.mockResolvedValue({
+      _id: 'itin-1',
+    });
     const req = { user: { userId: 'user-1', role: 'user' } };
     const dto = { budget: 350000, routing_mode: 'car' };
     const res = await controller.recalculateItinerary(req, 'itin-1', dto);
-    expect(mockItinerariesService.recalculateItinerary).toHaveBeenCalledWith('itin-1', dto, 'user-1', 'user');
+    expect(mockItinerariesService.recalculateItinerary).toHaveBeenCalledWith(
+      'itin-1',
+      dto,
+      'user-1',
+      'user',
+    );
     expect(res).toBeDefined();
   });
 });

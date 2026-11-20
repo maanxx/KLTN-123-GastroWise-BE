@@ -1,36 +1,34 @@
-# GASTROWISE – CHANGELOG & AUDIT TRAIL
-Tất cả các thay đổi kiến trúc, mã nguồn, tài liệu và quyết định kỹ thuật của dự án GastroWise được ghi nhận tại đây theo thứ tự thời gian.
+# GASTROWISE — MICROSERVICES MIGRATION CHANGELOG
 
----
+## [Unreleased] — refactor/microservices-backend — 2026-11-20
 
-## [Milestone 0: Phase 0] - 2026-11-17
+### Added
+- **NestJS Monorepo Structure:**
+  - `apps/core-service`: Independent NestJS application owning identity, catalog, reviews, favorites, taste DNA, interactions, and contacts.
+  - `apps/planning-service`: Independent NestJS application owning itinerary lifecycle and smart tour timetable generation.
+  - `libs/shared`: Pure TypeScript library containing contracts, enums, guards, and math utilities with zero database dependencies.
+- **Internal Communication Mesh:**
+  - `apps/core-service/src/internal/`: Internal provider module exposing candidate venue queries, taste profile vectors, and interaction ingestion for Planning Service.
+  - `libs/shared/src/guards/internal-auth.guard.ts`: Constant-time `X-Internal-Service-Key` verification guard.
+  - `apps/planning-service/src/acl/`: Anti-Corruption Layer with `CoreApiClient` (REST client for Core) and `AiApiClient` (REST client for OR-Tools TSPTW route optimization with 3500ms timeout & greedy fallback).
+- **API Gateway & Routing:**
+  - `nginx/nginx.conf`: Nginx API Gateway listening on port 8080 with path routing, CORS headers, rate limiting, and backward-compatible route rewrites.
+- **Containerization & DevOps:**
+  - `apps/core-service/Dockerfile`: Multi-stage production build for Core Service.
+  - `apps/planning-service/Dockerfile`: Multi-stage production build for Planning Service.
+  - `docker-compose.yml`: Microservices orchestration topology.
+  - `scripts/db-split-dryrun.ts`: Safe database partition validation dry-run tool.
+  - `docs/DEPLOYMENT_GUIDE.md`: Comprehensive local and Docker deployment manual.
+- **Security Hardening:**
+  - `apps/core-service/src/reviews/reviews.controller.ts`: Enforced `JwtAuthGuard` on creation, and ownership/admin validation on `PATCH /reviews/:id` and `DELETE /reviews/:id`.
+  - `apps/core-service/src/interactions/interactions.controller.ts`: Protected `GET /interactions/matrix` with `@Roles('admin')`.
+  - `KLTN-123-GastroWise-AI/app/core/auth.py`: Added `X-Internal-AI-Key` timing-safe verification dependency.
 
-### Added (Tạo mới tài liệu kiến trúc & migration)
-- `docs/migration/SOURCE_AUDIT.md`: Báo cáo kiểm kê toàn diện 5 repositories, phiên bản framework, build/type-check.
-- `docs/migration/MODULE_OWNERSHIP.md`: Bảng đặc tả ranh giới Bounded Contexts (DDD) và quyền sở hữu dữ liệu Core, Planning, AI.
-- `docs/migration/API_DEPENDENCIES.md`: Ma trận API liên service, request/response DTOs, timeout budgets và security headers.
-- `docs/migration/MIGRATION_PLAN.md`: Kế hoạch chuyển đổi 8 tuần chi tiết theo mô hình Strangler Pattern & phân công nhiệm vụ 2 thành viên.
-- `docs/architecture/CURRENT_ARCHITECTURE.md`: Phân tích thực trạng kiến trúc Monolith, các điểm nghẽn và khớp nối chặt (tight coupling).
-- `docs/architecture/TARGET_ARCHITECTURE.md`: Thiết kế kiến trúc Microservices mục tiêu (Clean Architecture, Sequence Diagrams).
-- `docs/architecture/SERVICE_BOUNDARIES.md`: Ranh giới dịch vụ, Anti-Corruption Layer (ACL), Circuit Breaker & Correlation ID.
-- `docs/architecture/DATABASE_OWNERSHIP.md`: Thiết kế Database per Service (`gastro_core` vs `gastro_planning`) & cơ chế snapshot dữ liệu.
-- `docs/progress/PROGRESS_REPORT.md`: Báo cáo bàn giao tiến độ Milestone 0.
-- `docs/progress/CHANGELOG.md`: Khởi tạo Changelog theo dõi tiến độ.
-- `docs/progress/KNOWN_ISSUES.md`: Bảng theo dõi các lỗi kỹ thuật và bảo mật phát hiện trong audit.
-- `docs/progress/NEXT_TASKS.md`: Danh mục công việc chi tiết chuẩn bị cho Milestone 1.
-
-### Verified (Xác thực kỹ thuật thực tế)
-- Xác thực 5 repositories đều đang ở branch `main`, trạng thái đồng bộ và working tree sạch (`working tree clean`).
-- Xác thực build thành công Backend NestJS (`npm run build`: Exit code 0).
-- Xác thực type-check thành công Customer Web (`npm run type-check`: Exit code 0).
-- Xác thực type-check thành công Admin Web (`tsc --noEmit`: Exit code 0).
-- Xác thực type-check thành công Mobile App (`tsc --noEmit`: Exit code 0).
-- Xác thực import thành công AI Microservice core modules và schemas (Exit code 0).
-- Xác thực MongoDB Atlas least-privilege user `gastrowise_ai_service` qua script Python (ping OK, read OK, write rejected code 8000, unauthorized users rejected code 8000).
-
-### Security & Architecture Discrepancies Noted
-- Ghi nhận lỗi lệch URL endpoint giữa NestJS và FastAPI (`/v1/recommendation/*` vs `/recommend/*`).
-- Ghi nhận lỗi dữ liệu hiển thị "5.4★" rating do chưa chuẩn hóa thang điểm 10 của Foody sang thang điểm 5 trong AI Microservice.
-- Ghi nhận lỗ hổng Broken Access Control ở endpoint xóa review và export matrix tương tác.
-- Ghi nhận khớp nối chặt trong `ItinerariesService` inject trực tiếp `RestaurantModel`.
-
+### Changed
+- `nest-cli.json`: Reconfigured to monorepo mode with projects `core-service`, `planning-service`, and `shared`.
+- `tsconfig.json`: Added path mapping `@shared/*` pointing to `libs/shared/src/*`.
+- `package.json`: Added scripts `build:core`, `build:planning`, `build:shared`, `build:all`, `start:core`, `start:planning`, `test:microservices`.
+- `apps/planning-service/src/itineraries/schemas/itinerary.schema.ts`: Converted `restaurant_id` to string scalar snapshot value object; converted `user_id` to string scalar; eliminated Mongoose `populate()` cross-boundary calls.
+- `apps/core-service/src/users/schemas/notification.schema.ts`: Converted `itineraryId` to scalar string to decouple from Planning DB.
+- `apps/core-service/src/restaurants/restaurants.service.ts`: Corrected AI endpoint URLs from `/v1/recommendation/...` to `/recommend/hybrid`, `/cf/train`, and `/copilot/message`.
+- `KLTN-123-GastroWise-AI/app/api/v1/router.py`: Added dual-route compatibility mounts for zero-downtime transition.

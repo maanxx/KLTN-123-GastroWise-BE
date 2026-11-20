@@ -21,4 +21,5 @@ export class FavoriteCollection extends Document {
   restaurantIds: (Restaurant | Types.ObjectId)[];
 }
 
-export const FavoriteCollectionSchema = SchemaFactory.createForClass(FavoriteCollection);
+export const FavoriteCollectionSchema =
+  SchemaFactory.createForClass(FavoriteCollection);

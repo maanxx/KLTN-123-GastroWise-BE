@@ -3,13 +3,13 @@ import mongoose, { HydratedDocument } from 'mongoose';
 
 export type ReviewDocument = HydratedDocument<Review>;
 
-@Schema({ collection: 'reviews', timestamps: true }) 
+@Schema({ collection: 'reviews', timestamps: true })
 export class Review {
   @Prop()
   tenQuan: string;
 
   // Đây là trường quan trọng để liên kết với Nhà hàng
-  @Prop({ index: true }) 
+  @Prop({ index: true })
   urlGoc: string;
 
   @Prop()
@@ -33,7 +33,11 @@ export class Review {
   @Prop()
   userName?: string;
 
-  @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', required: true })
+  @Prop({
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Restaurant',
+    required: true,
+  })
   restaurantId: mongoose.Types.ObjectId;
 
   @Prop({ type: [String], default: [] })

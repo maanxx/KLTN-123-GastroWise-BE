@@ -1,4 +1,12 @@
-import { IsEmail, IsEnum, IsNotEmpty, IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import {
+  IsEmail,
+  IsEnum,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Matches,
+  MinLength,
+} from 'class-validator';
 import { ContactTopic } from '../schemas/contact.schema';
 
 export class CreateContactDto {
@@ -9,7 +17,9 @@ export class CreateContactDto {
 
   @IsString()
   @IsNotEmpty({ message: 'Vui lòng nhập Số điện thoại' })
-  @Matches(/^(0[3|5|7|8|9])[0-9]{8}$/, { message: 'Số điện thoại không hợp lệ (VD: 0912345678)' })
+  @Matches(/^(0[3|5|7|8|9])[0-9]{8}$/, {
+    message: 'Số điện thoại không hợp lệ (VD: 0912345678)',
+  })
   phone: string;
 
   @IsEmail({}, { message: 'Địa chỉ Email không hợp lệ' })

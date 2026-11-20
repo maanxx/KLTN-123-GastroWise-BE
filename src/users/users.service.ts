@@ -37,7 +37,12 @@ export class UsersService {
     }
 
     const [data, total] = await Promise.all([
-      this.userModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).exec(),
+      this.userModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
       this.userModel.countDocuments(filter).exec(),
     ]);
 
@@ -46,7 +51,7 @@ export class UsersService {
       total,
       page,
       limit,
-      totalPages: Math.ceil(total / limit)
+      totalPages: Math.ceil(total / limit),
     };
   }
 
@@ -110,15 +115,18 @@ export class UsersService {
     });
   }
 
-  async updateProfile(userId: string, updateUserDto: UpdateUserDto): Promise<User> {
+  async updateProfile(
+    userId: string,
+    updateUserDto: UpdateUserDto,
+  ): Promise<User> {
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       throw new NotFoundException(`Invalid ID format`);
     }
-    
+
     const updatedUser = await this.userModel
       .findByIdAndUpdate(userId, updateUserDto, { new: true }) // { new: true } để trả về data MỚI
       .exec();
-      
+
     if (!updatedUser) {
       throw new NotFoundException(`User #${userId} not found`);
     }

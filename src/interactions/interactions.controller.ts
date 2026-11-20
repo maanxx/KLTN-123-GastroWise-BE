@@ -66,7 +66,8 @@ export class InteractionsController {
    */
   @Get('matrix')
   async getMatrixExport(@Query('limit') limit?: number) {
-    return this.interactionsService.getMatrixExport(limit ? Number(limit) : 5000);
+    return this.interactionsService.getMatrixExport(
+      limit ? Number(limit) : 5000,
+    );
   }
 }
-

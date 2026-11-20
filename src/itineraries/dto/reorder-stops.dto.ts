@@ -6,4 +6,3 @@ export class ReorderStopsDto {
   @IsString({ each: true })
   stop_ids: string[];
 }
-

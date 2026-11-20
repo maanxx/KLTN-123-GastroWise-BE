@@ -5,7 +5,11 @@ export type MenuItemDocument = HydratedDocument<MenuItem>;
 
 @Schema({ collection: 'menu_items', timestamps: true })
 export class MenuItem {
-  @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', required: true })
+  @Prop({
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Restaurant',
+    required: true,
+  })
   restaurantId: mongoose.Types.ObjectId;
 
   @Prop({ required: true })

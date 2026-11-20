@@ -1,4 +1,10 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  BadRequestException,
+  Logger,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { HttpService } from '@nestjs/axios';
@@ -13,7 +19,12 @@ import { TasteDnaService } from '../taste-dna/taste-dna.service';
 import { InteractionsService } from '../interactions/interactions.service';
 import { randomUUID as uuidv4 } from 'crypto';
 
-export function calculateHaversineDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+export function calculateHaversineDistanceKm(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
   if (!lat1 || !lon1 || !lat2 || !lon2) return 1.5;
   const R = 6371; // km
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -43,7 +54,10 @@ export function formatMinutesToTime(mins: number): string {
   return `${h < 10 ? '0' : ''}${h}:${m < 10 ? '0' : ''}${m}`;
 }
 
-export function calculateTasteAffinityScore(restaurant: any, profile: any): number {
+export function calculateTasteAffinityScore(
+  restaurant: any,
+  profile: any,
+): number {
   if (!profile) return 0.5;
   let score = 0.5;
   const tags = (restaurant.tags || '').toLowerCase();
@@ -64,7 +78,10 @@ export function calculateTasteAffinityScore(restaurant: any, profile: any): numb
     score -= 0.2;
   }
 
-  if (profile.sweet > 0.7 && /chè|trà sữa|kem|bánh ngọt|tráng miệng/i.test(combined)) {
+  if (
+    profile.sweet > 0.7 &&
+    /chè|trà sữa|kem|bánh ngọt|tráng miệng/i.test(combined)
+  ) {
     score += 0.2;
   }
 
@@ -96,7 +113,8 @@ export class ItinerariesService {
     const combined = `${tags} ${name}`.toLowerCase();
     if (/cà phê|cafe|trà sữa|nước|sinh tố/i.test(combined)) return 'cafe';
     if (/chè|bánh ngọt|kem|tráng miệng/i.test(combined)) return 'dessert';
-    if (/ăn vặt|khai vị|bánh mì|gỏi cuốn|salad/i.test(combined)) return 'starter';
+    if (/ăn vặt|khai vị|bánh mì|gỏi cuốn|salad/i.test(combined))
+      return 'starter';
     return 'main';
   }
 
@@ -124,7 +142,8 @@ export class ItinerariesService {
 
     const updatedStops = stops.map((stop, idx) => {
       const sLat = Number(stop.restaurant_lat || stop.lat) || startLat;
-      const sLng = Number(stop.restaurant_lng || stop.lon || stop.lng) || startLng;
+      const sLng =
+        Number(stop.restaurant_lng || stop.lon || stop.lng) || startLng;
       const dist = calculateHaversineDistanceKm(prevLat, prevLng, sLat, sLng);
       totalDistKm += dist;
       prevLat = sLat;
@@ -146,7 +165,9 @@ export class ItinerariesService {
         restaurant_name: stop.restaurant_name,
         restaurant_lat: sLat,
         restaurant_lng: sLng,
-        meal_type: stop.meal_type || this.inferMealType(stop.tags || '', stop.restaurant_name || ''),
+        meal_type:
+          stop.meal_type ||
+          this.inferMealType(stop.tags || '', stop.restaurant_name || ''),
         arrival_time: formatMinutesToTime(arrivalMins),
         departure_time: formatMinutesToTime(departureMins),
         dining_duration_mins: diningMins,
@@ -173,7 +194,10 @@ export class ItinerariesService {
     };
   }
 
-  async generateItinerary(userId: string, dto: GenerateItineraryDto): Promise<Itinerary> {
+  async generateItinerary(
+    userId: string,
+    dto: GenerateItineraryDto,
+  ): Promise<Itinerary> {
     const prompt = dto.prompt.toLowerCase();
     const desiredStops = Math.max(1, Math.min(dto.stop_count || 3, 10));
     const routingMode = dto.routing_mode || 'motorbike';
@@ -184,23 +208,23 @@ export class ItinerariesService {
 
     // 1. Phân tích từ khóa món ăn
     const keywordMap: Record<string, string> = {
-      'chay': 'ĐỒ CHAY',
-      'uống': 'ĐỒ UỐNG',
+      chay: 'ĐỒ CHAY',
+      uống: 'ĐỒ UỐNG',
       'tráng miệng': 'TRÁNG MIỆNG',
-      'lẩu': 'MÓN LẨU',
+      lẩu: 'MÓN LẨU',
       'ăn vặt': 'ĐỒ ĂN',
-      'nướng': 'MÓN NƯỚNG',
+      nướng: 'MÓN NƯỚNG',
       'hải sản': 'HẢI SẢN',
-      'pizza': 'PIZZA',
-      'sushi': 'SUSHI',
-      'cafe': 'CAFE',
+      pizza: 'PIZZA',
+      sushi: 'SUSHI',
+      cafe: 'CAFE',
       'cà phê': 'CAFE',
       'trà sữa': 'TRÀ SỮA',
-      'phở': 'PHỞ',
-      'bún': 'BÚN',
-      'cơm': 'CƠM',
+      phở: 'PHỞ',
+      bún: 'BÚN',
+      cơm: 'CƠM',
       'bánh mì': 'BÁNH MÌ',
-      'mì': 'MÌ',
+      mì: 'MÌ',
     };
 
     let selectedTag = '';
@@ -220,8 +244,18 @@ export class ItinerariesService {
       districtDisplay = `Quận ${qNumMatch[1]}`;
     } else {
       const nameDistricts = [
-        'thủ đức', 'bình thạnh', 'gò vấp', 'phú nhuận', 'tân bình', 
-        'tân phú', 'bình tân', 'nhà bè', 'hóc môn', 'củ chi', 'cần giờ', 'bình chánh'
+        'thủ đức',
+        'bình thạnh',
+        'gò vấp',
+        'phú nhuận',
+        'tân bình',
+        'tân phú',
+        'bình tân',
+        'nhà bè',
+        'hóc môn',
+        'củ chi',
+        'cần giờ',
+        'bình chánh',
       ];
       for (const name of nameDistricts) {
         if (prompt.includes(name)) {
@@ -241,7 +275,10 @@ export class ItinerariesService {
       query.tags = { $regex: new RegExp(selectedTag, 'i') };
     } else {
       const cleanPrompt = prompt
-        .replace(/(?:tôi|muốn|tìm|gợi ý|quán|nhà hàng|cho|mình|ở|tại|khu vực|ăn|uống|đi|giúp|với|nhé|nào|được)/gi, ' ')
+        .replace(
+          /(?:tôi|muốn|tìm|gợi ý|quán|nhà hàng|cho|mình|ở|tại|khu vực|ăn|uống|đi|giúp|với|nhé|nào|được)/gi,
+          ' ',
+        )
         .trim();
       const keywords = cleanPrompt.split(/\s+/).filter((w) => w.length > 1);
       if (keywords.length > 0) {
@@ -287,7 +324,9 @@ export class ItinerariesService {
         tasteProfile = await this.tasteDnaService.getProfile(userId);
       }
     } catch (err: any) {
-      this.logger.debug(`Could not load Taste DNA for user ${userId}: ${err.message}`);
+      this.logger.debug(
+        `Could not load Taste DNA for user ${userId}: ${err.message}`,
+      );
     }
 
     // Xếp hạng ứng viên bằng mô hình kết hợp: Rating (40%) + Taste DNA (30%) + Khoảng cách (30%)
@@ -298,7 +337,8 @@ export class ItinerariesService {
       const rating = Number(r.diemTrungBinh) || 4.0;
       const tasteScore = calculateTasteAffinityScore(r, tasteProfile);
       const proximityScore = Math.max(0, 1 - dist / 25);
-      const compositeScore = (rating / 5.0) * 0.4 + tasteScore * 0.3 + proximityScore * 0.3;
+      const compositeScore =
+        (rating / 5.0) * 0.4 + tasteScore * 0.3 + proximityScore * 0.3;
 
       const hours = (r.gioMoCua || '08:00 - 22:00').split('-');
       return {
@@ -330,7 +370,9 @@ export class ItinerariesService {
 
     try {
       const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
-      this.logger.log(`Calling AI Route Optimizer: ${aiUrl}/routes/optimize with desired_stops=${desiredStops}...`);
+      this.logger.log(
+        `Calling AI Route Optimizer: ${aiUrl}/routes/optimize with desired_stops=${desiredStops}...`,
+      );
 
       const aiResponse = await firstValueFrom(
         this.httpService.post(
@@ -351,8 +393,11 @@ export class ItinerariesService {
         const aiData = aiResponse.data;
         totalDistKm = aiData.total_distance_km;
         totalDurationMins = aiData.total_duration_mins;
-        totalCost = aiData.total_cost || (aiData.stops.length * 50000);
-        remainingBudget = aiData.remaining_budget !== undefined ? aiData.remaining_budget : Math.max(0, userBudget - totalCost);
+        totalCost = aiData.total_cost || aiData.stops.length * 50000;
+        remainingBudget =
+          aiData.remaining_budget !== undefined
+            ? aiData.remaining_budget
+            : Math.max(0, userBudget - totalCost);
         co2Saved = aiData.co2_saved_kg;
         optimizedBy = aiData.algorithm_used || 'OR-Tools TSPTW';
 
@@ -374,7 +419,9 @@ export class ItinerariesService {
         }));
       }
     } catch (aiErr: any) {
-      this.logger.warn(`AI Route Optimizer offline, falling back to local heuristic: ${aiErr.message}`);
+      this.logger.warn(
+        `AI Route Optimizer offline, falling back to local heuristic: ${aiErr.message}`,
+      );
     }
 
     // [TASK-BIZ-02-05 Fallback] Fallback sang Gastronomic Progression Heuristic nếu AI service không phản hồi
@@ -383,7 +430,7 @@ export class ItinerariesService {
       const selected = scoredCandidates.slice(0, desiredStops);
 
       const metrics = this.recalculateTimetableAndMetrics(
-        selected.map(c => ({
+        selected.map((c) => ({
           restaurant_id: new Types.ObjectId(c.id),
           restaurant_name: c.name,
           restaurant_lat: c.lat,
@@ -436,7 +483,10 @@ export class ItinerariesService {
   }
 
   async getItinerariesByUser(userId: string): Promise<Itinerary[]> {
-    return this.itineraryModel.find({ user_id: new Types.ObjectId(userId) }).sort({ created_at: -1 }).exec();
+    return this.itineraryModel
+      .find({ user_id: new Types.ObjectId(userId) })
+      .sort({ created_at: -1 })
+      .exec();
   }
 
   async getAllItineraries(): Promise<Itinerary[]> {
@@ -449,9 +499,14 @@ export class ItinerariesService {
 
   async getItineraryById(id: string, userId: string): Promise<Itinerary> {
     if (!Types.ObjectId.isValid(id) || !/^[0-9a-fA-F]{24}$/.test(id)) {
-      throw new NotFoundException(`Lộ trình với ID "${id}" không hợp lệ hoặc không tồn tại.`);
+      throw new NotFoundException(
+        `Lộ trình với ID "${id}" không hợp lệ hoặc không tồn tại.`,
+      );
     }
-    const itinerary = await this.itineraryModel.findById(id).populate('stops.restaurant_id').exec();
+    const itinerary = await this.itineraryModel
+      .findById(id)
+      .populate('stops.restaurant_id')
+      .exec();
     if (!itinerary) {
       throw new NotFoundException('Không tìm thấy lộ trình');
     }
@@ -477,9 +532,13 @@ export class ItinerariesService {
     }
 
     if (actorRole && actorRole !== 'admin') {
-      const ownerId = (itinerary.user_id as any)?._id?.toString() || itinerary.user_id?.toString();
+      const ownerId =
+        (itinerary.user_id as any)?._id?.toString() ||
+        itinerary.user_id?.toString();
       if (ownerId && actorId && ownerId !== actorId) {
-        throw new ForbiddenException('Access Denied: You do not own this itinerary.');
+        throw new ForbiddenException(
+          'Access Denied: You do not own this itinerary.',
+        );
       }
     }
 
@@ -542,19 +601,29 @@ export class ItinerariesService {
     }
 
     if (actorRole && actorRole !== 'admin') {
-      const ownerId = (itinerary.user_id as any)?._id?.toString() || itinerary.user_id?.toString();
+      const ownerId =
+        (itinerary.user_id as any)?._id?.toString() ||
+        itinerary.user_id?.toString();
       if (ownerId && actorId && ownerId !== actorId) {
-        throw new ForbiddenException('Access Denied: You do not own this itinerary.');
+        throw new ForbiddenException(
+          'Access Denied: You do not own this itinerary.',
+        );
       }
     }
 
     if (!Types.ObjectId.isValid(dto.restaurant_id)) {
-      throw new NotFoundException(`ID nhà hàng "${dto.restaurant_id}" không hợp lệ.`);
+      throw new NotFoundException(
+        `ID nhà hàng "${dto.restaurant_id}" không hợp lệ.`,
+      );
     }
 
-    const restaurant = await this.restaurantModel.findById(dto.restaurant_id).exec();
+    const restaurant = await this.restaurantModel
+      .findById(dto.restaurant_id)
+      .exec();
     if (!restaurant) {
-      throw new NotFoundException('Không tìm thấy thông tin nhà hàng để thêm vào lộ trình.');
+      throw new NotFoundException(
+        'Không tìm thấy thông tin nhà hàng để thêm vào lộ trình.',
+      );
     }
 
     const startLat = itinerary.start_location?.coordinates?.[1] || 10.7769;
@@ -567,14 +636,21 @@ export class ItinerariesService {
       restaurant_name: restaurant.tenQuan || 'Nhà hàng GastroWise',
       restaurant_lat: Number(restaurant.lat) || startLat,
       restaurant_lng: Number(restaurant.lon) || startLng,
-      meal_type: this.inferMealType(restaurant.tags || '', restaurant.tenQuan || ''),
+      meal_type: this.inferMealType(
+        restaurant.tags || '',
+        restaurant.tenQuan || '',
+      ),
       dining_duration_mins: 45,
       estimated_cost: 50000,
       tags: restaurant.tags || '',
     };
 
     const currentStops = [...itinerary.stops];
-    if (dto.insert_after_order !== undefined && dto.insert_after_order >= 0 && dto.insert_after_order <= currentStops.length) {
+    if (
+      dto.insert_after_order !== undefined &&
+      dto.insert_after_order >= 0 &&
+      dto.insert_after_order <= currentStops.length
+    ) {
       currentStops.splice(dto.insert_after_order, 0, newStop as any);
     } else {
       currentStops.push(newStop as any);
@@ -619,15 +695,21 @@ export class ItinerariesService {
     }
 
     if (actorRole && actorRole !== 'admin') {
-      const ownerId = (itinerary.user_id as any)?._id?.toString() || itinerary.user_id?.toString();
+      const ownerId =
+        (itinerary.user_id as any)?._id?.toString() ||
+        itinerary.user_id?.toString();
       if (ownerId && actorId && ownerId !== actorId) {
-        throw new ForbiddenException('Access Denied: You do not own this itinerary.');
+        throw new ForbiddenException(
+          'Access Denied: You do not own this itinerary.',
+        );
       }
     }
 
     const filteredStops = itinerary.stops.filter((s) => s.stop_id !== stopId);
     if (filteredStops.length === itinerary.stops.length) {
-      throw new NotFoundException(`Không tìm thấy điểm dừng với mã "${stopId}".`);
+      throw new NotFoundException(
+        `Không tìm thấy điểm dừng với mã "${stopId}".`,
+      );
     }
 
     const startLat = itinerary.start_location?.coordinates?.[1] || 10.7769;
@@ -672,9 +754,13 @@ export class ItinerariesService {
     }
 
     if (actorRole && actorRole !== 'admin') {
-      const ownerId = (itinerary.user_id as any)?._id?.toString() || itinerary.user_id?.toString();
+      const ownerId =
+        (itinerary.user_id as any)?._id?.toString() ||
+        itinerary.user_id?.toString();
       if (ownerId && actorId && ownerId !== actorId) {
-        throw new ForbiddenException('Access Denied: You do not own this itinerary.');
+        throw new ForbiddenException(
+          'Access Denied: You do not own this itinerary.',
+        );
       }
     }
 
@@ -696,7 +782,10 @@ export class ItinerariesService {
       try {
         const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
         const candidatePayload = itinerary.stops.map((s) => ({
-          id: (s.restaurant_id as any)?._id?.toString() || s.restaurant_id?.toString() || s.stop_id,
+          id:
+            (s.restaurant_id as any)?._id?.toString() ||
+            s.restaurant_id?.toString() ||
+            s.stop_id,
           name: s.restaurant_name,
           lat: s.restaurant_lat,
           lon: s.restaurant_lng,
@@ -747,7 +836,9 @@ export class ItinerariesService {
           aiOptimized = true;
         }
       } catch (e: any) {
-        this.logger.warn(`AI Route Optimizer recalculation offline, falling back: ${e.message}`);
+        this.logger.warn(
+          `AI Route Optimizer recalculation offline, falling back: ${e.message}`,
+        );
       }
     }
 
@@ -793,16 +884,21 @@ export class ItinerariesService {
     }
 
     if (actorRole && actorRole !== 'admin') {
-      const ownerId = (existing.user_id as any)?._id?.toString() || existing.user_id?.toString();
+      const ownerId =
+        (existing.user_id as any)?._id?.toString() ||
+        existing.user_id?.toString();
       if (ownerId && actorId && ownerId !== actorId) {
-        throw new ForbiddenException('Access Denied: You do not own this itinerary.');
+        throw new ForbiddenException(
+          'Access Denied: You do not own this itinerary.',
+        );
       }
     }
 
     const now = new Date();
-    const actorObjectId = actorId && Types.ObjectId.isValid(actorId)
-      ? new Types.ObjectId(actorId)
-      : null;
+    const actorObjectId =
+      actorId && Types.ObjectId.isValid(actorId)
+        ? new Types.ObjectId(actorId)
+        : null;
 
     const auditUpdate: Record<string, any> = { status: newStatus };
 
@@ -827,7 +923,9 @@ export class ItinerariesService {
     }
 
     if (newStatus === 'completed') {
-      const ownerIdStr = (updated.user_id as any)?._id?.toString() || (updated.user_id as any)?.toString();
+      const ownerIdStr =
+        (updated.user_id as any)?._id?.toString() ||
+        (updated.user_id as any)?.toString();
       if (ownerIdStr) {
         await this.interactionsService.recordEvent(ownerIdStr, {
           eventType: 'itinerary_complete',
@@ -837,9 +935,12 @@ export class ItinerariesService {
         });
 
         if (updated.stops && updated.stops.length > 0) {
-          const restaurantIds = updated.stops.map(s => s.restaurant_id);
-          const visitedRests = await this.restaurantModel.find({ _id: { $in: restaurantIds } }).lean().exec();
-          
+          const restaurantIds = updated.stops.map((s) => s.restaurant_id);
+          const visitedRests = await this.restaurantModel
+            .find({ _id: { $in: restaurantIds } })
+            .lean()
+            .exec();
+
           let hasSpicy = false;
           let hasSweet = false;
           let hasUmami = false;
@@ -852,13 +953,19 @@ export class ItinerariesService {
           });
 
           const tasteAdjustment: any = {};
-          if (hasSpicy) tasteAdjustment.spicy = 0.80;
-          if (hasSweet) tasteAdjustment.sweet = 0.80;
+          if (hasSpicy) tasteAdjustment.spicy = 0.8;
+          if (hasSweet) tasteAdjustment.sweet = 0.8;
           if (hasUmami) tasteAdjustment.umami = 0.85;
 
           if (Object.keys(tasteAdjustment).length > 0) {
-            await this.tasteDnaService.applyFeedbackEma(ownerIdStr, tasteAdjustment, 0.12);
-            this.logger.log(`[Taste DNA Reinforcement] Đã cập nhật khẩu vị cho user ${ownerIdStr} sau khi hoàn thành lộ trình ${id}.`);
+            await this.tasteDnaService.applyFeedbackEma(
+              ownerIdStr,
+              tasteAdjustment,
+              0.12,
+            );
+            this.logger.log(
+              `[Taste DNA Reinforcement] Đã cập nhật khẩu vị cho user ${ownerIdStr} sau khi hoàn thành lộ trình ${id}.`,
+            );
           }
         }
       }
@@ -870,7 +977,11 @@ export class ItinerariesService {
   /**
    * [TASK-SEC-02] Admin / User: Xóa lộ trình + RBAC ownership verification
    */
-  async remove(id: string, actorId?: string, actorRole?: string): Promise<{ message: string }> {
+  async remove(
+    id: string,
+    actorId?: string,
+    actorRole?: string,
+  ): Promise<{ message: string }> {
     if (!Types.ObjectId.isValid(id)) {
       throw new NotFoundException(`ID lộ trình "${id}" không hợp lệ.`);
     }
@@ -881,9 +992,13 @@ export class ItinerariesService {
     }
 
     if (actorRole && actorRole !== 'admin') {
-      const ownerId = (existing.user_id as any)?._id?.toString() || existing.user_id?.toString();
+      const ownerId =
+        (existing.user_id as any)?._id?.toString() ||
+        existing.user_id?.toString();
       if (ownerId && actorId && ownerId !== actorId) {
-        throw new ForbiddenException('Access Denied: You do not own this itinerary.');
+        throw new ForbiddenException(
+          'Access Denied: You do not own this itinerary.',
+        );
       }
     }
 

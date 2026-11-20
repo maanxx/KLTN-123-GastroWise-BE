@@ -24,9 +24,15 @@ export class ItinerariesController {
 
   @UseGuards(JwtAuthGuard)
   @Post('generate')
-  async generateItinerary(@Request() req, @Body() generateItineraryDto: GenerateItineraryDto) {
+  async generateItinerary(
+    @Request() req,
+    @Body() generateItineraryDto: GenerateItineraryDto,
+  ) {
     const userId = req.user.userId || req.user.sub;
-    return this.itinerariesService.generateItinerary(userId, generateItineraryDto);
+    return this.itinerariesService.generateItinerary(
+      userId,
+      generateItineraryDto,
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -67,7 +73,12 @@ export class ItinerariesController {
   ) {
     const actorId = req.user.userId || req.user.sub;
     const actorRole = req.user.role || 'user';
-    return this.itinerariesService.reorderStops(id, dto.stop_ids, actorId, actorRole);
+    return this.itinerariesService.reorderStops(
+      id,
+      dto.stop_ids,
+      actorId,
+      actorRole,
+    );
   }
 
   /**
@@ -115,7 +126,12 @@ export class ItinerariesController {
   ) {
     const actorId = req.user.userId || req.user.sub;
     const actorRole = req.user.role || 'user';
-    return this.itinerariesService.recalculateItinerary(id, dto, actorId, actorRole);
+    return this.itinerariesService.recalculateItinerary(
+      id,
+      dto,
+      actorId,
+      actorRole,
+    );
   }
 
   /**
@@ -132,7 +148,12 @@ export class ItinerariesController {
   ) {
     const actorId = req.user.userId || req.user.sub;
     const actorRole = req.user.role || 'user';
-    return this.itinerariesService.updateStatus(id, body.status, actorId, actorRole);
+    return this.itinerariesService.updateStatus(
+      id,
+      body.status,
+      actorId,
+      actorRole,
+    );
   }
 
   /**
@@ -147,4 +168,3 @@ export class ItinerariesController {
     return this.itinerariesService.remove(id, actorId, actorRole);
   }
 }
-

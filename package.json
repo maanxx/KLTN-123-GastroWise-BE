@@ -7,6 +7,14 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",
+    "build:core": "nest build core-service",
+    "build:planning": "nest build planning-service",
+    "build:shared": "nest build shared",
+    "build:all": "nest build core-service && nest build planning-service",
+    "start:core": "nest start core-service",
+    "start:core:dev": "nest start core-service --watch",
+    "start:planning": "nest start planning-service",
+    "start:planning:dev": "nest start planning-service --watch",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -14,6 +22,7 @@
     "start:prod": "node dist/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
+    "test:microservices": "jest libs/ apps/",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
@@ -86,15 +95,19 @@
       "json",
       "ts"
     ],
-    "rootDir": "src",
+    "rootDir": ".",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
+    "moduleNameMapper": {
+      "^@shared/(.*)$": "<rootDir>/libs/shared/src/$1",
+      "^@shared$": "<rootDir>/libs/shared/src"
+    },
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],
-    "coverageDirectory": "../coverage",
+    "coverageDirectory": "./coverage",
     "testEnvironment": "node"
   }
 }

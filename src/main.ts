@@ -33,15 +33,23 @@ async function bootstrap() {
     ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
     : [];
 
-  const allowedOrigins = Array.from(new Set([...defaultAllowedOrigins, ...customAllowed]));
+  const allowedOrigins = Array.from(
+    new Set([...defaultAllowedOrigins, ...customAllowed]),
+  );
 
   app.enableCors({
     origin: (origin, callback) => {
       // Cho phép requests không có header origin (mobile apps native, Postman, server-to-server)
-      if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      if (
+        !origin ||
+        allowedOrigins.includes(origin) ||
+        allowedOrigins.includes('*')
+      ) {
         callback(null, true);
       } else {
-        callback(new Error(`Origin ${origin} not allowed by GastroWise CORS policy`));
+        callback(
+          new Error(`Origin ${origin} not allowed by GastroWise CORS policy`),
+        );
       }
     },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
@@ -49,6 +57,8 @@ async function bootstrap() {
   });
 
   await app.listen(process.env.PORT ?? 3001, '0.0.0.0');
-  console.log(`🚀 NestJS Backend is listening on 0.0.0.0:${process.env.PORT ?? 3001}`);
+  console.log(
+    `🚀 NestJS Backend is listening on 0.0.0.0:${process.env.PORT ?? 3001}`,
+  );
 }
 bootstrap();

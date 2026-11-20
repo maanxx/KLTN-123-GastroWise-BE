@@ -63,14 +63,14 @@ describe('UsersService', () => {
         firstName: 'Test',
         lastName: 'User',
       };
-      
+
       mockUser.save.mockResolvedValue(mockUser);
       jest.spyOn(userModel, 'constructor' as any).mockReturnValue(mockUser);
       service = new UsersService(
         class MockModel {
           constructor(public data: any) {}
           save = jest.fn().mockResolvedValue(mockUser);
-        } as any
+        } as any,
       );
 
       const result = await service.create(createUserDto as any);

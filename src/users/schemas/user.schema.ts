@@ -68,7 +68,10 @@ export class User {
   @Prop({ type: [String], default: [] })
   preferences: string[];
 
-  @Prop({ type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant' }], default: [] })
+  @Prop({
+    type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant' }],
+    default: [],
+  })
   savedRestaurants: mongoose.Types.ObjectId[];
 
   @Prop({ required: true, default: 'active', enum: ['active', 'banned'] })

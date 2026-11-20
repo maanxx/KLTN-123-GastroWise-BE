@@ -37,21 +37,32 @@ describe('RolesGuard', () => {
 
   it('should allow access if user has the required admin role', () => {
     jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(['admin']);
-    const context = createMockExecutionContext({ role: 'admin', userId: 'admin_123' });
+    const context = createMockExecutionContext({
+      role: 'admin',
+      userId: 'admin_123',
+    });
 
     expect(guard.canActivate(context)).toBe(true);
   });
 
   it('should allow access if user has owner role and route permits owner or admin', () => {
-    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(['admin', 'owner']);
-    const context = createMockExecutionContext({ role: 'owner', userId: 'owner_123' });
+    jest
+      .spyOn(reflector, 'getAllAndOverride')
+      .mockReturnValue(['admin', 'owner']);
+    const context = createMockExecutionContext({
+      role: 'owner',
+      userId: 'owner_123',
+    });
 
     expect(guard.canActivate(context)).toBe(true);
   });
 
   it('should throw ForbiddenException if regular user attempts to access admin route', () => {
     jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(['admin']);
-    const context = createMockExecutionContext({ role: 'user', userId: 'user_123' });
+    const context = createMockExecutionContext({
+      role: 'user',
+      userId: 'user_123',
+    });
 
     expect(() => guard.canActivate(context)).toThrow(ForbiddenException);
     expect(() => guard.canActivate(context)).toThrow(
@@ -64,7 +75,9 @@ describe('RolesGuard', () => {
     const context = createMockExecutionContext(undefined);
 
     expect(() => guard.canActivate(context)).toThrow(ForbiddenException);
-    expect(() => guard.canActivate(context)).toThrow('Access Denied: Authentication required');
+    expect(() => guard.canActivate(context)).toThrow(
+      'Access Denied: Authentication required',
+    );
   });
 
   it('should default user role to user if role property is missing on user object', () => {
