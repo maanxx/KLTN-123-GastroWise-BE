@@ -30,11 +30,15 @@ export class ReviewsService {
   async analyzeSentiment(content: string) {
     try {
       const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
+      const headers: Record<string, string> = {};
+      if (process.env.INTERNAL_AI_KEY) {
+        headers['X-Internal-AI-Key'] = process.env.INTERNAL_AI_KEY;
+      }
       const aiResponse = await firstValueFrom(
         this.httpService.post(
           `${aiUrl}/analyze-sentiment`,
           { review: content },
-          { timeout: 3000 },
+          { headers, timeout: 3000 },
         ),
       );
       if (aiResponse && aiResponse.data && aiResponse.data.label) {

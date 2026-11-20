@@ -24,6 +24,8 @@ const aiUrl = process.env.AI_SERVICE_URL;
 @Injectable()
 export class RestaurantsService implements OnApplicationBootstrap {
   private readonly logger = new Logger(RestaurantsService.name);
+  private readonly aiBaseUrl: string;
+  private readonly internalAiKey: string;
 
   constructor(
     @InjectModel(Restaurant.name)
@@ -35,7 +37,16 @@ export class RestaurantsService implements OnApplicationBootstrap {
     private readonly tasteDnaService?: TasteDnaService,
     @Optional()
     private readonly interactionsService?: InteractionsService,
-  ) {}
+  ) {
+    this.aiBaseUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
+    const key = process.env.INTERNAL_AI_KEY;
+    if (!key) {
+      throw new Error(
+        'Missing mandatory security configuration: INTERNAL_AI_KEY must be set in environment variables',
+      );
+    }
+    this.internalAiKey = key;
+  }
 
   async onApplicationBootstrap() {
     await this.ensureGeoJsonLocations();
@@ -511,12 +522,11 @@ export class RestaurantsService implements OnApplicationBootstrap {
       }
 
       // 4. Gọi FastAPI /recommend/hybrid
-      const aiKey = process.env.INTERNAL_AI_KEY;
-      const headers: Record<string, string> = aiKey
-        ? { 'X-Internal-AI-Key': aiKey }
-        : {};
+      const headers: Record<string, string> = {
+        'X-Internal-AI-Key': this.internalAiKey,
+      };
       const aiRes = await firstValueFrom(
-        this.httpService.post(`${aiBaseUrl}/recommend/hybrid`, payload, {
+        this.httpService.post(`${this.aiBaseUrl}/recommend/hybrid`, payload, {
           headers,
           timeout: 3500,
         }),
@@ -628,14 +638,12 @@ export class RestaurantsService implements OnApplicationBootstrap {
     }
     try {
       const interactions = await this.interactionsService.getMatrixExport(5000);
-      const aiBaseUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
-      const aiKey = process.env.INTERNAL_AI_KEY;
-      const headers: Record<string, string> = aiKey
-        ? { 'X-Internal-AI-Key': aiKey }
-        : {};
+      const headers: Record<string, string> = {
+        'X-Internal-AI-Key': this.internalAiKey,
+      };
       const res = await firstValueFrom(
         this.httpService.post(
-          `${aiBaseUrl}/cf/train`,
+          `${this.aiBaseUrl}/cf/train`,
           { interactions },
           { headers, timeout: 10000 },
         ),
@@ -1140,12 +1148,11 @@ export class RestaurantsService implements OnApplicationBootstrap {
       }
 
       // Gọi NLU Copilot endpoint
-      const aiKey = process.env.INTERNAL_AI_KEY;
-      const headers: Record<string, string> = aiKey
-        ? { 'X-Internal-AI-Key': aiKey }
-        : {};
+      const headers: Record<string, string> = {
+        'X-Internal-AI-Key': this.internalAiKey,
+      };
       const aiResponse = await firstValueFrom(
-        this.httpService.post(`${aiBaseUrl}/copilot/message`, payload, {
+        this.httpService.post(`${this.aiBaseUrl}/copilot/message`, payload, {
           headers,
           timeout: 5000,
         }),

@@ -1,12 +1,12 @@
 # GASTROWISE — NEXT TASKS & VERIFICATION ROADMAP
 
 **Branch:** `refactor/microservices-backend`  
-**Current Phase Completed:** Milestone 1 (Security & Configuration Hardening)  
+**Current Phase Completed:** Milestone 1 & Milestone 1.1 (Security Review Conditions Resolved)  
 **Next Phase:** Milestone 2 (Data Flow & Domain Boundary Optimization) — *Awaiting Human Review*  
 
 ---
 
-## 1. COMPLETED IN MILESTONE 1
+## 1. COMPLETED IN MILESTONE 1 & 1.1
 - [x] Removed all insecure default secrets from `docker-compose.yml`, `auth.service.ts`, `core-api.client.ts`, `ai-api.client.ts`.
 - [x] Hardened mutual service authentication with constant-time verification and missing server configuration checks.
 - [x] Structured error differentiation in `CoreApiClient` (401/403, 503/timeout/refused, 500, 404).
@@ -14,7 +14,10 @@
 - [x] Standardized JWT validation (`issuer: 'gastrowise-auth'`, `audience: 'gastrowise-api'`).
 - [x] Fixed DTO whitelist stripping in `CreateReviewDto` and entrypoint ValidationPipe.
 - [x] Added 22 security unit tests (`security.spec.ts`, `jwt.strategy.spec.ts`, `internal-auth.guard.spec.ts`).
-- [x] Documented results in `docs/security/SECURITY_HARDENING_REPORT.md`.
+- [x] Completed Independent Verification Review: PASS WITH CONDITIONS (`MILESTONE_1_VERIFICATION_REVIEW.md`).
+- [x] **Milestone 1.1:** Resolved Condition 1 (rethrow `UnauthorizedException` in `ItinerariesService`).
+- [x] **Milestone 1.1:** Resolved Condition 2 (constructor fail-fast check in `RestaurantsService` and `ReviewsService` header injection).
+- [x] Documented results in `docs/security/MILESTONE_1_1_CONDITIONS_RESOLUTION.md`.
 
 ---
 

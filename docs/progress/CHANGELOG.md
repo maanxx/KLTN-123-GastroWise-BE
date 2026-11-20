@@ -1,5 +1,18 @@
 # GASTROWISE — MICROSERVICES MIGRATION CHANGELOG
 
+## [Milestone 1.1: Resolve Security Review Conditions] — refactor/microservices-backend — 2026-11-20
+
+### Security Fixes & Improvements
+- **Anti-Corruption Layer Hardening:**
+  - `apps/planning-service/src/itineraries/itineraries.service.ts`: Added explicit propagation of `UnauthorizedException` in `generateItinerary` when `AiApiClient.optimizeRoute` returns authentication errors (HTTP 401/403). Local heuristic fallback is prevented from swallowing security exceptions.
+  - `apps/planning-service/src/itineraries/itineraries.service.spec.ts`: Added unit test confirming `UnauthorizedException` rethrowing behavior.
+- **Fail-Fast Core AI Client:**
+  - `apps/core-service/src/restaurants/restaurants.service.ts`: Enforced `INTERNAL_AI_KEY` presence in constructor with fail-fast throw. Centralized AI requests to use `this.internalAiKey` and `this.aiBaseUrl`.
+  - `apps/core-service/src/reviews/reviews.service.ts`: Added `X-Internal-AI-Key` header injection to `analyzeSentiment`.
+  - `apps/core-service/src/restaurants/restaurants.recommendation.spec.ts`: Configured `INTERNAL_AI_KEY` in test lifecycle.
+- **Documentation:**
+  - Created `docs/security/MILESTONE_1_1_CONDITIONS_RESOLUTION.md`.
+
 ## [Milestone 1: Security & Configuration Hardening] — refactor/microservices-backend — 2026-11-20
 
 ### Security & Hardening

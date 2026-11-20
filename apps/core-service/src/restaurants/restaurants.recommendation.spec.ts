@@ -44,6 +44,7 @@ describe('RestaurantsService - Hybrid Personalized Recommendations (TASK-P2-01 &
   ];
 
   beforeEach(async () => {
+    process.env.INTERNAL_AI_KEY = 'test-ai-key-for-recommendation-spec';
     const mockQueryChain: any = {
       lean: jest.fn().mockReturnThis(),
       sort: jest.fn().mockReturnThis(),

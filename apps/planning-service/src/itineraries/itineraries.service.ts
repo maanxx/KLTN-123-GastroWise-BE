@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  UnauthorizedException,
   Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -347,6 +348,18 @@ export class ItinerariesService {
         optimizedBy = aiResult.solver;
       }
     } catch (aiErr: any) {
+      if (
+        aiErr instanceof UnauthorizedException ||
+        aiErr?.status === 401 ||
+        aiErr?.status === 403 ||
+        aiErr?.response?.status === 401 ||
+        aiErr?.response?.status === 403
+      ) {
+        this.logger.error(
+          `AI Route Optimizer authentication failed: ${aiErr.message}. Aborting itinerary generation.`,
+        );
+        throw aiErr;
+      }
       this.logger.warn(`AI Route Optimizer error: ${aiErr.message}`);
     }
 

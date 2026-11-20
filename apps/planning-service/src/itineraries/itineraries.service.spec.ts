@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
+import { UnauthorizedException } from '@nestjs/common';
 import {
   ItinerariesService,
   calculateHaversineDistanceKm,
@@ -166,6 +167,25 @@ describe('ItinerariesService (Planning Microservice ACL & Heuristics)', () => {
       expect(mockCoreApiClient.getCandidates).toHaveBeenCalled();
       expect(result).toBeDefined();
       expect(result.stops.length).toBeGreaterThan(0);
+    });
+
+    it('should rethrow UnauthorizedException when AI Route Optimizer returns authentication error', async () => {
+      mockAiApiClient.optimizeRoute.mockRejectedValueOnce(
+        new UnauthorizedException(
+          'AI Service authentication failed (HTTP 401)',
+        ),
+      );
+
+      await expect(
+        service.generateItinerary('user-123', {
+          prompt: 'Tìm quán ốc ngon',
+          start_time: '11:00',
+          end_time: '14:00',
+          lat: 10.7769,
+          lng: 106.7009,
+          budget: 200000,
+        }),
+      ).rejects.toThrow(UnauthorizedException);
     });
   });
 
