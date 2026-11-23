@@ -75,20 +75,20 @@ export class RestaurantsController {
     @Query('order') order: string,
     @Query('rating') rating: string,
     @Query('openNow') openNow: string,
-    @Query('userLat') userLat: string, 
+    @Query('userLat') userLat: string,
     @Query('userLon') userLon: string,
     @Query('search') search: string,
     @Query('city') city: string,
     @Query('tags') tags: string,
   ) {
     return this.restaurantsService.findAll(
-      page, 
-      limit, 
-      sortBy, 
-      order, 
-      rating, 
-      openNow, 
-      userLat, 
+      page,
+      limit,
+      sortBy,
+      order,
+      rating,
+      openNow,
+      userLat,
       userLon,
       search,
       city,
@@ -167,7 +167,9 @@ export class RestaurantsController {
         const token = req.headers.authorization.split(' ')[1];
         if (token) {
           const payloadBase64 = token.split('.')[1];
-          const payloadJson = Buffer.from(payloadBase64, 'base64').toString('utf8');
+          const payloadJson = Buffer.from(payloadBase64, 'base64').toString(
+            'utf8',
+          );
           const payload = JSON.parse(payloadJson);
           userId = payload.sub || payload._id || payload.id;
         }
@@ -206,7 +208,10 @@ export class RestaurantsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'owner')
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateRestaurantDto: UpdateRestaurantDto) {
+  update(
+    @Param('id') id: string,
+    @Body() updateRestaurantDto: UpdateRestaurantDto,
+  ) {
     return this.restaurantsService.update(id, updateRestaurantDto);
   }
 
@@ -221,19 +226,29 @@ export class RestaurantsController {
   }
 
   @Post('chat')
-  async chat(@Req() req: any, @Body() body: { message: string, userLat?: string, userLon?: string }) {
+  async chat(
+    @Req() req: any,
+    @Body() body: { message: string; userLat?: string; userLon?: string },
+  ) {
     let userId = req.user?.sub || req.user?._id || req.user?.id;
     if (!userId && req.headers?.authorization) {
       try {
         const token = req.headers.authorization.split(' ')[1];
         if (token) {
           const payloadBase64 = token.split('.')[1];
-          const payloadJson = Buffer.from(payloadBase64, 'base64').toString('utf8');
+          const payloadJson = Buffer.from(payloadBase64, 'base64').toString(
+            'utf8',
+          );
           const payload = JSON.parse(payloadJson);
           userId = payload.sub || payload._id || payload.id;
         }
       } catch {}
     }
-    return this.restaurantsService.chatWithAI(body.message, body.userLat, body.userLon, userId);
+    return this.restaurantsService.chatWithAI(
+      body.message,
+      body.userLat,
+      body.userLon,
+      userId,
+    );
   }
 }

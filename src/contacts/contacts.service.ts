@@ -2,7 +2,11 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
-import { Contact, ContactDocument, ContactTopic } from './schemas/contact.schema';
+import {
+  Contact,
+  ContactDocument,
+  ContactTopic,
+} from './schemas/contact.schema';
 import { CreateContactDto } from './dto/create-contact.dto';
 
 @Injectable()
@@ -29,7 +33,10 @@ export class ContactsService {
   }
 
   // Phân loại tự động bằng Gemini AI (hoặc Rule-based)
-  private async classifyWithAI(topic: string, message: string): Promise<string> {
+  private async classifyWithAI(
+    topic: string,
+    message: string,
+  ): Promise<string> {
     try {
       const apiKey = this.configService.get<string>('GEMINI_API_KEY');
       if (apiKey && apiKey !== 'your_gemini_api_key_here') {
@@ -51,7 +58,8 @@ Message: ${message}`;
     }
 
     // Fallback nếu không gọi AI
-    if (topic === ContactTopic.MERCHANT) return '🏪 Yêu cầu Hợp tác B2B (Độ ưu tiên cao)';
+    if (topic === ContactTopic.MERCHANT)
+      return '🏪 Yêu cầu Hợp tác B2B (Độ ưu tiên cao)';
     if (topic === ContactTopic.COMPLAINT) return '⚠️ Khiếu nại Khẩn cấp';
     return '📩 Góp ý / Phản hồi Thông thường';
   }
@@ -65,9 +73,17 @@ Message: ${message}`;
     message: string;
     aiClassification: string;
   }) {
-    const webhookUrl = this.configService.get<string>('GOOGLE_SHEET_WEBHOOK_URL');
-    if (!webhookUrl || webhookUrl.trim() === '' || webhookUrl.includes('your_google_sheet')) {
-      this.logger.log('ℹ️ GOOGLE_SHEET_WEBHOOK_URL chưa được cấu hình. Bỏ qua đồng bộ Google Sheet.');
+    const webhookUrl = this.configService.get<string>(
+      'GOOGLE_SHEET_WEBHOOK_URL',
+    );
+    if (
+      !webhookUrl ||
+      webhookUrl.trim() === '' ||
+      webhookUrl.includes('your_google_sheet')
+    ) {
+      this.logger.log(
+        'ℹ️ GOOGLE_SHEET_WEBHOOK_URL chưa được cấu hình. Bỏ qua đồng bộ Google Sheet.',
+      );
       return;
     }
 
@@ -86,16 +102,26 @@ Message: ${message}`;
 
       this.logger.log(`📊 [GOOGLE SHEET SYNCED] Status: ${response.status}`);
     } catch (err) {
-      this.logger.error(`❌ Error syncing to Google Sheet Webhook: ${err.message}`);
+      this.logger.error(
+        `❌ Error syncing to Google Sheet Webhook: ${err.message}`,
+      );
     }
   }
 
   // Gửi Email Phản Hồi Tự Động cho Khách hàng
-  private async sendAutoReplyEmail(email: string, name: string, topicText: string) {
+  private async sendAutoReplyEmail(
+    email: string,
+    name: string,
+    topicText: string,
+  ) {
     try {
       const nodemailer = require('nodemailer');
-      const smtpHost = this.configService.get<string>('SMTP_HOST') || 'smtp.gmail.com';
-      const smtpPort = parseInt(this.configService.get<string>('SMTP_PORT') || '587', 10);
+      const smtpHost =
+        this.configService.get<string>('SMTP_HOST') || 'smtp.gmail.com';
+      const smtpPort = parseInt(
+        this.configService.get<string>('SMTP_PORT') || '587',
+        10,
+      );
       const smtpUser = this.configService.get<string>('SMTP_USER');
       const smtpPass = this.configService.get<string>('SMTP_PASS');
 
@@ -136,12 +162,15 @@ Message: ${message}`;
         await transporter.sendMail({
           from: `"GastroWise Support" <${smtpUser}>`,
           to: email,
-          subject: '[GastroWise] Xác nhận đã nhận được thông tin liên hệ của bạn',
+          subject:
+            '[GastroWise] Xác nhận đã nhận được thông tin liên hệ của bạn',
           html: mailContent,
         });
         this.logger.log(`✉️ [AUTO-REPLY EMAIL SENT VIA SMTP] to ${email}`);
       } else {
-        this.logger.log(`✉️ [AUTO-REPLY EMAIL LOGGED] (Chưa cấu hình SMTP) to ${email}`);
+        this.logger.log(
+          `✉️ [AUTO-REPLY EMAIL LOGGED] (Chưa cấu hình SMTP) to ${email}`,
+        );
       }
     } catch (err) {
       this.logger.error(`❌ Lỗi khi gửi Auto-Reply Email: ${err.message}`);
@@ -182,7 +211,8 @@ Message: ${message}`;
     this.sendAutoReplyEmail(email, name, topicText);
 
     return {
-      message: 'Cảm ơn bạn đã liên hệ! GastroWise đã nhận được thông tin và sẽ phản hồi sớm nhất.',
+      message:
+        'Cảm ơn bạn đã liên hệ! GastroWise đã nhận được thông tin và sẽ phản hồi sớm nhất.',
       data: savedContact,
     };
   }
@@ -209,11 +239,9 @@ Message: ${message}`;
       if (resolvedBy) updateData.resolvedBy = resolvedBy;
     }
 
-    const updated = await this.contactModel.findByIdAndUpdate(
-      id,
-      { $set: updateData },
-      { new: true },
-    ).exec();
+    const updated = await this.contactModel
+      .findByIdAndUpdate(id, { $set: updateData }, { new: true })
+      .exec();
 
     if (!updated) {
       throw new NotFoundException('Không tìm thấy liên hệ để cập nhật.');

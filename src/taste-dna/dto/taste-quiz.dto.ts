@@ -27,4 +27,3 @@ export class TasteQuizDto {
   @IsString()
   budget?: string;
 }
-

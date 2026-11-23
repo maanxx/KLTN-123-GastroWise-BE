@@ -1,8 +1,38 @@
 {
   "$schema": "https://json.schemastore.org/nest-cli",
   "collection": "@nestjs/schematics",
-  "sourceRoot": "src",
+  "monorepo": true,
+  "root": "apps/core-service",
   "compilerOptions": {
     "deleteOutDir": true
+  },
+  "projects": {
+    "core-service": {
+      "type": "application",
+      "root": "apps/core-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/core-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/core-service/tsconfig.app.json"
+      }
+    },
+    "planning-service": {
+      "type": "application",
+      "root": "apps/planning-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/planning-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/planning-service/tsconfig.app.json"
+      }
+    },
+    "shared": {
+      "type": "library",
+      "root": "libs/shared",
+      "entryFile": "index",
+      "sourceRoot": "libs/shared/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/shared/tsconfig.lib.json"
+      }
+    }
   }
 }

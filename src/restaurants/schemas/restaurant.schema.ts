@@ -55,7 +55,11 @@ export class Restaurant {
   @Prop({ default: 0 })
   reviewsCount: number;
 
-  @Prop({ required: true, default: 'open', enum: ['open', 'closed', 'pending'] })
+  @Prop({
+    required: true,
+    default: 'open',
+    enum: ['open', 'closed', 'pending'],
+  })
   status: string;
 
   // --- Nghiệp vụ Quản trị Nhà hàng (Admin & AI Badges) ---

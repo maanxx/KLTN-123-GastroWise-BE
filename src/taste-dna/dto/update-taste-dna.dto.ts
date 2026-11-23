@@ -1,5 +1,12 @@
 // src/taste-dna/dto/update-taste-dna.dto.ts
-import { IsArray, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import {
+  IsArray,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
 
 export class UpdateTasteDnaDto {
   @IsOptional()
@@ -57,4 +64,3 @@ export class UpdateTasteDnaDto {
   @IsString()
   budgetPreference?: string;
 }
-

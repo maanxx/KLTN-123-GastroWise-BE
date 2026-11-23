@@ -40,17 +40,17 @@ export class AuthController {
   // --- 1. GOOGLE LOGIN ---
   @Get('google')
   @UseGuards(AuthGuard('google'))
-  async googleAuth(@Req() req) {
-  }
+  async googleAuth(@Req() req) {}
 
   @Get('google/callback')
   @UseGuards(AuthGuard('google'))
   async googleAuthRedirect(@Req() req, @Res() res: Response) {
-    const { accessToken, refreshToken } = await this.authService.signInWithGoogle(req.user);
+    const { accessToken, refreshToken } =
+      await this.authService.signInWithGoogle(req.user);
 
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
 
-    console.log("🚀 Redirecting Google User to:", frontendUrl);
+    console.log('🚀 Redirecting Google User to:', frontendUrl);
 
     res.redirect(
       `${frontendUrl}/auth/callback?accessToken=${accessToken}&refreshToken=${refreshToken}`,
@@ -110,14 +110,18 @@ export class AuthController {
           callback(null, uploadPath);
         },
         filename: (req, file, callback) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          const uniqueSuffix =
+            Date.now() + '-' + Math.round(Math.random() * 1e9);
           const ext = extname(file.originalname);
           callback(null, `${uniqueSuffix}${ext}`);
         },
       }),
       fileFilter: (req, file, callback) => {
         if (!file.mimetype.match(/\/(jpg|jpeg|png|gif|webp)$/)) {
-          return callback(new BadRequestException('Only image files are allowed!'), false);
+          return callback(
+            new BadRequestException('Only image files are allowed!'),
+            false,
+          );
         }
         callback(null, true);
       },
@@ -143,11 +147,19 @@ export class AuthController {
 
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
-  resetPassword(@Body() body: { email: string; otp: string; newPassword: string }) {
+  resetPassword(
+    @Body() body: { email: string; otp: string; newPassword: string },
+  ) {
     if (!body.email || !body.newPassword) {
-      throw new BadRequestException('Vui lòng điền đầy đủ Email và Mật khẩu mới!');
+      throw new BadRequestException(
+        'Vui lòng điền đầy đủ Email và Mật khẩu mới!',
+      );
     }
-    return this.authService.resetPassword(body.email, body.otp, body.newPassword);
+    return this.authService.resetPassword(
+      body.email,
+      body.otp,
+      body.newPassword,
+    );
   }
 
   // --- 2FA GOOGLE AUTHENTICATOR ENDPOINTS ---
@@ -167,10 +179,18 @@ export class AuthController {
 
   @Post('2fa/reset-password')
   @HttpCode(HttpStatus.OK)
-  resetPasswordWith2FA(@Body() body: { email: string; totpCode: string; newPassword: string }) {
+  resetPasswordWith2FA(
+    @Body() body: { email: string; totpCode: string; newPassword: string },
+  ) {
     if (!body.email || !body.totpCode || !body.newPassword) {
-      throw new BadRequestException('Vui lòng điền đầy đủ Email, Mã 2FA và Mật khẩu mới!');
+      throw new BadRequestException(
+        'Vui lòng điền đầy đủ Email, Mã 2FA và Mật khẩu mới!',
+      );
     }
-    return this.authService.resetPasswordWith2FA(body.email, body.totpCode, body.newPassword);
+    return this.authService.resetPasswordWith2FA(
+      body.email,
+      body.totpCode,
+      body.newPassword,
+    );
   }
 }

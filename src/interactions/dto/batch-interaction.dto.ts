@@ -1,6 +1,11 @@
 // src/interactions/dto/batch-interaction.dto.ts
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, IsArray, ValidateNested } from 'class-validator';
+import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
+  ValidateNested,
+} from 'class-validator';
 import { CreateInteractionDto } from './create-interaction.dto';
 
 export class BatchInteractionDto {
@@ -11,4 +16,3 @@ export class BatchInteractionDto {
   @Type(() => CreateInteractionDto)
   events: CreateInteractionDto[];
 }
-

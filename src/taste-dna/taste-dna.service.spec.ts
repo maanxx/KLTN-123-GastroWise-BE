@@ -81,7 +81,7 @@ describe('TasteDnaService (TASK-P1-01 & TASK-P1-02)', () => {
     const res = await service.applyFeedbackEma(
       '64b8f0000000000000000001',
       { spicy: 0.85 },
-      0.15
+      0.15,
     );
 
     expect(res?.spicy).toBeCloseTo(0.5525, 4);
@@ -105,4 +105,3 @@ describe('TasteDnaService (TASK-P1-01 & TASK-P1-02)', () => {
     expect(quizResult.confidenceScore).toBe(0.55);
   });
 });
-

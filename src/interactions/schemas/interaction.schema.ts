@@ -32,7 +32,11 @@ export class Interaction {
   @Prop({ index: true })
   sessionId?: string;
 
-  @Prop({ required: true, enum: Object.values(InteractionEventType), index: true })
+  @Prop({
+    required: true,
+    enum: Object.values(InteractionEventType),
+    index: true,
+  })
   eventType: string;
 
   @Prop({ required: true, enum: Object.values(TargetType) })
@@ -54,4 +58,3 @@ export const InteractionSchema = SchemaFactory.createForClass(Interaction);
 InteractionSchema.index({ userId: 1, createdAt: -1 });
 InteractionSchema.index({ targetId: 1, eventType: 1 });
 InteractionSchema.index({ createdAt: -1 });
-

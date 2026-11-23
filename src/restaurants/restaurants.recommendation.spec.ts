@@ -38,8 +38,8 @@ describe('RestaurantsService - Hybrid Personalized Recommendations (TASK-P2-01 &
       rating: 4.6,
       giaCa: '35.000đ - 65.000đ',
       tags: 'cơm chay, thanh đạm, rau củ',
-      lat: 10.7770,
-      lon: 106.7010,
+      lat: 10.777,
+      lon: 106.701,
     },
   ];
 
@@ -85,7 +85,7 @@ describe('RestaurantsService - Hybrid Personalized Recommendations (TASK-P2-01 &
             data: {
               total: 2,
               is_cold_start: false,
-              applied_weights: { w1_taste: 0.45, w2_cf: 0.30, w3_env: 0.25 },
+              applied_weights: { w1_taste: 0.45, w2_cf: 0.3, w3_env: 0.25 },
               items: [
                 {
                   id: '673100000000000000000001',
@@ -94,18 +94,22 @@ describe('RestaurantsService - Hybrid Personalized Recommendations (TASK-P2-01 &
                   score: 0.912,
                   taste_score: 0.94,
                   cf_score: 0.88,
-                  env_score: 1.30,
+                  env_score: 1.3,
                   distance_km: 1.2,
                   price: 150000,
-                  match_reasons: ['✨ Hợp khẩu vị Taste DNA (94%)', '🌧️ Món nóng ấm lý tưởng cho ngày mưa'],
-                  explanation: '✨ Hợp khẩu vị Taste DNA (94%) • 🌧️ Món nóng ấm lý tưởng cho ngày mưa',
+                  match_reasons: [
+                    '✨ Hợp khẩu vị Taste DNA (94%)',
+                    '🌧️ Món nóng ấm lý tưởng cho ngày mưa',
+                  ],
+                  explanation:
+                    '✨ Hợp khẩu vị Taste DNA (94%) • 🌧️ Món nóng ấm lý tưởng cho ngày mưa',
                 },
                 {
                   id: '673100000000000000000002',
                   name: 'Cơm Chay An Lạc',
                   tags: 'cơm chay, thanh đạm, rau củ',
                   score: 0.765,
-                  taste_score: 0.70,
+                  taste_score: 0.7,
                   cf_score: 0.65,
                   env_score: 1.0,
                   distance_km: 1.5,
@@ -141,26 +145,31 @@ describe('RestaurantsService - Hybrid Personalized Recommendations (TASK-P2-01 &
       getProfile: jest.fn().mockResolvedValue({
         userId: 'user_123',
         spicy: 0.85,
-        sweet: 0.30,
-        sour: 0.40,
-        salty: 0.50,
-        umami: 0.80,
-        bitter: 0.20,
+        sweet: 0.3,
+        sour: 0.4,
+        salty: 0.5,
+        umami: 0.8,
+        bitter: 0.2,
         favoriteCuisines: ['Lẩu', 'Món Việt'],
         dietaryRestrictions: [],
       }),
     };
 
     mockInteractionsService = {
-      getMatrixExport: jest.fn().mockResolvedValue([
-        { userId: 'u1', targetId: 'r1', eventType: 'REVIEW' },
-      ]),
+      getMatrixExport: jest
+        .fn()
+        .mockResolvedValue([
+          { userId: 'u1', targetId: 'r1', eventType: 'REVIEW' },
+        ]),
     };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         RestaurantsService,
-        { provide: getModelToken(Restaurant.name), useValue: mockRestaurantModel },
+        {
+          provide: getModelToken(Restaurant.name),
+          useValue: mockRestaurantModel,
+        },
         { provide: getModelToken(MenuItem.name), useValue: mockMenuItemModel },
         { provide: HttpService, useValue: mockHttpService },
         { provide: TasteDnaService, useValue: mockTasteDnaService },
@@ -234,7 +243,12 @@ describe('RestaurantsService - Hybrid Personalized Recommendations (TASK-P2-01 &
   });
 
   it('chatWithAI nên trả về phản hồi NLU Copilot có structured action card', async () => {
-    const result = await service.chatWithAI('lên lịch trình ăn uống quận 1', '10.7769', '106.7009', 'user_123');
+    const result = await service.chatWithAI(
+      'lên lịch trình ăn uống quận 1',
+      '10.7769',
+      '106.7009',
+      'user_123',
+    );
     expect(result.intent).toBe('plan_journey');
     expect(result.action_card).toBeDefined();
     expect(result.action_card.type).toBe('planner_action');
@@ -242,8 +256,14 @@ describe('RestaurantsService - Hybrid Personalized Recommendations (TASK-P2-01 &
   });
 
   it('chatWithAI fallback an toàn khi AI microservice trả về lỗi', async () => {
-    mockHttpService.post.mockImplementationOnce(() => throwError(() => new Error('Copilot Service Offline')));
-    const result = await service.chatWithAI('tìm quán lẩu', '10.7769', '106.7009');
+    mockHttpService.post.mockImplementationOnce(() =>
+      throwError(() => new Error('Copilot Service Offline')),
+    );
+    const result = await service.chatWithAI(
+      'tìm quán lẩu',
+      '10.7769',
+      '106.7009',
+    );
     expect(result.reply).toBeDefined();
     expect(result.action_card).toBeDefined();
   });

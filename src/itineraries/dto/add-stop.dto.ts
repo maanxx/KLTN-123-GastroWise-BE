@@ -9,4 +9,3 @@ export class AddStopDto {
   @IsNumber()
   insert_after_order?: number;
 }
-

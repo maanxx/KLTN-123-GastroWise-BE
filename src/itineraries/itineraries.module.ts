@@ -4,7 +4,10 @@ import { HttpModule } from '@nestjs/axios';
 import { ItinerariesService } from './itineraries.service';
 import { ItinerariesController } from './itineraries.controller';
 import { Itinerary, ItinerarySchema } from './schemas/itinerary.schema';
-import { Restaurant, RestaurantSchema } from '../restaurants/schemas/restaurant.schema';
+import {
+  Restaurant,
+  RestaurantSchema,
+} from '../restaurants/schemas/restaurant.schema';
 import { TasteDnaModule } from '../taste-dna/taste-dna.module';
 import { InteractionsModule } from '../interactions/interactions.module';
 

@@ -3,7 +3,11 @@ import { AuthService } from './auth.service';
 import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { BadRequestException, UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import {
+  BadRequestException,
+  UnauthorizedException,
+  ForbiddenException,
+} from '@nestjs/common';
 
 // [QUAN TRỌNG] Mock bcrypt trực tiếp để tránh lỗi runtime khi test
 jest.mock('bcrypt', () => ({
@@ -81,7 +85,7 @@ describe('AuthService', () => {
       mockUsersService.findOneByEmail.mockRejectedValue(new Error('Not found'));
       mockUsersService.create.mockResolvedValue(mockUser);
       mockJwtService.signAsync.mockResolvedValue('token_string');
-      
+
       const result = await service.register(registerDto);
 
       expect(mockUsersService.create).toHaveBeenCalled();
@@ -90,7 +94,9 @@ describe('AuthService', () => {
 
     it('should throw BadRequestException if email already exists', async () => {
       mockUsersService.findOneByEmail.mockResolvedValue(mockUser);
-      await expect(service.register(registerDto)).rejects.toThrow(BadRequestException);
+      await expect(service.register(registerDto)).rejects.toThrow(
+        BadRequestException,
+      );
     });
   });
 
@@ -111,7 +117,9 @@ describe('AuthService', () => {
       mockUsersService.findOneByEmail.mockResolvedValue(mockUser);
       (bcrypt.compare as jest.Mock).mockResolvedValue(false); // Mock pass sai
 
-      await expect(service.login(loginDto)).rejects.toThrow(UnauthorizedException);
+      await expect(service.login(loginDto)).rejects.toThrow(
+        UnauthorizedException,
+      );
     });
   });
 
@@ -128,7 +136,9 @@ describe('AuthService', () => {
 
     it('should throw ForbiddenException if user not found', async () => {
       mockUsersService.findOne.mockResolvedValue(null);
-      await expect(service.refresh('uid', 'rt')).rejects.toThrow(ForbiddenException);
+      await expect(service.refresh('uid', 'rt')).rejects.toThrow(
+        ForbiddenException,
+      );
     });
   });
 });

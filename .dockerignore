@@ -1,0 +1,22 @@
+# ==============================================================================
+# GASTROWISE BACKEND .DOCKERIGNORE
+# ==============================================================================
+node_modules/
+dist/
+npm-debug.log
+yarn-error.log
+.git/
+.gitignore
+.env
+.env.*
+!.env.example
+docs/
+test/
+*.md
+coverage/
+.vscode/
+.idea/
+tmp/
+.DS_Store
+Thumbs.db
+

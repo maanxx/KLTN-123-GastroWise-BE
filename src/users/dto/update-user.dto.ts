@@ -28,7 +28,7 @@ export class UpdateUserDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(300) 
+  @MaxLength(300)
   bio?: string;
 
   @IsOptional()

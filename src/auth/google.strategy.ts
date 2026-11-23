@@ -7,7 +7,8 @@ import { ConfigService } from '@nestjs/config';
 @Injectable()
 export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
   constructor(configService: ConfigService) {
-    const backendUrl = configService.get<string>('BACKEND_URL') || 'http://localhost:3001';
+    const backendUrl =
+      configService.get<string>('BACKEND_URL') || 'http://localhost:3001';
 
     super({
       clientID: configService.get<string>('GOOGLE_CLIENT_ID') || '',
@@ -33,7 +34,7 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       picture: photos[0].value,
       // accessToken (của Google, chúng ta không dùng)
     };
-    
+
     done(null, user);
   }
 }

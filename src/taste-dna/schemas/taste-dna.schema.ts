@@ -6,7 +6,13 @@ export type TasteDnaDocument = HydratedDocument<TasteDnaProfile>;
 
 @Schema({ collection: 'taste_dna_profiles', timestamps: true })
 export class TasteDnaProfile {
-  @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true, index: true })
+  @Prop({
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    unique: true,
+    index: true,
+  })
   userId: mongoose.Types.ObjectId;
 
   // --- Normalized 6-D Taste Vector [0.0 - 1.0] ---
@@ -50,4 +56,3 @@ export class TasteDnaProfile {
 }
 
 export const TasteDnaSchema = SchemaFactory.createForClass(TasteDnaProfile);
-

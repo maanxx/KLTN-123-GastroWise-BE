@@ -16,4 +16,3 @@ import { TasteDnaController } from './taste-dna.controller';
   exports: [TasteDnaService],
 })
 export class TasteDnaModule {}
-

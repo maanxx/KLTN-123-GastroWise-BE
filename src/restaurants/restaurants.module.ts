@@ -3,7 +3,7 @@ import { Module } from '@nestjs/common';
 import { RestaurantsService } from './restaurants.service';
 import { RestaurantsController } from './restaurants.controller';
 import { MongooseModule } from '@nestjs/mongoose';
-import { Restaurant, RestaurantSchema } from './schemas/restaurant.schema'; 
+import { Restaurant, RestaurantSchema } from './schemas/restaurant.schema';
 import { MenuItem, MenuItemSchema } from './schemas/menu-item.schema';
 import { HttpModule } from '@nestjs/axios';
 import { TasteDnaModule } from '../taste-dna/taste-dna.module';

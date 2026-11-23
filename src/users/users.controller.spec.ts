@@ -7,11 +7,23 @@ describe('UsersController (RBAC & Ownership)', () => {
   let controller: UsersController;
 
   const mockUsersService = {
-    create: jest.fn().mockImplementation((dto) => Promise.resolve({ _id: 'new_id', ...dto })),
-    findAll: jest.fn().mockResolvedValue([{ _id: 'user_1', email: 'test1@example.com' }]),
-    findOne: jest.fn().mockImplementation((id) => Promise.resolve({ _id: id, email: 'test@example.com' })),
-    update: jest.fn().mockImplementation((id, dto) => Promise.resolve({ _id: id, ...dto })),
-    remove: jest.fn().mockResolvedValue({ message: 'User deleted successfully' }),
+    create: jest
+      .fn()
+      .mockImplementation((dto) => Promise.resolve({ _id: 'new_id', ...dto })),
+    findAll: jest
+      .fn()
+      .mockResolvedValue([{ _id: 'user_1', email: 'test1@example.com' }]),
+    findOne: jest
+      .fn()
+      .mockImplementation((id) =>
+        Promise.resolve({ _id: id, email: 'test@example.com' }),
+      ),
+    update: jest
+      .fn()
+      .mockImplementation((id, dto) => Promise.resolve({ _id: id, ...dto })),
+    remove: jest
+      .fn()
+      .mockResolvedValue({ message: 'User deleted successfully' }),
   };
 
   beforeEach(async () => {
@@ -63,12 +75,12 @@ describe('UsersController (RBAC & Ownership)', () => {
         user: { userId: myId, role: 'user' },
       };
 
-      expect(() => controller.update(req, otherId, { firstName: 'Hacker' })).toThrow(
-        ForbiddenException,
-      );
-      expect(() => controller.update(req, otherId, { firstName: 'Hacker' })).toThrow(
-        'Access Denied: You can only update your own account',
-      );
+      expect(() =>
+        controller.update(req, otherId, { firstName: 'Hacker' }),
+      ).toThrow(ForbiddenException);
+      expect(() =>
+        controller.update(req, otherId, { firstName: 'Hacker' }),
+      ).toThrow('Access Denied: You can only update your own account');
     });
 
     it('should allow admin to update any user profile including role/status', async () => {

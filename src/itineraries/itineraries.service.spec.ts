@@ -92,7 +92,12 @@ describe('ItinerariesService (TASK-P3-01 & TASK-BIZ-02)', () => {
     it('should calculate Haversine distance with 1.35x urban detour factor', () => {
       // Landmark 1: Ben Thanh Market (10.7721, 106.6983)
       // Landmark 2: Notre Dame Cathedral (10.7798, 106.6990) -> ~0.86 km straight line * 1.35 ≈ 1.16 km
-      const dist = calculateHaversineDistanceKm(10.7721, 106.6983, 10.7798, 106.6990);
+      const dist = calculateHaversineDistanceKm(
+        10.7721,
+        106.6983,
+        10.7798,
+        106.699,
+      );
       expect(dist).toBeGreaterThan(0.9);
       expect(dist).toBeLessThan(1.5);
     });
@@ -140,7 +145,7 @@ describe('ItinerariesService (TASK-P3-01 & TASK-BIZ-02)', () => {
             stop_id: 'stop-1',
             restaurant_name: 'Quán Khai Vị',
             restaurant_lat: 10.78,
-            restaurant_lng: 106.70,
+            restaurant_lng: 106.7,
             dining_duration_mins: 30,
             estimated_cost: 40000,
           },
@@ -216,7 +221,7 @@ describe('ItinerariesService (TASK-P3-01 & TASK-BIZ-02)', () => {
             stop_id: 'stop-1',
             restaurant_name: 'Phở Hòa Pasteur',
             restaurant_lat: 10.78,
-            restaurant_lng: 106.70,
+            restaurant_lng: 106.7,
             dining_duration_mins: 45,
             estimated_cost: 60000,
           },
@@ -271,7 +276,7 @@ describe('ItinerariesService (TASK-P3-01 & TASK-BIZ-02)', () => {
             stop_id: 'stop-1',
             restaurant_name: 'Khai vị',
             restaurant_lat: 10.78,
-            restaurant_lng: 106.70,
+            restaurant_lng: 106.7,
             dining_duration_mins: 30,
             estimated_cost: 50000,
           },
@@ -293,7 +298,12 @@ describe('ItinerariesService (TASK-P3-01 & TASK-BIZ-02)', () => {
         exec: jest.fn().mockResolvedValue(mockDoc),
       });
 
-      const updated = await service.removeStop(itineraryId, 'stop-1', userId, 'user');
+      const updated = await service.removeStop(
+        itineraryId,
+        'stop-1',
+        userId,
+        'user',
+      );
 
       expect(updated).toBeDefined();
       expect(updated.stops.length).toBe(1);
@@ -321,7 +331,7 @@ describe('ItinerariesService (TASK-P3-01 & TASK-BIZ-02)', () => {
             stop_id: 'stop-1',
             restaurant_name: 'Bún Bò Huế',
             restaurant_lat: 10.78,
-            restaurant_lng: 106.70,
+            restaurant_lng: 106.7,
             dining_duration_mins: 45,
             estimated_cost: 55000,
           },
@@ -383,9 +393,11 @@ describe('ItinerariesService (TASK-P3-01 & TASK-BIZ-02)', () => {
 
       mockRestaurantModel.find.mockReturnValue({
         lean: jest.fn().mockReturnValue({
-          exec: jest.fn().mockResolvedValue([
-            { _id: restId, tenQuan: 'Lẩu Bò Nhà Gỗ', tags: 'Lẩu, Cay, Bò' },
-          ]),
+          exec: jest
+            .fn()
+            .mockResolvedValue([
+              { _id: restId, tenQuan: 'Lẩu Bò Nhà Gỗ', tags: 'Lẩu, Cay, Bò' },
+            ]),
         }),
       });
 

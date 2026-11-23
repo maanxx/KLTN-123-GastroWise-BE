@@ -46,7 +46,10 @@ export class InteractionsService {
       return { success: true, count: 0 };
     }
 
-    const validUserObjId = userId && Types.ObjectId.isValid(userId) ? new Types.ObjectId(userId) : undefined;
+    const validUserObjId =
+      userId && Types.ObjectId.isValid(userId)
+        ? new Types.ObjectId(userId)
+        : undefined;
 
     const docs = dto.events.map((evt) => {
       const doc: any = {
@@ -65,7 +68,9 @@ export class InteractionsService {
       return doc;
     });
 
-    const result = await this.interactionModel.insertMany(docs, { ordered: false });
+    const result = await this.interactionModel.insertMany(docs, {
+      ordered: false,
+    });
     return {
       success: true,
       count: result.length,
@@ -88,7 +93,10 @@ export class InteractionsService {
   /**
    * Lấy danh sách địa điểm / món ăn phổ biến nhất dựa trên tương tác thực tế
    */
-  async getPopularTargets(targetType: string = 'restaurant', limit: number = 10) {
+  async getPopularTargets(
+    targetType: string = 'restaurant',
+    limit: number = 10,
+  ) {
     return this.interactionModel.aggregate([
       { $match: { targetType } },
       {
@@ -116,4 +124,3 @@ export class InteractionsService {
       .exec();
   }
 }
-

@@ -29,7 +29,9 @@ describe('RestaurantsService', () => {
   const mockRestaurantModel = {
     find: jest.fn(() => mockQuery),
     findById: jest.fn(),
-    countDocuments: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(10) }),
+    countDocuments: jest
+      .fn()
+      .mockReturnValue({ exec: jest.fn().mockResolvedValue(10) }),
   };
 
   const mockHttpService = {
@@ -40,7 +42,10 @@ describe('RestaurantsService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         RestaurantsService,
-        { provide: getModelToken(Restaurant.name), useValue: mockRestaurantModel },
+        {
+          provide: getModelToken(Restaurant.name),
+          useValue: mockRestaurantModel,
+        },
         { provide: HttpService, useValue: mockHttpService },
       ],
     }).compile();
@@ -72,7 +77,9 @@ describe('RestaurantsService', () => {
       mockRestaurantModel.findById.mockReturnValue({
         exec: jest.fn().mockResolvedValue(null),
       });
-      await expect(service.findOne('invalid_id')).rejects.toThrow(NotFoundException);
+      await expect(service.findOne('invalid_id')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
@@ -80,7 +87,7 @@ describe('RestaurantsService', () => {
   describe('findAll', () => {
     it('should return paginated data', async () => {
       const result = await service.findAll(1, 10);
-      
+
       expect(result.data).toEqual([mockRestaurant]);
       expect(result.total).toBe(10);
       expect(restaurantModel.find).toHaveBeenCalled();
@@ -100,7 +107,10 @@ describe('RestaurantsService', () => {
       // Mock AI response
       const aiResponse = {
         data: { food_name: 'Pho' },
-        status: 200, statusText: 'OK', headers: {}, config: {},
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: {},
       };
       mockHttpService.post.mockReturnValue(of(aiResponse));
 
@@ -110,7 +120,11 @@ describe('RestaurantsService', () => {
           { _id: '1', tenQuan: 'Phở Dở', diemTrungBinh: 5.0 },
           { _id: '2', tenQuan: 'Phở Xịn', diemTrungBinh: 9.0 },
         ],
-        total: 2, currentPage: 1, totalPages: 1, sortBy: '', order: ''
+        total: 2,
+        currentPage: 1,
+        totalPages: 1,
+        sortBy: '',
+        order: '',
       });
 
       const result = await service.searchByImage(mockFile);
@@ -122,8 +136,8 @@ describe('RestaurantsService', () => {
     });
 
     it('should return error message if processing fails', async () => {
-       const result = await service.searchByImage(null as any);
-       expect(result.message).toContain('Lỗi');
+      const result = await service.searchByImage(null as any);
+      expect(result.message).toContain('Lỗi');
     });
   });
 
@@ -132,7 +146,11 @@ describe('RestaurantsService', () => {
     it('should return reply and results', async () => {
       jest.spyOn(service, 'findAll').mockResolvedValue({
         data: [mockRestaurant],
-        total: 1, currentPage: 1, totalPages: 1, sortBy: '', order: ''
+        total: 1,
+        currentPage: 1,
+        totalPages: 1,
+        sortBy: '',
+        order: '',
       });
 
       const result = await service.chatWithAI('Tìm quán phở');

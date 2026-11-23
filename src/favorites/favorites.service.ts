@@ -32,7 +32,10 @@ export class FavoritesService {
   }
 
   async toggleFavorite(userId: string, restaurantId: string) {
-    if (!Types.ObjectId.isValid(userId) || !Types.ObjectId.isValid(restaurantId)) {
+    if (
+      !Types.ObjectId.isValid(userId) ||
+      !Types.ObjectId.isValid(restaurantId)
+    ) {
       throw new NotFoundException('Invalid ID format');
     }
 
@@ -42,16 +45,16 @@ export class FavoritesService {
     }
 
     const resId = new Types.ObjectId(restaurantId);
-    
+
     // Check if the restaurant is already in savedRestaurants
     const isFavorite = user.savedRestaurants.some(
-      (id) => id.toString() === restaurantId
+      (id) => id.toString() === restaurantId,
     );
 
     if (isFavorite) {
       // Remove it
       user.savedRestaurants = user.savedRestaurants.filter(
-        (id) => id.toString() !== restaurantId
+        (id) => id.toString() !== restaurantId,
       );
     } else {
       // Add it

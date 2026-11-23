@@ -1,0 +1,95 @@
+# ==============================================================================
+# GASTROWISE MICROSERVICES ARCHITECTURE DOCKER COMPOSE TOPOLOGY
+# ==============================================================================
+
+networks:
+  gastrowise_network:
+    driver: bridge
+
+services:
+  # -------------------------------------------------------------
+  # API GATEWAY (Reverse Proxy & Ingress Traffic Router)
+  # -------------------------------------------------------------
+  nginx-gateway:
+    image: nginx:1.27-alpine
+    container_name: gastrowise-nginx-gateway
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      core-service:
+        condition: service_started
+      planning-service:
+        condition: service_started
+    networks:
+      - gastrowise_network
+    restart: unless-stopped
+
+  # -------------------------------------------------------------
+  # CORE SERVICE (Auth, Catalog, Reviews, Preferences)
+  # -------------------------------------------------------------
+  core-service:
+    build:
+      context: .
+      dockerfile: apps/core-service/Dockerfile
+    container_name: gastrowise-core-service
+    expose:
+      - "3001"
+    environment:
+      - PORT=3001
+      - CORE_SERVICE_PORT=3001
+      - NODE_ENV=production
+      - MONGODB_URI_CORE=${MONGODB_URI_CORE:-mongodb://host.docker.internal:27017/gastro_core}
+      - CORE_DB_NAME=gastro_core
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
+      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:?INTERNAL_SERVICE_KEY must be set}
+      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:?INTERNAL_AI_KEY must be set}
+      - AI_SERVICE_URL=http://ai-service:5000
+    networks:
+      - gastrowise_network
+    restart: unless-stopped
+
+  # -------------------------------------------------------------
+  # PLANNING SERVICE (Itinerary Generation, TSPTW, Timetable)
+  # -------------------------------------------------------------
+  planning-service:
+    build:
+      context: .
+      dockerfile: apps/planning-service/Dockerfile
+    container_name: gastrowise-planning-service
+    expose:
+      - "3003"
+    environment:
+      - PORT=3003
+      - PLANNING_SERVICE_PORT=3003
+      - NODE_ENV=production
+      - MONGODB_URI_PLANNING=${MONGODB_URI_PLANNING:-mongodb://host.docker.internal:27017/gastro_planning}
+      - PLANNING_DB_NAME=gastro_planning
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
+      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:?INTERNAL_SERVICE_KEY must be set}
+      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:?INTERNAL_AI_KEY must be set}
+      - CORE_SERVICE_URL=http://core-service:3001
+      - AI_SERVICE_URL=http://ai-service:5000
+    networks:
+      - gastrowise_network
+    restart: unless-stopped
+
+  # -------------------------------------------------------------
+  # AI SERVICE (FastAPI Machine Learning & Optimization Engine)
+  # -------------------------------------------------------------
+  ai-service:
+    build:
+      context: ../KLTN-123-GastroWise-AI
+      dockerfile: Dockerfile
+    container_name: gastrowise-ai-service
+    expose:
+      - "5000"
+    environment:
+      - PORT=5000
+      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:?INTERNAL_AI_KEY must be set}
+      - MONGODB_URI=${MONGODB_URI_AI:-mongodb://host.docker.internal:27017/gastrowise}
+    networks:
+      - gastrowise_network
+    restart: unless-stopped
+

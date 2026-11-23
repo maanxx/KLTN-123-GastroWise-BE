@@ -69,7 +69,9 @@ export class UsersController {
 
     if (callerRole !== 'admin') {
       if (callerId !== id) {
-        throw new ForbiddenException('Access Denied: You can only update your own account');
+        throw new ForbiddenException(
+          'Access Denied: You can only update your own account',
+        );
       }
       // Ngăn chặn user thường tự nâng cấp vai trò hoặc gỡ bỏ lệnh cấm (privilege escalation)
       delete (updateUserDto as any).role;

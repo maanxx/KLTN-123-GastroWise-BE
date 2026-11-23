@@ -16,4 +16,3 @@ import { InteractionsController } from './interactions.controller';
   exports: [InteractionsService],
 })
 export class InteractionsModule {}
-

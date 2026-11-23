@@ -1,0 +1,64 @@
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import mongoose, { HydratedDocument } from 'mongoose';
+
+export type ReviewDocument = HydratedDocument<Review>;
+
+@Schema({ collection: 'reviews', timestamps: true })
+export class Review {
+  @Prop()
+  tenQuan: string;
+
+  // Đây là trường quan trọng để liên kết với Nhà hàng
+  @Prop({ index: true })
+  urlGoc: string;
+
+  @Prop()
+  diemReview: number;
+
+  @Prop()
+  noiDung: string;
+
+  @Prop()
+  aiSentimentLabel: string; // Ví dụ: 'LABEL_2' (Tích cực)
+
+  @Prop()
+  aiSentimentScore: number;
+
+  @Prop({ type: [String], default: [] })
+  hashtags: string[];
+
+  @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'User', required: false })
+  userId?: mongoose.Types.ObjectId;
+
+  @Prop()
+  userName?: string;
+
+  @Prop({
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Restaurant',
+    required: true,
+  })
+  restaurantId: mongoose.Types.ObjectId;
+
+  @Prop({ type: [String], default: [] })
+  images: string[];
+
+  @Prop({ default: 0 })
+  likes: number;
+
+  // --- Nghiệp vụ Kiểm duyệt & Đánh giá nổi bật ---
+  @Prop({ default: 'active', enum: ['active', 'hidden', 'pending'] })
+  status: string;
+
+  @Prop({ default: false })
+  isFeatured: boolean;
+
+  @Prop({ default: null })
+  pinnedAt?: Date;
+}
+
+export const ReviewSchema = SchemaFactory.createForClass(Review);
+
+// [TASK-PERF-01] Compound indexes for high-performance review listing and moderation
+ReviewSchema.index({ restaurantId: 1, createdAt: -1 });
+ReviewSchema.index({ restaurantId: 1, status: 1, createdAt: -1 });

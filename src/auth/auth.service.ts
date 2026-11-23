@@ -35,13 +35,13 @@ export class AuthService {
     const newUser: UserDocument = await this.usersService.create(registerDto);
 
     const tokens = await this._generateTokens(
-      newUser._id.toString(), 
+      newUser._id.toString(),
       newUser.email,
       newUser.role || 'user',
     );
 
     await this.usersService.updateRefreshToken(
-      newUser._id.toString(), 
+      newUser._id.toString(),
       tokens.refreshToken,
     );
 
@@ -49,7 +49,7 @@ export class AuthService {
       token: tokens.accessToken,
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      user: this._sanitizeUser(newUser)
+      user: this._sanitizeUser(newUser),
     };
   }
 
@@ -67,7 +67,9 @@ export class AuthService {
     }
 
     if (user.status === 'banned') {
-      throw new ForbiddenException('Tài khoản của bạn đã bị khóa bởi Quản trị viên do vi phạm điều khoản. Vui lòng liên hệ bộ phận hỗ trợ.');
+      throw new ForbiddenException(
+        'Tài khoản của bạn đã bị khóa bởi Quản trị viên do vi phạm điều khoản. Vui lòng liên hệ bộ phận hỗ trợ.',
+      );
     }
 
     // 3. Tạo tokens
@@ -87,7 +89,7 @@ export class AuthService {
       token: tokens.accessToken,
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      user: this._sanitizeUser(user)
+      user: this._sanitizeUser(user),
     };
   }
 
@@ -130,11 +132,17 @@ export class AuthService {
   }
 
   // --- HÀM PRIVATE: Tạo Tokens ---
-  private async _generateTokens(userId: string, email: string, role: string = 'user') {
+  private async _generateTokens(
+    userId: string,
+    email: string,
+    role: string = 'user',
+  ) {
     const payload = { sub: userId, email, role };
 
-    const jwtSecret = this.configService.get<string>('JWT_SECRET') || 'gastrowise_jwt_secret';
-    const refreshSecret = this.configService.get<string>('JWT_REFRESH_SECRET') || jwtSecret;
+    const jwtSecret =
+      this.configService.get<string>('JWT_SECRET') || 'gastrowise_jwt_secret';
+    const refreshSecret =
+      this.configService.get<string>('JWT_REFRESH_SECRET') || jwtSecret;
 
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(payload, {
@@ -189,12 +197,18 @@ export class AuthService {
     }
 
     if (user.status === 'banned') {
-      throw new ForbiddenException('Tài khoản của bạn đã bị khóa bởi Quản trị viên do vi phạm điều khoản.');
+      throw new ForbiddenException(
+        'Tài khoản của bạn đã bị khóa bởi Quản trị viên do vi phạm điều khoản.',
+      );
     }
 
     // 3. Tạo JWT
-    const tokens = await this._generateTokens(user._id.toString(), user.email, user.role || 'user');
-    
+    const tokens = await this._generateTokens(
+      user._id.toString(),
+      user.email,
+      user.role || 'user',
+    );
+
     await this.usersService.updateRefreshToken(
       user._id.toString(),
       tokens.refreshToken,
@@ -206,11 +220,13 @@ export class AuthService {
   private _sanitizeUser(user: any) {
     if (!user) return null;
     const userObj = user.toObject ? user.toObject() : { ...user };
-    delete (userObj as any).password;
-    delete (userObj as any).hashedRefreshToken;
+    delete userObj.password;
+    delete userObj.hashedRefreshToken;
     return {
       id: user._id ? user._id.toString() : user.id,
-      fullName: userObj.firstName ? `${userObj.lastName || ''} ${userObj.firstName}`.trim() : userObj.username || userObj.email,
+      fullName: userObj.firstName
+        ? `${userObj.lastName || ''} ${userObj.firstName}`.trim()
+        : userObj.username || userObj.email,
       ...userObj,
     };
   }
@@ -218,29 +234,38 @@ export class AuthService {
   async getProfile(userId: string) {
     const user = await this.usersService.findOne(userId);
     if (user && user.status === 'banned') {
-      throw new ForbiddenException('Tài khoản của bạn đã bị khóa bởi Quản trị viên do vi phạm điều khoản.');
+      throw new ForbiddenException(
+        'Tài khoản của bạn đã bị khóa bởi Quản trị viên do vi phạm điều khoản.',
+      );
     }
     return this._sanitizeUser(user);
   }
 
   async updateProfile(userId: string, updateUserDto: UpdateUserDto) {
-    const updated = await this.usersService.updateProfile(userId, updateUserDto);
+    const updated = await this.usersService.updateProfile(
+      userId,
+      updateUserDto,
+    );
     return this._sanitizeUser(updated);
   }
 
   // --- HÀM QUÊN MẬT KHẨU ---
   async forgotPassword(email: string) {
-    const user = await this.usersService.findOneByEmail(email).catch(() => null);
+    const user = await this.usersService
+      .findOneByEmail(email)
+      .catch(() => null);
     if (!user) {
       throw new BadRequestException('Email không tồn tại trong hệ thống!');
     }
     if (user.status === 'banned') {
-      throw new ForbiddenException('Tài khoản của bạn đang bị khóa bởi Quản trị viên!');
+      throw new ForbiddenException(
+        'Tài khoản của bạn đang bị khóa bởi Quản trị viên!',
+      );
     }
 
     // Tạo mã OTP ngẫu nhiên 6 chữ số
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    
+
     // Lưu OTP vào DB
     await this.usersService.update(user._id.toString(), {
       resetOtp: otp,
@@ -249,8 +274,12 @@ export class AuthService {
     // Gửi Email thực tế qua Nodemailer nếu có cấu hình SMTP
     try {
       const nodemailer = require('nodemailer');
-      const smtpHost = this.configService.get<string>('SMTP_HOST') || 'smtp.gmail.com';
-      const smtpPort = parseInt(this.configService.get<string>('SMTP_PORT') || '587', 10);
+      const smtpHost =
+        this.configService.get<string>('SMTP_HOST') || 'smtp.gmail.com';
+      const smtpPort = parseInt(
+        this.configService.get<string>('SMTP_PORT') || '587',
+        10,
+      );
       const smtpUser = this.configService.get<string>('SMTP_USER');
       const smtpPass = this.configService.get<string>('SMTP_PASS');
 
@@ -275,7 +304,9 @@ export class AuthService {
             </div>
           `,
         });
-        console.log(`✉️ [EMAIL SENT VIA SMTP] OTP ${otp} has been sent to ${email}`);
+        console.log(
+          `✉️ [EMAIL SENT VIA SMTP] OTP ${otp} has been sent to ${email}`,
+        );
       } else {
         // Tự tạo tài khoản Ethereal Mail miễn phí để test link gửi mail thật
         const testAccount = await nodemailer.createTestAccount();
@@ -299,7 +330,9 @@ export class AuthService {
             </div>
           `,
         });
-        console.log(`✉️ [ETHEREAL TEST EMAIL SENT] Xem nội dung mail thật tại link: ${nodemailer.getTestMessageUrl(info)}`);
+        console.log(
+          `✉️ [ETHEREAL TEST EMAIL SENT] Xem nội dung mail thật tại link: ${nodemailer.getTestMessageUrl(info)}`,
+        );
       }
     } catch (mailError) {
       console.error('Lỗi khi gửi email SMTP:', mailError);
@@ -312,7 +345,9 @@ export class AuthService {
 
   // --- HÀM ĐẶT LẠI MẬT KHẨU BẰNG EMAIL OTP ---
   async resetPassword(email: string, otp: string, newPassword: string) {
-    const user = await this.usersService.findOneByEmail(email).catch(() => null);
+    const user = await this.usersService
+      .findOneByEmail(email)
+      .catch(() => null);
     if (!user) {
       throw new BadRequestException('Email không tồn tại!');
     }
@@ -320,7 +355,9 @@ export class AuthService {
     // Kiểm tra mã OTP đúng tuyệt đối từ DB
     const storedUser = user as any;
     if (!storedUser.resetOtp || storedUser.resetOtp !== otp) {
-      throw new BadRequestException('Mã xác minh OTP không chính xác hoặc đã hết hạn!');
+      throw new BadRequestException(
+        'Mã xác minh OTP không chính xác hoặc đã hết hạn!',
+      );
     }
 
     const hashedPassword = await this._hashData(newPassword);
@@ -331,7 +368,8 @@ export class AuthService {
     } as any);
 
     return {
-      message: 'Đặt lại mật khẩu thành công! Vui lòng đăng nhập bằng mật khẩu mới.',
+      message:
+        'Đặt lại mật khẩu thành công! Vui lòng đăng nhập bằng mật khẩu mới.',
     };
   }
 
@@ -363,33 +401,55 @@ export class AuthService {
       throw new BadRequestException('Chưa tạo secret 2FA!');
     }
 
-    const isValid = authenticator.verify({ token: code, secret: user.twoFactorSecret });
+    const isValid = authenticator.verify({
+      token: code,
+      secret: user.twoFactorSecret,
+    });
     if (!isValid) {
-      throw new BadRequestException('Mã xác minh Authenticator 6 số không đúng!');
+      throw new BadRequestException(
+        'Mã xác minh Authenticator 6 số không đúng!',
+      );
     }
 
     await this.usersService.update(userId, { isTwoFactorEnabled: true } as any);
-    return { message: 'Đã kích hoạt bảo mật 2 lớp Google Authenticator thành công!' };
+    return {
+      message: 'Đã kích hoạt bảo mật 2 lớp Google Authenticator thành công!',
+    };
   }
 
   // --- HÀM ĐẶT LẠI MẬT KHẨU BẰNG GOOGLE AUTHENTICATOR (2FA TOTP) ---
-  async resetPasswordWith2FA(email: string, totpCode: string, newPassword: string) {
-    const user = await this.usersService.findOneByEmail(email).catch(() => null);
+  async resetPasswordWith2FA(
+    email: string,
+    totpCode: string,
+    newPassword: string,
+  ) {
+    const user = await this.usersService
+      .findOneByEmail(email)
+      .catch(() => null);
     if (!user) {
       throw new BadRequestException('Email không tồn tại!');
     }
     if (!user.isTwoFactorEnabled || !user.twoFactorSecret) {
-      throw new BadRequestException('Tài khoản chưa đăng ký bảo mật 2FA Authenticator!');
+      throw new BadRequestException(
+        'Tài khoản chưa đăng ký bảo mật 2FA Authenticator!',
+      );
     }
 
     const { authenticator } = require('otplib');
-    const isValid = authenticator.verify({ token: totpCode, secret: user.twoFactorSecret });
+    const isValid = authenticator.verify({
+      token: totpCode,
+      secret: user.twoFactorSecret,
+    });
     if (!isValid) {
-      throw new BadRequestException('Mã Google Authenticator (TOTP) không chính xác!');
+      throw new BadRequestException(
+        'Mã Google Authenticator (TOTP) không chính xác!',
+      );
     }
 
     const hashedPassword = await this._hashData(newPassword);
-    await this.usersService.update(user._id.toString(), { password: hashedPassword } as any);
+    await this.usersService.update(user._id.toString(), {
+      password: hashedPassword,
+    } as any);
 
     return {
       message: 'Đặt lại mật khẩu bằng Google Authenticator thành công!',

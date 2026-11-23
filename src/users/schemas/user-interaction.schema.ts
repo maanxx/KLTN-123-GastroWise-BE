@@ -14,7 +14,10 @@ export class UserInteraction {
   @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'MenuItem' })
   menuItemId: mongoose.Types.ObjectId;
 
-  @Prop({ required: true, enum: ['view', 'search', 'like', 'share', 'bookmark'] })
+  @Prop({
+    required: true,
+    enum: ['view', 'search', 'like', 'share', 'bookmark'],
+  })
   actionType: string;
 
   @Prop()
@@ -24,4 +27,5 @@ export class UserInteraction {
   metadata: string; // Có thể lưu JSON string nếu cần thêm dữ liệu phụ
 }
 
-export const UserInteractionSchema = SchemaFactory.createForClass(UserInteraction);
+export const UserInteractionSchema =
+  SchemaFactory.createForClass(UserInteraction);
