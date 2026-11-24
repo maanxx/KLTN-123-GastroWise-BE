@@ -3,6 +3,8 @@ import { HttpService } from '@nestjs/axios';
 import { of, throwError } from 'rxjs';
 import {
   UnauthorizedException,
+  ForbiddenException,
+  BadRequestException,
   ServiceUnavailableException,
   BadGatewayException,
 } from '@nestjs/common';
@@ -195,6 +197,137 @@ describe('ACL Security & Fault Tolerance Tests', () => {
       expect(result.solver).toBe('Gastronomic Greedy Fallback');
       expect(result.stops).toHaveLength(1);
       expect(result.stops[0].restaurant_id).toBe('r1');
+    });
+
+    it('should map Planning request DTO into canonical AI schema and return mapped response', async () => {
+      const mockAiResponse = {
+        data: {
+          stops: [
+            {
+              id: 'rest_123',
+              name: 'Pho Pasteur',
+              lat: 10.77,
+              lon: 106.69,
+              order_index: 1,
+              meal_type: 'main',
+              arrival_time: '11:15',
+              departure_time: '12:00',
+              dining_duration_mins: 45,
+              transit_time_mins: 15,
+              distance_to_next_km: 2.1,
+              estimated_cost: 65000,
+            },
+          ],
+          total_distance_km: 2.1,
+          total_duration_mins: 60,
+          algorithm_used: 'OR-Tools TSPTW',
+          routing_mode: 'motorbike',
+        },
+      };
+
+      mockHttpService.post.mockReturnValue(of(mockAiResponse));
+
+      const result = await client.optimizeRoute({
+        restaurants: [
+          {
+            id: 'rest_123',
+            name: 'Pho Pasteur',
+            lat: 10.77,
+            lng: 106.69,
+            open: '08:00',
+            close: '22:00',
+            duration_mins: 45,
+            avg_price: 65000,
+          },
+        ],
+        start_lat: 10.76,
+        start_lng: 106.68,
+        start_time: '11:00',
+        routing_mode: 'motorbike',
+        budget_vnd: 250000,
+        desired_stops: 1,
+      });
+
+      // Verify outbound canonical payload mapping
+      expect(mockHttpService.post).toHaveBeenCalledWith(
+        'http://127.0.0.1:5000/routes/optimize',
+        expect.objectContaining({
+          start_location: [10.76, 106.68],
+          start_time_mins: 660,
+          budget: 250000,
+          routing_mode: 'motorbike',
+          desired_stops: 1,
+          candidates: [
+            expect.objectContaining({
+              id: 'rest_123',
+              name: 'Pho Pasteur',
+              lat: 10.77,
+              lon: 106.69,
+              open_time: '08:00',
+              close_time: '22:00',
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'X-Internal-AI-Key': 'test-ai-internal-key-32chars!!!',
+          }),
+        }),
+      );
+
+      // Verify response mapping
+      expect(result.solver).toBe('OR-Tools TSPTW');
+      expect(result.stops).toHaveLength(1);
+      expect(result.stops[0].restaurant_id).toBe('rest_123');
+      expect(result.stops[0].order_index).toBe(1);
+      expect(result.stops[0].arrival_time).toBe('11:15');
+      expect(result.stops[0].departure_time).toBe('12:00');
+      expect(result.stops[0].distance_km).toBe(2.1);
+      expect(result.total_distance_km).toBe(2.1);
+    });
+
+    it('should throw ForbiddenException on 403 and NEVER fall back silently', async () => {
+      const error: any = new Error('Forbidden');
+      error.response = { status: 403, data: { detail: 'Forbidden: Invalid internal AI key' } };
+      mockHttpService.post.mockReturnValue(throwError(() => error));
+
+      await expect(
+        client.optimizeRoute({
+          restaurants: [
+            {
+              id: 'r1',
+              lat: 10.7,
+              lng: 106.6,
+              open: '08:00',
+              close: '22:00',
+              duration_mins: 45,
+            },
+          ],
+          start_lat: 10.7,
+          start_lng: 106.6,
+          start_time: '11:00',
+          routing_mode: 'motorbike',
+        }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('should throw BadRequestException on 400/422 and NEVER fall back silently', async () => {
+      const error422: any = new Error('Unprocessable Entity');
+      error422.response = {
+        status: 422,
+        data: { detail: [{ loc: ['body', 'candidates'], msg: 'field required' }] },
+      };
+      mockHttpService.post.mockReturnValue(throwError(() => error422));
+
+      await expect(
+        client.optimizeRoute({
+          restaurants: [],
+          start_lat: 10.7,
+          start_lng: 106.6,
+          start_time: '11:00',
+          routing_mode: 'motorbike',
+        }),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('should trip circuit breaker and fall back to greedy heuristic on connection refused', async () => {

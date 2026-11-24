@@ -10,9 +10,11 @@ export type UserDocument = HydratedDocument<User>;
   toJSON: {
     virtuals: true,
     transform: function (doc, ret: any) {
-      // Xóa password và hashedRefreshToken khỏi kết quả JSON trả về
+      // Xóa password, tokens và secrets khỏi kết quả JSON trả về
       delete ret.password;
       delete ret.hashedRefreshToken;
+      delete ret.twoFactorSecret;
+      delete ret.resetOtp;
       delete ret._id; // (Tùy chọn, nếu bạn dùng virtual 'id')
       delete ret.__v;
       return ret;
@@ -23,6 +25,8 @@ export type UserDocument = HydratedDocument<User>;
     transform: function (doc, ret: any) {
       delete ret.password;
       delete ret.hashedRefreshToken;
+      delete ret.twoFactorSecret;
+      delete ret.resetOtp;
       delete ret._id;
       delete ret.__v;
       return ret;

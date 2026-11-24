@@ -16,7 +16,17 @@ describe('UsersController (RBAC & Ownership)', () => {
     findOne: jest
       .fn()
       .mockImplementation((id) =>
-        Promise.resolve({ _id: id, email: 'test@example.com' }),
+        Promise.resolve({
+          _id: id,
+          email: 'test@example.com',
+          username: 'testuser',
+          password: 'hashed_password_secret',
+          hashedRefreshToken: 'refresh_token_secret',
+          twoFactorSecret: 'totp_secret_key',
+          resetOtp: '123456',
+          role: 'user',
+          status: 'active',
+        }),
       ),
     update: jest
       .fn()
@@ -75,12 +85,12 @@ describe('UsersController (RBAC & Ownership)', () => {
         user: { userId: myId, role: 'user' },
       };
 
-      expect(() =>
+      await expect(
         controller.update(req, otherId, { firstName: 'Hacker' }),
-      ).toThrow(ForbiddenException);
-      expect(() =>
+      ).rejects.toThrow(ForbiddenException);
+      await expect(
         controller.update(req, otherId, { firstName: 'Hacker' }),
-      ).toThrow('Access Denied: You can only update your own account');
+      ).rejects.toThrow('Access Denied: You can only update your own account');
     });
 
     it('should allow admin to update any user profile including role/status', async () => {
@@ -99,6 +109,57 @@ describe('UsersController (RBAC & Ownership)', () => {
         targetUserId,
         expect.objectContaining({ role: 'owner', status: 'banned' }),
       );
+    });
+  });
+
+  describe('findOne (IDOR & Privacy Protection)', () => {
+    it('should allow regular user to view their own profile and strip sensitive fields', async () => {
+      const myId = '64b8f0000000000000000001';
+      const req = {
+        user: { userId: myId, role: 'user' },
+      };
+
+      const result: any = await controller.findOne(req, myId);
+
+      expect(result).toBeDefined();
+      expect(result.id).toBe(myId);
+      expect(result.email).toBe('test@example.com');
+      // Verify sensitive credentials and tokens are strictly stripped
+      expect(result.password).toBeUndefined();
+      expect(result.hashedRefreshToken).toBeUndefined();
+      expect(result.twoFactorSecret).toBeUndefined();
+      expect(result.resetOtp).toBeUndefined();
+    });
+
+    it('should throw ForbiddenException when regular user attempts to view another user profile (IDOR prevention)', async () => {
+      const myId = '64b8f0000000000000000001';
+      const otherId = '64b8f0000000000000000099';
+      const req = {
+        user: { userId: myId, role: 'user' },
+      };
+
+      await expect(controller.findOne(req, otherId)).rejects.toThrow(
+        ForbiddenException,
+      );
+      await expect(controller.findOne(req, otherId)).rejects.toThrow(
+        'Access Denied: You can only view your own profile',
+      );
+    });
+
+    it('should allow admin to view any user profile and return sanitized safe DTO', async () => {
+      const targetUserId = '64b8f0000000000000000099';
+      const req = {
+        user: { userId: 'admin_id', role: 'admin' },
+      };
+
+      const result: any = await controller.findOne(req, targetUserId);
+
+      expect(result).toBeDefined();
+      expect(result.id).toBe(targetUserId);
+      expect(result.password).toBeUndefined();
+      expect(result.hashedRefreshToken).toBeUndefined();
+      expect(result.twoFactorSecret).toBeUndefined();
+      expect(result.resetOtp).toBeUndefined();
     });
   });
 });
