@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { RestaurantsService } from './restaurants.service';
 import { getModelToken } from '@nestjs/mongoose';
 import { Restaurant } from './schemas/restaurant.schema';
+import { MenuItem } from './schemas/menu-item.schema';
 import { HttpService } from '@nestjs/axios';
 import { of } from 'rxjs';
 import { NotFoundException } from '@nestjs/common';
@@ -29,6 +30,7 @@ describe('RestaurantsService', () => {
   const mockRestaurantModel = {
     find: jest.fn(() => mockQuery),
     findById: jest.fn(),
+    findOne: jest.fn(() => ({ exec: jest.fn().mockResolvedValue(null) })),
     countDocuments: jest
       .fn()
       .mockReturnValue({ exec: jest.fn().mockResolvedValue(10) }),
@@ -39,12 +41,17 @@ describe('RestaurantsService', () => {
   };
 
   beforeEach(async () => {
+    process.env.INTERNAL_AI_KEY = 'test_internal_key_32_characters';
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         RestaurantsService,
         {
           provide: getModelToken(Restaurant.name),
           useValue: mockRestaurantModel,
+        },
+        {
+          provide: getModelToken(MenuItem.name),
+          useValue: {},
         },
         { provide: HttpService, useValue: mockHttpService },
       ],
@@ -65,19 +72,25 @@ describe('RestaurantsService', () => {
 
   // --- TEST FIND ONE ---
   describe('findOne', () => {
-    it('should return a restaurant if found', async () => {
+    it('should return a restaurant if found by ObjectId', async () => {
+      const validId = '507f1f77bcf86cd799439011';
       mockRestaurantModel.findById.mockReturnValue({
         exec: jest.fn().mockResolvedValue(mockRestaurant),
       });
-      const result = await service.findOne('rest_id_1');
-      expect(result).toEqual(mockRestaurant);
+      const result: any = await service.findOne(validId);
+      expect(result.id).toBe(mockRestaurant._id);
+      expect(result.name).toBe(mockRestaurant.tenQuan);
     });
 
     it('should throw NotFoundException if not found', async () => {
+      const validId = '507f1f77bcf86cd799439011';
       mockRestaurantModel.findById.mockReturnValue({
         exec: jest.fn().mockResolvedValue(null),
       });
-      await expect(service.findOne('invalid_id')).rejects.toThrow(
+      mockRestaurantModel.findOne.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(null),
+      });
+      await expect(service.findOne(validId)).rejects.toThrow(
         NotFoundException,
       );
     });
@@ -88,7 +101,8 @@ describe('RestaurantsService', () => {
     it('should return paginated data', async () => {
       const result = await service.findAll(1, 10);
 
-      expect(result.data).toEqual([mockRestaurant]);
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].id).toBe(mockRestaurant._id);
       expect(result.total).toBe(10);
       expect(restaurantModel.find).toHaveBeenCalled();
       expect(mockQuery.skip).toHaveBeenCalledWith(0);
@@ -144,13 +158,18 @@ describe('RestaurantsService', () => {
   // --- TEST CHAT WITH AI ---
   describe('chatWithAI', () => {
     it('should return reply and results', async () => {
-      jest.spyOn(service, 'findAll').mockResolvedValue({
-        data: [mockRestaurant],
-        total: 1,
-        currentPage: 1,
-        totalPages: 1,
-        sortBy: '',
-        order: '',
+      mockHttpService.post.mockReturnValue(
+        of({
+          data: {
+            reply: 'Gợi ý các quán phở ngon',
+            results: [{ id: 'rest_id_1' }],
+          },
+        }),
+      );
+      mockRestaurantModel.find.mockReturnValue({
+        lean: jest.fn().mockReturnValue({
+          exec: jest.fn().mockResolvedValue([mockRestaurant]),
+        }),
       });
 
       const result = await service.chatWithAI('Tìm quán phở');

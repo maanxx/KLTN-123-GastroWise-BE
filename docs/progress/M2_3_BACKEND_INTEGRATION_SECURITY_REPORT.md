@@ -303,21 +303,15 @@ All 5 microservice containers are healthy, running on the dedicated bridge netwo
 ### Backend Repository (`KLTN-123-GastroWise-BE`)
 
 ```bash
-# Core Service Security & Users Tests
-npx jest apps/core-service/src/users/users.controller.spec.ts
-Tests: 7 passed, 7 total
+# Core Service Full Test Suite (All 14 test suites)
+npx jest apps/core-service
+Test Suites: 14 passed, 14 total
+Tests:       64 passed, 64 total
 
-# Core Service Contacts RBAC & Audit Trail Tests
-npx jest apps/core-service/src/contacts/contacts.controller.spec.ts
-Tests: 8 passed, 8 total
-
-# Planning Service ACL & Circuit Breaker Tests
-npx jest apps/planning-service/src/acl/security.spec.ts
-Tests: 14 passed, 14 total
-
-# Full Planning Service Test Suite
+# Planning Service Full Test Suite (All 5 test suites)
 npx jest apps/planning-service
-Tests: 31 passed, 31 total
+Test Suites: 5 passed, 5 total
+Tests:       31 passed, 31 total
 
 # Microservices TypeScript Build Verification
 npm run build:shared && npm run build:planning && npm run build:core
@@ -344,13 +338,27 @@ Ran 3 tests in 0.003s -> OK
    The Nginx allowlist currently permits `localhost:[0-9]+` and `127.0.0.1:[0-9]+` to accelerate local developer workflows. When preparing production Kubernetes / Cloud Run manifests, restrict allowed origins to `https://gastrowise.vn` and `https://admin.gastrowise.vn`.
 2. **MongoDB Atlas Migration (Sprint 3):**  
    Database isolation rules were strictly observed: zero connections were made to Atlas during M2.3. The production migration scripts (`scripts/db-split-dryrun.ts`) should be executed during scheduled maintenance in Sprint 3.
-3. **Core Service Pre-existing Test Mocks:**  
-   Certain older integration specs (`restaurants.service.spec.ts`, `reviews.service.spec.ts`) lacked mocked Mongoose model tokens. These should be addressed during the upcoming service test coverage sweep.
+3. **Mobile App Gateway Prefix Alignment (Milestone 6):**  
+   `KLTN-123-GastroWise-Mobile/.env` currently points to port 3001 (Core Service) and should be updated to API Gateway port 8080 during Milestone 6.
+4. **Historical Credential Revocation:**  
+   The historical credentials referenced in commit `f6bc66fc` must be revoked/deleted directly on the MongoDB Atlas console.
 
 ---
 
-## 7. FINAL VERDICT
+## 7. MILESTONE 2.3.1 DEEP CODE REVIEW FINDINGS & FIXES
 
-# FULL PASS
+| Finding ID | Priority | Affected File | Root Cause | Implemented Resolution | Verification |
+| :--- | :---: | :--- | :--- | :--- | :--- |
+| **DEFECT-M231-01** | **P1** | `apps/core-service/src/restaurants/restaurants.service.ts` | Calls to `/predict-food`, `/weather-recommend`, and `/recommend` omitted `X-Internal-AI-Key` header | Added `'X-Internal-AI-Key': this.internalAiKey` to all outbound HTTP calls | All calls now pass fail-closed AI auth |
+| **DEFECT-M231-02** | **P2** | `apps/core-service/src/restaurants/restaurants.service.spec.ts` | `MenuItemModel` and `findOne` mock missing from unit test setup | Added `MenuItemModel`, `findOne`, and `INTERNAL_AI_KEY` mock | 7/7 tests passed |
+| **DEFECT-M231-03** | **P2** | `apps/core-service/src/restaurants/restaurants.controller.spec.ts` | `RestaurantsService` dependencies unmocked | Injected mock provider for `RestaurantsService` | 1/1 test passed |
+| **DEFECT-M231-04** | **P2** | `apps/core-service/src/reviews/reviews.service.spec.ts` | `ReviewModel`, `RestaurantModel`, and services unmocked | Injected all required Mongoose and service mock tokens | 1/1 test passed |
+| **DEFECT-M231-05** | **P2** | `apps/core-service/src/reviews/reviews.controller.spec.ts` | `ReviewsService` dependencies unmocked | Injected mock provider for `ReviewsService` | 1/1 test passed |
 
-All security hardening goals, contract harmonizations, Docker runtime tests, and inter-service communications have passed with verifiable live execution logs. The code is ready for review on branch `fix/m2.3-backend-integration-security`.
+---
+
+## 8. FINAL VERDICT
+
+# FULL PASS — READY FOR PR (WITH CONDITIONS)
+
+All code review checks, security hardening requirements, contract harmonizations, unit test suites (95/95 tests passing across both services), and Docker runtime healthchecks have passed. The branch `fix/m2.3-backend-integration-security` is ready for review and pull request creation upon human approval.

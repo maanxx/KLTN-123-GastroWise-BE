@@ -292,6 +292,7 @@ export class RestaurantsService implements OnApplicationBootstrap {
         this.httpService.post(`${aiUrl}/predict-food`, formData, {
           headers: {
             ...formData.getHeaders(),
+            'X-Internal-AI-Key': this.internalAiKey,
           },
         }),
       );
@@ -404,8 +405,13 @@ export class RestaurantsService implements OnApplicationBootstrap {
         payload.user_gps = [parseFloat(userLat), parseFloat(userLon)];
       }
 
+      const headers: Record<string, string> = {
+        'X-Internal-AI-Key': this.internalAiKey,
+      };
       const aiResponse = await firstValueFrom(
-        this.httpService.post(`${aiUrl}/weather-recommend`, payload),
+        this.httpService.post(`${aiUrl}/weather-recommend`, payload, {
+          headers,
+        }),
       );
 
       const weatherData = aiResponse.data.weather;
@@ -873,8 +879,13 @@ export class RestaurantsService implements OnApplicationBootstrap {
               : null,
         };
         const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
+        const headers: Record<string, string> = {
+          'X-Internal-AI-Key': this.internalAiKey,
+        };
         const aiResponse = await firstValueFrom(
-          this.httpService.post(`${aiUrl}/recommend`, payload),
+          this.httpService.post(`${aiUrl}/recommend`, payload, {
+            headers,
+          }),
         );
 
         const recommendedItems = aiResponse.data.scores || [];

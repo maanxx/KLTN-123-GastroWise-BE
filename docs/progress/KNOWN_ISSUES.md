@@ -15,10 +15,10 @@ Bảng theo dõi toàn bộ các vấn đề kỹ thuật, lỗi kiến trúc, l
 | **ISSUE-06** | Lỗi hiển thị "5.4★" Rating Badge do thiếu chuẩn hóa thang điểm 10 $\rightarrow$ 5 | **P1** | Data/Algo | `KLTN-123-GastroWise-AI` | **OPEN** | Milestone 4 (Week 5) |
 | **ISSUE-07** | Quy trình migration database `$out` thiếu backup, validation & rollback | **P1** | Database | `docs/architecture` | **RESOLVED IN DOCS** | Đã chuẩn hóa quy trình 4 bước |
 | **ISSUE-08** | Mâu thuẫn quyền truy cập database của AI (Interim vs Target State) | **P1** | Architecture | `docs/architecture` | **RESOLVED IN DOCS** | Phân định rõ Interim vs Target |
-| **ISSUE-09** | Lệch default port gọi `/predict-food` (Port 8000 thay vì 5000) | **P1** | Config | `KLTN-123-GastroWise-BE` | **OPEN** | Milestone 2 (Week 3) |
-| **ISSUE-10** | Lệch tiền tố API Gateway trong Mobile App `.env` | **P1** | Integration | `KLTN-123-GastroWise-Mobile` | **OPEN** | Milestone 6 (Week 6) |
+| **ISSUE-09** | Lệch default port gọi `/predict-food` (Port 8000 thay vì 5000) | **P1** | Config | `KLTN-123-GastroWise-BE` | **RESOLVED IN M2.3.1** | Đã chuẩn hóa port 5000 + gắn X-Internal-AI-Key |
+| **ISSUE-10** | Lệch tiền tố API Gateway trong Mobile App `.env` | **P1** | Integration | `KLTN-123-GastroWise-Mobile` | **OPEN** | Milestone 6 (Week 6) - Cần trỏ port 8080 |
 | **ISSUE-11** | Lỗi import `cv2` trong `test_nlu_copilot.py` do phụ thuộc vòng | **P2** | Code Quality | `KLTN-123-GastroWise-AI` | **OPEN** | Milestone 4 (Week 5) |
-| **ISSUE-12** | Lộ credential lịch sử `thienthien` trong file script đã commit | **P2** | Security | `KLTN-123-GastroWise-BE` | **OPEN** | Milestone 1 (Week 2) |
+| **ISSUE-12** | Lộ credential lịch sử `thienthien` trong file script đã commit | **P2** | Security | `KLTN-123-GastroWise-BE` | **OPEN (HISTORICAL COMMIT)** | Commit f6bc66fc; Xóa user trên Atlas; không rewrite git |
 
 ---
 
@@ -98,8 +98,17 @@ Bảng theo dõi toàn bộ các vấn đề kỹ thuật, lỗi kiến trúc, l
 
 ### ISSUE-09: Lệch default port gọi `/predict-food` [P1]
 - **Severity:** P1 (Config defect)
-- **Vị trí code:** [KLTN-123-GastroWise-BE/src/restaurants/restaurants.service.ts:223](file:///D:/GastroWise/KLTN-123-GastroWise-BE/src/restaurants/restaurants.service.ts#L223)
-- **Hiện tượng:** `restaurants.service.ts` gán fallback URL `http://127.0.0.1:8000` thay vì port `5000` như các endpoint AI khác.
+- **Vị trí code:** `apps/core-service/src/restaurants/restaurants.service.ts:277`
+- **Trạng thái:** **RESOLVED IN M2.3.1**
+- **Minh chứng:** Đã kiểm tra source code: fallback URL là `http://127.0.0.1:5000` (không còn port 8000). Đồng thời trong Milestone 2.3.1 đã bổ sung header bắt buộc `'X-Internal-AI-Key': this.internalAiKey` tại các hàm `searchByImage`, `getWeatherRecommendation` và `findAll` semantic search.
+
+---
+
+### ISSUE-10: Lệch tiền tố API Gateway trong Mobile App `.env` [P1]
+- **Severity:** P1 (Integration defect)
+- **Vị trí code:** `KLTN-123-GastroWise-Mobile/.env`
+- **Trạng thái:** **OPEN (Kế hoạch Milestone 6 Mobile Integration)**
+- **Minh chứng:** File `.env` của Mobile đang cấu hình `EXPO_PUBLIC_API_URL=http://10.161.30.252:3001/api/v1` (trỏ trực tiếp vào Core Service port 3001). Cần cập nhật sang cổng API Gateway `http://<ip>:8080/api/v1` trong Milestone 6 để mobile app có thể gọi được cả Planning Service (lập lịch `/api/v1/itineraries/*`).
 
 ---
 
@@ -113,5 +122,7 @@ Bảng theo dõi toàn bộ các vấn đề kỹ thuật, lỗi kiến trúc, l
 
 ### ISSUE-12: Lộ credential lịch sử `thienthien` trong file script đã commit [P2]
 - **Severity:** P2 (Bảo mật tài khoản cũ)
-- **Vị trí code:** `KLTN-123-GastroWise-BE/scripts/remediate-config.js`
-- **Phương án đề xuất:** Xóa file khỏi Git tracking trong Milestone 1 (TASK-M1-02), thêm vào `.gitignore` và yêu cầu DBA xóa user trên Atlas.
+- **Vị trí code:** `KLTN-123-GastroWise-BE/scripts/remediate-config.js` (commit `f6bc66fcad7014578be117a0306539b618b747b0`)
+- **Trạng thái:** **OPEN (HISTORICAL COMMIT)**
+- **Minh chứng:** File `scripts/remediate-config.js` đã được xóa khỏi working tree trong commit `4b8ab800`, hiện không còn xuất hiện trong cây thư mục hiện tại. Tuy nhiên vẫn tồn tại trong lịch sử commit `f6bc66fc`.
+- **Phương án đề xuất:** Tuân thủ nguyên tắc an toàn Git, KHÔNG force-push hoặc rewrite git history. Đề xuất DBA xoay vòng / thu hồi (revoke/delete) trực tiếp user database này trên MongoDB Atlas.
