@@ -1,5 +1,6 @@
 # ==============================================================================
 # GASTROWISE MICROSERVICES ARCHITECTURE DOCKER COMPOSE TOPOLOGY
+# Milestone 2.2: Isolated Runtime & Networking Validation
 # ==============================================================================
 
 networks:
@@ -7,6 +8,24 @@ networks:
     driver: bridge
 
 services:
+  # -------------------------------------------------------------
+  # ISOLATED TEST DATABASE (MongoDB 7.0)
+  # Guaranteed 100% database isolation from MongoDB Atlas
+  # -------------------------------------------------------------
+  mongo-test:
+    image: mongo:7.0
+    container_name: gastrowise-mongo-test
+    expose:
+      - "27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - gastrowise_network
+    restart: unless-stopped
+
   # -------------------------------------------------------------
   # API GATEWAY (Reverse Proxy & Ingress Traffic Router)
   # -------------------------------------------------------------
@@ -17,6 +36,11 @@ services:
       - "8080:8080"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
     depends_on:
       core-service:
         condition: service_started
@@ -30,6 +54,7 @@ services:
   # CORE SERVICE (Auth, Catalog, Reviews, Preferences)
   # -------------------------------------------------------------
   core-service:
+    image: gastrowise-core-service:test
     build:
       context: .
       dockerfile: apps/core-service/Dockerfile
@@ -40,12 +65,22 @@ services:
       - PORT=3001
       - CORE_SERVICE_PORT=3001
       - NODE_ENV=production
-      - MONGODB_URI_CORE=${MONGODB_URI_CORE:-mongodb://host.docker.internal:27017/gastro_core}
-      - CORE_DB_NAME=gastro_core
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
-      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:?INTERNAL_SERVICE_KEY must be set}
-      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:?INTERNAL_AI_KEY must be set}
+      - MONGODB_URI_CORE=${MONGODB_URI_CORE:-mongodb://mongo-test:27017/gastro_core_test}
+      - CORE_DB_NAME=gastro_core_test
+      - JWT_SECRET=${JWT_SECRET:-test_jwt_secret_32_characters_long_for_m22}
+      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:-test_internal_service_key_32_characters}
+      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:-test_internal_ai_key_32_characters}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-test-client-id.apps.googleusercontent.com}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-test-client-secret}
       - AI_SERVICE_URL=http://ai-service:5000
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    depends_on:
+      mongo-test:
+        condition: service_healthy
     networks:
       - gastrowise_network
     restart: unless-stopped
@@ -54,6 +89,7 @@ services:
   # PLANNING SERVICE (Itinerary Generation, TSPTW, Timetable)
   # -------------------------------------------------------------
   planning-service:
+    image: gastrowise-planning-service:test
     build:
       context: .
       dockerfile: apps/planning-service/Dockerfile
@@ -64,13 +100,23 @@ services:
       - PORT=3003
       - PLANNING_SERVICE_PORT=3003
       - NODE_ENV=production
-      - MONGODB_URI_PLANNING=${MONGODB_URI_PLANNING:-mongodb://host.docker.internal:27017/gastro_planning}
-      - PLANNING_DB_NAME=gastro_planning
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
-      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:?INTERNAL_SERVICE_KEY must be set}
-      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:?INTERNAL_AI_KEY must be set}
+      - MONGODB_URI_PLANNING=${MONGODB_URI_PLANNING:-mongodb://mongo-test:27017/gastro_planning_test}
+      - PLANNING_DB_NAME=gastro_planning_test
+      - JWT_SECRET=${JWT_SECRET:-test_jwt_secret_32_characters_long_for_m22}
+      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:-test_internal_service_key_32_characters}
+      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:-test_internal_ai_key_32_characters}
       - CORE_SERVICE_URL=http://core-service:3001
       - AI_SERVICE_URL=http://ai-service:5000
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3003/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    depends_on:
+      mongo-test:
+        condition: service_healthy
+      core-service:
+        condition: service_started
     networks:
       - gastrowise_network
     restart: unless-stopped
@@ -79,6 +125,7 @@ services:
   # AI SERVICE (FastAPI Machine Learning & Optimization Engine)
   # -------------------------------------------------------------
   ai-service:
+    image: gastrowise-ai-service:test
     build:
       context: ../KLTN-123-GastroWise-AI
       dockerfile: Dockerfile
@@ -87,9 +134,17 @@ services:
       - "5000"
     environment:
       - PORT=5000
-      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:?INTERNAL_AI_KEY must be set}
-      - MONGODB_URI=${MONGODB_URI_AI:-mongodb://host.docker.internal:27017/gastrowise}
+      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:-test_internal_ai_key_32_characters}
+      - MONGODB_URI=${MONGODB_URI_AI:-mongodb://mongo-test:27017/gastro_ai_test}
+      - MONGODB_DB_NAME=${MONGODB_DB_NAME:-gastro_ai_test}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:5000/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    depends_on:
+      mongo-test:
+        condition: service_healthy
     networks:
       - gastrowise_network
     restart: unless-stopped
-
