@@ -357,6 +357,69 @@ describe('ACL Security & Fault Tolerance Tests', () => {
       expect(result.solver).toBe('Gastronomic Greedy Fallback');
       expect(result.stops).toHaveLength(1);
     });
+
+    it('should preserve canonical 1-based order_index across multiple stops for both AI solver and greedy fallback', async () => {
+      mockHttpService.post.mockReturnValueOnce(
+        of({
+          data: {
+            stops: [
+              { id: 'r1', order_index: 1, arrival_time: '11:05', departure_time: '11:50', transit_time_mins: 5, distance_to_next_km: 1.0 },
+              { id: 'r2', order_index: 2, arrival_time: '12:00', departure_time: '12:45', transit_time_mins: 10, distance_to_next_km: 1.5 },
+              { id: 'r3', order_index: 3, arrival_time: '12:55', departure_time: '13:30', transit_time_mins: 10, distance_to_next_km: 1.2 },
+            ],
+            total_distance_km: 3.7,
+            total_duration_mins: 145,
+            algorithm_used: 'OR-Tools TSPTW',
+          },
+        }),
+      );
+
+      const multiReq = {
+        restaurants: [
+          { id: 'r1', lat: 10.77, lng: 106.7, open: '08:00', close: '22:00', duration_mins: 45 },
+          { id: 'r2', lat: 10.78, lng: 106.71, open: '08:00', close: '22:00', duration_mins: 45 },
+          { id: 'r3', lat: 10.79, lng: 106.72, open: '08:00', close: '22:00', duration_mins: 35 },
+        ],
+        start_lat: 10.76,
+        start_lng: 106.69,
+        start_time: '11:00',
+        routing_mode: 'motorbike',
+        budget_vnd: 250000,
+      };
+
+      const aiRes = await client.optimizeRoute(multiReq);
+      expect(aiRes.stops.map((s) => s.order_index)).toEqual([1, 2, 3]);
+
+      // Greedy fallback must also emit 1-based [1, 2, 3]
+      const timeoutErr: any = new Error('timeout');
+      timeoutErr.code = 'ECONNABORTED';
+      mockHttpService.post.mockReturnValueOnce(throwError(() => timeoutErr));
+      const fallbackRes = await client.optimizeRoute(multiReq);
+      expect(fallbackRes.solver).toBe('Gastronomic Greedy Fallback');
+      expect(fallbackRes.stops.map((s) => s.order_index)).toEqual([1, 2, 3]);
+    });
+
+    it('should normalize empty stops array without crashing', async () => {
+      mockHttpService.post.mockReturnValueOnce(
+        of({
+          data: {
+            stops: [],
+            total_distance_km: 0,
+            total_duration_mins: 0,
+            algorithm_used: 'None',
+          },
+        }),
+      );
+
+      const emptyRes = await client.optimizeRoute({
+        restaurants: [],
+        start_lat: 10.76,
+        start_lng: 106.69,
+        start_time: '11:00',
+        routing_mode: 'motorbike',
+      });
+      expect(emptyRes.stops).toEqual([]);
+    });
   });
 });
 

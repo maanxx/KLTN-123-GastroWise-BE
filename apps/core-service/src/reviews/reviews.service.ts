@@ -1,5 +1,10 @@
 // src/reviews/reviews.service.ts
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  UnauthorizedException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { HttpService } from '@nestjs/axios';
@@ -16,6 +21,8 @@ import { InteractionsService } from '../interactions/interactions.service';
 @Injectable()
 export class ReviewsService {
   private readonly logger = new Logger(ReviewsService.name);
+  private readonly aiBaseUrl: string;
+  private readonly internalAiKey: string;
 
   constructor(
     @InjectModel(Review.name) private reviewModel: Model<ReviewDocument>,
@@ -24,19 +31,26 @@ export class ReviewsService {
     private readonly httpService: HttpService,
     private readonly tasteDnaService: TasteDnaService,
     private readonly interactionsService: InteractionsService,
-  ) {}
+  ) {
+    this.aiBaseUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
+    const key = process.env.INTERNAL_AI_KEY;
+    if (!key || !key.trim()) {
+      throw new Error(
+        'Missing mandatory security configuration: INTERNAL_AI_KEY must be set in environment variables',
+      );
+    }
+    this.internalAiKey = key.trim();
+  }
 
   // --- 1. Hàm gọi Python AI Microservice Phân Tích Cảm Thuyết ---
   async analyzeSentiment(content: string) {
     try {
-      const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
-      const headers: Record<string, string> = {};
-      if (process.env.INTERNAL_AI_KEY) {
-        headers['X-Internal-AI-Key'] = process.env.INTERNAL_AI_KEY;
-      }
+      const headers: Record<string, string> = {
+        'X-Internal-AI-Key': this.internalAiKey,
+      };
       const aiResponse = await firstValueFrom(
         this.httpService.post(
-          `${aiUrl}/analyze-sentiment`,
+          `${this.aiBaseUrl}/analyze-sentiment`,
           { review: content },
           { headers, timeout: 3000 },
         ),
@@ -52,6 +66,21 @@ export class ReviewsService {
         };
       }
     } catch (pythonAiErr: any) {
+      const status = pythonAiErr?.response?.status;
+      if (status === 401) {
+        this.logger.error(
+          'CRITICAL: AI Service sentiment authentication missing or rejected (HTTP 401).',
+        );
+        throw new UnauthorizedException(
+          'AI Service authentication failed (HTTP 401)',
+        );
+      }
+      if (status === 403) {
+        this.logger.error(
+          'CRITICAL: AI Service sentiment authentication forbidden (HTTP 403 invalid key).',
+        );
+        throw new ForbiddenException('AI Service forbidden (HTTP 403)');
+      }
       this.logger.warn(
         `⚠️ Python AI Microservice offline. Trả về nhãn NEUTRAL mặc định: ${pythonAiErr.message}`,
       );

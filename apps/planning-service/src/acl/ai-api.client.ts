@@ -131,10 +131,18 @@ export class AiApiClient {
         response.data?.stops || response.data?.ordered_stops;
 
       if (Array.isArray(rawStops)) {
+        const hasZeroBasedIndex = rawStops.some(
+          (s: any) => typeof s.order_index === 'number' && s.order_index === 0,
+        );
         return {
           stops: rawStops.map((s: any, idx: number) => ({
             restaurant_id: s.id || s.restaurant_id,
-            order_index: typeof s.order_index === 'number' ? s.order_index : idx,
+            order_index:
+              typeof s.order_index === 'number'
+                ? hasZeroBasedIndex
+                  ? s.order_index + 1
+                  : s.order_index
+                : idx + 1,
             arrival_time: s.arrival_time || s.arrival || '12:00',
             departure_time: s.departure_time || s.departure || '13:00',
             transit_time_mins: s.transit_time_mins ?? s.transit_mins ?? 15,
@@ -243,7 +251,7 @@ export class AiApiClient {
     const stops: OptimizedStopResult[] = [];
     let totalDist = 0;
     let totalDuration = 0;
-    let order = 0;
+    let order = 1;
 
     while (remaining.length > 0) {
       let bestIdx = 0;
