@@ -320,12 +320,21 @@ export class ItinerariesService {
 
       if (aiResult && aiResult.stops && aiResult.stops.length > 0) {
         const candidateMap = new Map(scoredCandidates.map((c) => [c.id, c]));
-        optimizedStops = aiResult.stops.map((s) => {
+        const hasZeroBasedOrder = aiResult.stops.some(
+          (s) => typeof s.order_index === 'number' && s.order_index === 0,
+        );
+        optimizedStops = aiResult.stops.map((s, idx) => {
           const cand = candidateMap.get(s.restaurant_id);
+          const normalizedOrderIndex =
+            typeof s.order_index === 'number'
+              ? hasZeroBasedOrder
+                ? s.order_index + 1
+                : s.order_index
+              : idx + 1;
           return {
             stop_id: uuidv4(),
             restaurant_id: s.restaurant_id,
-            order_index: s.order_index + 1,
+            order_index: normalizedOrderIndex,
             restaurant_name: cand?.name || 'Nhà hàng GastroWise',
             restaurant_lat: cand?.lat || userLat,
             restaurant_lng: cand?.lon || userLng,
