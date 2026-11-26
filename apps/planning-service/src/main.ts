@@ -26,7 +26,7 @@ async function bootstrap() {
   console.log('========================================');
 
   app.use(new CorrelationIdMiddleware().use);
-  app.useGlobalPipes(new ValidationPipe({ whitelist: false, transform: true }));
+  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
   // Global prefix for API versioning (aligns with Mobile /api/v1 prefix)
   app.setGlobalPrefix('api/v1', { exclude: ['health'] });

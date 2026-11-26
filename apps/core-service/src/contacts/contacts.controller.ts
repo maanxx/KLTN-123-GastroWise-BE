@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ContactsService } from './contacts.service';
 import { CreateContactDto } from './dto/create-contact.dto';
+import { UpdateContactStatusDto } from './dto/update-contact-status.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -49,7 +50,7 @@ export class ContactsController {
   async updateStatus(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { status: string; resolvedBy?: string },
+    @Body() body: UpdateContactStatusDto,
   ) {
     // Derive audit identity strictly from authenticated JWT, do not trust body.resolvedBy
     const adminIdentity =

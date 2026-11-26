@@ -240,7 +240,11 @@ Message: ${message}`;
     }
 
     const updated = await this.contactModel
-      .findByIdAndUpdate(id, { $set: updateData }, { new: true })
+      .findByIdAndUpdate(
+        id,
+        { $set: updateData },
+        { new: true, runValidators: true },
+      )
       .exec();
 
     if (!updated) {

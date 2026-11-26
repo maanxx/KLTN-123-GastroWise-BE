@@ -296,16 +296,23 @@ describe('M8.6 Data Integrity & Consistency Fixture Tests (In-Memory Only)', () 
       expect(UserSchema.path('resetOtpExpiresAt')).toBeDefined();
     });
 
-    it('confirms M8.6 audit finding: CreateReviewDto permits diemReview = 10 despite 5-star domain scale', () => {
+    it('confirms M9.3 remediation: CreateReviewDto rejects diemReview > 5 and enforces 1-5 scale', () => {
       const dto = plainToInstance(CreateReviewDto, {
         restaurantId: new Types.ObjectId().toHexString(),
         diemReview: 10,
         noiDung: 'Food was amazing',
       });
-      expect(validateSync(dto)).toHaveLength(0);
+      expect(validateSync(dto).map((e) => e.property)).toContain('diemReview');
+
+      const validDto = plainToInstance(CreateReviewDto, {
+        restaurantId: new Types.ObjectId().toHexString(),
+        diemReview: 5,
+        noiDung: 'Food was amazing',
+      });
+      expect(validateSync(validDto)).toHaveLength(0);
     });
 
-    it('confirms M8.6 audit finding: CreateUserDto @IsUrl() is misplaced onto firstName', () => {
+    it('confirms M9.3 remediation: CreateUserDto validates picture URL instead of firstName', () => {
       const dto = plainToInstance(CreateUserDto, {
         username: 'thien',
         email: 'thien@example.com',
@@ -315,8 +322,8 @@ describe('M8.6 Data Integrity & Consistency Fixture Tests (In-Memory Only)', () 
       });
       const errors = validateSync(dto);
       const props = errors.map((e) => e.property);
-      expect(props).toContain('firstName');
-      expect(props).not.toContain('picture');
+      expect(props).not.toContain('firstName');
+      expect(props).toContain('picture');
     });
   });
 

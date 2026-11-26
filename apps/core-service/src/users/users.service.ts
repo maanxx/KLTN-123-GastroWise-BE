@@ -78,7 +78,7 @@ export class UsersService {
     }
     // findByIdAndUpdate sẽ tìm, cập nhật và trả về bản ghi MỚI (vì có { new: true })
     const updatedUser = await this.userModel
-      .findByIdAndUpdate(id, updateUserDto, { new: true })
+      .findByIdAndUpdate(id, updateUserDto, { new: true, runValidators: true })
       .exec();
 
     if (!updatedUser) {
@@ -134,7 +134,10 @@ export class UsersService {
     }
 
     const updatedUser = await this.userModel
-      .findByIdAndUpdate(userId, updateUserDto, { new: true }) // { new: true } để trả về data MỚI
+      .findByIdAndUpdate(userId, updateUserDto, {
+        new: true,
+        runValidators: true,
+      }) // { new: true } để trả về data MỚI
       .exec();
 
     if (!updatedUser) {

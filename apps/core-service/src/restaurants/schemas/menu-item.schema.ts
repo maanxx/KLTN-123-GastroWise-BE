@@ -18,7 +18,7 @@ export class MenuItem {
   @Prop()
   description: string;
 
-  @Prop({ required: true })
+  @Prop({ required: true, min: 0 })
   price: number;
 
   @Prop()
@@ -27,7 +27,7 @@ export class MenuItem {
   @Prop({ default: false })
   isVegetarian: boolean;
 
-  @Prop()
+  @Prop({ min: 0 })
   calories: number;
 
   @Prop({ type: [String], default: [] })

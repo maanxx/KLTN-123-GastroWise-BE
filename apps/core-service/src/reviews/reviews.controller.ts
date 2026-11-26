@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import { ReviewsService } from './reviews.service';
 import { CreateReviewDto } from './dto/create-review.dto';
+import { UpdateReviewDto } from './dto/update-review.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -98,7 +99,11 @@ export class ReviewsController {
    */
   @UseGuards(JwtAuthGuard)
   @Patch(':id')
-  async update(@Req() req: any, @Param('id') id: string, @Body() dto: any) {
+  async update(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: UpdateReviewDto,
+  ) {
     const user = req.user;
     const review = await (this.reviewsService as any).reviewModel
       .findById(id)

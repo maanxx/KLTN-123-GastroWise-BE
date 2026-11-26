@@ -2,6 +2,8 @@
 import {
   Injectable,
   Logger,
+  BadRequestException,
+  NotFoundException,
   UnauthorizedException,
   ForbiddenException,
 } from '@nestjs/common';
@@ -115,9 +117,9 @@ export class ReviewsService {
 
     let resolvedRestaurantId = createReviewDto.restaurantId;
     if (
-      resolvedRestaurantId &&
-      (!Types.ObjectId.isValid(resolvedRestaurantId) ||
-        !/^[0-9a-fA-F]{24}$/.test(resolvedRestaurantId))
+      !resolvedRestaurantId ||
+      !Types.ObjectId.isValid(resolvedRestaurantId) ||
+      !/^[0-9a-fA-F]{24}$/.test(resolvedRestaurantId)
     ) {
       const restaurant = await this.restaurantModel
         .findOne({
@@ -127,16 +129,20 @@ export class ReviewsService {
           ],
         })
         .exec();
-      if (restaurant) {
-        resolvedRestaurantId = restaurant._id.toString();
+      if (!restaurant) {
+        throw new BadRequestException(
+          `Invalid restaurant identifier "${String(createReviewDto.restaurantId)}"`,
+        );
       }
+      resolvedRestaurantId = restaurant._id.toString();
     }
 
     const newReviewData = {
       ...createReviewDto,
-      restaurantId: resolvedRestaurantId
-        ? new Types.ObjectId(resolvedRestaurantId)
-        : undefined,
+      restaurantId: new Types.ObjectId(resolvedRestaurantId),
+      ...(createReviewDto.userId && Types.ObjectId.isValid(createReviewDto.userId)
+        ? { userId: new Types.ObjectId(createReviewDto.userId) }
+        : {}),
       aiSentimentLabel: aiResult.label || 'NEUTRAL',
       aiSentimentScore: aiResult.score || 0.5,
       hashtags: aiResult.hashtags || [],
@@ -425,7 +431,9 @@ export class ReviewsService {
   }
 
   async updateReview(id: string, dto: any) {
-    return this.reviewModel.findByIdAndUpdate(id, dto, { new: true }).exec();
+    return this.reviewModel
+      .findByIdAndUpdate(id, dto, { new: true, runValidators: true })
+      .exec();
   }
 
   // --- 4. Hàm Quét và Cập nhật Review cũ (Công cụ Admin) ---

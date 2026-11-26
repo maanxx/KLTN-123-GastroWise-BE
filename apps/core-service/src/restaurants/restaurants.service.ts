@@ -165,7 +165,7 @@ export class RestaurantsService implements OnApplicationBootstrap {
 
   async updateMenuItem(menuId: string, dto: any) {
     return this.menuItemModel
-      .findByIdAndUpdate(menuId, dto, { new: true })
+      .findByIdAndUpdate(menuId, dto, { new: true, runValidators: true })
       .exec();
   }
 
@@ -178,6 +178,9 @@ export class RestaurantsService implements OnApplicationBootstrap {
     const lon = Number(createRestaurantDto.lon) || 106.7009;
     const restaurantData: any = {
       ...createRestaurantDto,
+      ...(createRestaurantDto.moTa && !createRestaurantDto.description
+        ? { description: createRestaurantDto.moTa }
+        : {}),
       location: {
         type: 'Point',
         coordinates: [lon, lat],
@@ -1067,8 +1070,15 @@ export class RestaurantsService implements OnApplicationBootstrap {
       }
     }
 
+    const payload = {
+      ...updateRestaurantDto,
+      ...(updateRestaurantDto.moTa && !updateRestaurantDto.description
+        ? { description: updateRestaurantDto.moTa }
+        : {}),
+    };
+
     const updated = await this.restaurantModel
-      .findByIdAndUpdate(id, updateRestaurantDto, { new: true })
+      .findByIdAndUpdate(id, payload, { new: true, runValidators: true })
       .exec();
     if (!updated) {
       throw new NotFoundException(`Không tìm thấy nhà hàng với ID "${id}"`);

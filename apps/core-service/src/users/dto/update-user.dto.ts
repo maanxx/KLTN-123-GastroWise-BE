@@ -1,5 +1,11 @@
 // back-end/src/users/dto/update-user.dto.ts
-import { IsOptional, IsString, MaxLength, IsArray } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  MaxLength,
+  IsArray,
+  IsIn,
+} from 'class-validator';
 
 export class UpdateUserDto {
   @IsOptional()
@@ -35,4 +41,12 @@ export class UpdateUserDto {
   @IsArray()
   @IsString({ each: true })
   preferences?: string[];
+
+  @IsOptional()
+  @IsIn(['user', 'admin', 'owner'])
+  role?: 'user' | 'admin' | 'owner';
+
+  @IsOptional()
+  @IsIn(['active', 'banned'])
+  status?: 'active' | 'banned';
 }

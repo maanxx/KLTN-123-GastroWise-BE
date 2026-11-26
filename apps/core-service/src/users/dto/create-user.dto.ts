@@ -23,12 +23,15 @@ export class CreateUserDto {
   @MinLength(6)
   password: string;
 
-  // --- 2. THÊM 3 DÒNG NÀY ---
-  @IsOptional() // Tùy chọn (không bắt buộc)
-  @IsUrl() // Đảm bảo nó là một URL (nếu có)
   @IsOptional()
   @IsString()
   firstName?: string;
-  @IsOptional() @IsString() lastName?: string;
+
+  @IsOptional()
+  @IsString()
+  lastName?: string;
+
+  @IsOptional()
+  @IsUrl()
   picture?: string;
 }

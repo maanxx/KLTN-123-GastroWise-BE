@@ -12,7 +12,7 @@ export class Review {
   @Prop({ index: true })
   urlGoc: string;
 
-  @Prop()
+  @Prop({ min: 1, max: 5 })
   diemReview: number;
 
   @Prop()
