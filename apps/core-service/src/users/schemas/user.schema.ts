@@ -15,6 +15,7 @@ export type UserDocument = HydratedDocument<User>;
       delete ret.hashedRefreshToken;
       delete ret.twoFactorSecret;
       delete ret.resetOtp;
+      delete ret.resetOtpExpiresAt;
       delete ret._id; // (Tùy chọn, nếu bạn dùng virtual 'id')
       delete ret.__v;
       return ret;
@@ -27,6 +28,7 @@ export type UserDocument = HydratedDocument<User>;
       delete ret.hashedRefreshToken;
       delete ret.twoFactorSecret;
       delete ret.resetOtp;
+      delete ret.resetOtpExpiresAt;
       delete ret._id;
       delete ret.__v;
       return ret;
@@ -43,10 +45,12 @@ export class User {
   @Prop({ required: true })
   password: string;
 
-  // 3. Thêm trường lưu refresh token đã băm
   @Prop({ required: false }) // Không bắt buộc
   picture?: string;
-  hashedRefreshToken?: string;
+
+  // 3. Thêm trường lưu refresh token đã băm
+  @Prop({ required: false, type: String, default: null })
+  hashedRefreshToken?: string | null;
 
   @Prop({ required: false })
   firstName: string;
@@ -87,8 +91,11 @@ export class User {
   @Prop({ default: false })
   isTwoFactorEnabled?: boolean;
 
-  @Prop({ required: false })
-  resetOtp?: string;
+  @Prop({ required: false, type: String, default: null })
+  resetOtp?: string | null;
+
+  @Prop({ required: false, type: Date, default: null })
+  resetOtpExpiresAt?: Date | null;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

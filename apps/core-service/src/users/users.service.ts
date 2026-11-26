@@ -108,11 +108,21 @@ export class UsersService {
     return user;
   }
 
-  async updateRefreshToken(userId: string, refreshToken: string | null) {
+  async updateRefreshToken(
+    userId: string,
+    hashedRefreshToken: string | null,
+  ): Promise<UserDocument | null> {
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException(`Invalid ID format: ${userId}`);
+    }
     // Lưu ý: refreshToken đã được băm ở auth.service trước khi gọi hàm này
-    return this.userModel.findByIdAndUpdate(userId, {
-      hashedRefreshToken: refreshToken,
-    });
+    return this.userModel
+      .findByIdAndUpdate(
+        userId,
+        { hashedRefreshToken: hashedRefreshToken ?? null },
+        { new: true, runValidators: true },
+      )
+      .exec();
   }
 
   async updateProfile(

@@ -1,6 +1,7 @@
 // src/auth/auth.service.ts
 import {
   Injectable,
+  Logger,
   UnauthorizedException,
   BadRequestException,
   ForbiddenException,
@@ -9,13 +10,18 @@ import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
+import { createHash, randomInt, randomUUID, timingSafeEqual } from 'crypto';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { UserDocument } from '../users/schemas/user.schema';
 import { UpdateUserDto } from '../users/dto/update-user.dto';
 
+const RESET_OTP_TTL_MS = 15 * 60 * 1000;
+
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
@@ -40,9 +46,12 @@ export class AuthService {
       newUser.role || 'user',
     );
 
+    const hashedRefreshToken = await this._hashRefreshToken(
+      tokens.refreshToken,
+    );
     await this.usersService.updateRefreshToken(
       newUser._id.toString(),
-      tokens.refreshToken,
+      hashedRefreshToken,
     );
 
     return {
@@ -80,9 +89,12 @@ export class AuthService {
     );
 
     // 4. Cập nhật refresh token đã băm
+    const hashedRefreshToken = await this._hashRefreshToken(
+      tokens.refreshToken,
+    );
     await this.usersService.updateRefreshToken(
       user._id.toString(),
-      tokens.refreshToken,
+      hashedRefreshToken,
     );
 
     return {
@@ -100,35 +112,89 @@ export class AuthService {
 
   // --- HÀM LÀM MỚI TOKEN ---
   async refresh(userId: string, refreshToken: string) {
-    const user: UserDocument = await this.usersService.findOne(userId);
-    if (!user || !user.hashedRefreshToken) {
+    if (!userId || !refreshToken) {
       throw new ForbiddenException('Access Denied');
     }
 
-    const isMatch = await bcrypt.compare(refreshToken, user.hashedRefreshToken);
+    const jwtSecret = this.configService.get<string>('JWT_SECRET');
+    if (!jwtSecret) {
+      throw new Error(
+        'Missing mandatory security configuration: JWT_SECRET must be set in environment variables',
+      );
+    }
+    const refreshSecret =
+      this.configService.get<string>('JWT_REFRESH_SECRET') || jwtSecret;
+
+    let payload: { sub?: string } | null = null;
+    try {
+      payload = await this.jwtService.verifyAsync<{ sub?: string }>(
+        refreshToken,
+        {
+          secret: refreshSecret,
+          issuer: 'gastrowise-auth',
+          audience: 'gastrowise-api',
+        },
+      );
+    } catch {
+      throw new ForbiddenException('Access Denied');
+    }
+
+    if (!payload || payload.sub !== userId) {
+      throw new ForbiddenException('Access Denied');
+    }
+
+    const user: UserDocument | null = await this.usersService
+      .findOne(userId)
+      .catch(() => null);
+    if (!user || !user.hashedRefreshToken || user.status === 'banned') {
+      throw new ForbiddenException('Access Denied');
+    }
+
+    const tokenDigest = this._digestTokenForBcrypt(refreshToken);
+    const isMatch = await bcrypt.compare(tokenDigest, user.hashedRefreshToken);
     if (!isMatch) {
       throw new ForbiddenException('Access Denied');
     }
 
-    // Tạo tokens mới
+    // Tạo tokens mới (rotation)
     const tokens = await this._generateTokens(
       user._id.toString(),
       user.email,
       user.role || 'user',
     );
-    // Cập nhật token mới vào DB
+    // Băm và lưu refresh token mới vào DB
+    const hashedRefreshToken = await this._hashRefreshToken(
+      tokens.refreshToken,
+    );
     await this.usersService.updateRefreshToken(
       user._id.toString(),
-      tokens.refreshToken,
+      hashedRefreshToken,
     );
 
     return tokens;
   }
 
-  // --- HÀM PRIVATE: Băm dữ liệu ---
+  // --- HÀM PRIVATE: Digest & Băm dữ liệu ---
+  private _digestTokenForBcrypt(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
+  private async _hashRefreshToken(refreshToken: string): Promise<string> {
+    return this._hashData(this._digestTokenForBcrypt(refreshToken));
+  }
+
   private async _hashData(data: string): Promise<string> {
     const salt = await bcrypt.genSalt(10);
     return bcrypt.hash(data, salt);
+  }
+
+  private _verifyOtpMatch(expectedOtp: string, providedOtp: string): boolean {
+    const a = Buffer.from(String(expectedOtp), 'utf8');
+    const b = Buffer.from(String(providedOtp), 'utf8');
+    if (a.length !== b.length) {
+      return false;
+    }
+    return timingSafeEqual(a, b);
   }
 
   // --- HÀM PRIVATE: Tạo Tokens ---
@@ -138,6 +204,7 @@ export class AuthService {
     role: string = 'user',
   ) {
     const payload = { sub: userId, email, role };
+    const refreshPayload = { sub: userId, email, role, jti: randomUUID() };
 
     const jwtSecret = this.configService.get<string>('JWT_SECRET');
     if (!jwtSecret) {
@@ -155,7 +222,7 @@ export class AuthService {
         issuer: 'gastrowise-auth',
         audience: 'gastrowise-api',
       }),
-      this.jwtService.signAsync(payload, {
+      this.jwtService.signAsync(refreshPayload, {
         secret: refreshSecret,
         expiresIn: '7d',
         issuer: 'gastrowise-auth',
@@ -217,9 +284,12 @@ export class AuthService {
       user.role || 'user',
     );
 
+    const hashedRefreshToken = await this._hashRefreshToken(
+      tokens.refreshToken,
+    );
     await this.usersService.updateRefreshToken(
       user._id.toString(),
-      tokens.refreshToken,
+      hashedRefreshToken,
     );
 
     return tokens;
@@ -230,6 +300,9 @@ export class AuthService {
     const userObj = user.toObject ? user.toObject() : { ...user };
     delete userObj.password;
     delete userObj.hashedRefreshToken;
+    delete userObj.resetOtp;
+    delete userObj.resetOtpExpiresAt;
+    delete userObj.twoFactorSecret;
     return {
       id: user._id ? user._id.toString() : user.id,
       fullName: userObj.firstName
@@ -271,12 +344,14 @@ export class AuthService {
       );
     }
 
-    // Tạo mã OTP ngẫu nhiên 6 chữ số
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    // Tạo mã OTP ngẫu nhiên 6 chữ số (CSPRNG) + thời hạn 15 phút
+    const otp = randomInt(100000, 1000000).toString();
+    const resetOtpExpiresAt = new Date(Date.now() + RESET_OTP_TTL_MS);
 
-    // Lưu OTP vào DB
+    // Lưu OTP và thời hạn vào DB (thay thế hoàn toàn OTP cũ nếu gửi lại)
     await this.usersService.update(user._id.toString(), {
       resetOtp: otp,
+      resetOtpExpiresAt,
     } as any);
 
     // Gửi Email thực tế qua Nodemailer nếu có cấu hình SMTP
@@ -312,11 +387,16 @@ export class AuthService {
             </div>
           `,
         });
-        console.log(
-          `✉️ [EMAIL SENT VIA SMTP] OTP ${otp} has been sent to ${email}`,
+        this.logger.log(
+          JSON.stringify({
+            event: 'password_reset_otp_sent',
+            userId: user._id.toString(),
+            transport: 'smtp',
+            expiresAt: resetOtpExpiresAt.toISOString(),
+          }),
         );
       } else {
-        // Tự tạo tài khoản Ethereal Mail miễn phí để test link gửi mail thật
+        // Tự tạo tài khoản Ethereal Mail miễn phí để test mail
         const testAccount = await nodemailer.createTestAccount();
         const transporter = nodemailer.createTransport({
           host: 'smtp.ethereal.email',
@@ -325,7 +405,7 @@ export class AuthService {
           auth: { user: testAccount.user, pass: testAccount.pass },
         });
 
-        const info = await transporter.sendMail({
+        await transporter.sendMail({
           from: '"GastroWise Support" <support@gastrowise.com>',
           to: email,
           subject: 'Mã xác minh khôi phục mật khẩu GastroWise',
@@ -338,12 +418,24 @@ export class AuthService {
             </div>
           `,
         });
-        console.log(
-          `✉️ [ETHEREAL TEST EMAIL SENT] Xem nội dung mail thật tại link: ${nodemailer.getTestMessageUrl(info)}`,
+        this.logger.log(
+          JSON.stringify({
+            event: 'password_reset_otp_sent',
+            userId: user._id.toString(),
+            transport: 'ethereal',
+            expiresAt: resetOtpExpiresAt.toISOString(),
+          }),
         );
       }
-    } catch (mailError) {
-      console.error('Lỗi khi gửi email SMTP:', mailError);
+    } catch (mailError: unknown) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'password_reset_email_failed',
+          userId: user._id.toString(),
+          message:
+            mailError instanceof Error ? mailError.message : 'SMTP send error',
+        }),
+      );
     }
 
     return {
@@ -360,12 +452,24 @@ export class AuthService {
       throw new BadRequestException('Email không tồn tại!');
     }
 
-    // Kiểm tra mã OTP đúng tuyệt đối từ DB
-    const storedUser = user as any;
-    if (!storedUser.resetOtp || storedUser.resetOtp !== otp) {
-      throw new BadRequestException(
-        'Mã xác minh OTP không chính xác hoặc đã hết hạn!',
-      );
+    const storedUser = user as unknown as {
+      resetOtp?: string | null;
+      resetOtpExpiresAt?: Date | string | null;
+    };
+    const invalidOtpMessage =
+      'Mã xác minh OTP không chính xác hoặc đã hết hạn!';
+
+    if (!otp || !storedUser.resetOtp || !storedUser.resetOtpExpiresAt) {
+      throw new BadRequestException(invalidOtpMessage);
+    }
+
+    const expiresAtMs = new Date(storedUser.resetOtpExpiresAt).getTime();
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+      throw new BadRequestException(invalidOtpMessage);
+    }
+
+    if (!this._verifyOtpMatch(storedUser.resetOtp, otp)) {
+      throw new BadRequestException(invalidOtpMessage);
     }
 
     const hashedPassword = await this._hashData(newPassword);
@@ -373,6 +477,7 @@ export class AuthService {
     await this.usersService.update(user._id.toString(), {
       password: hashedPassword,
       resetOtp: null,
+      resetOtpExpiresAt: null,
     } as any);
 
     return {

@@ -291,8 +291,9 @@ describe('M8.6 Data Integrity & Consistency Fixture Tests (In-Memory Only)', () 
       );
     });
 
-    it('confirms M8.6 audit finding: UserSchema.path("hashedRefreshToken") is undefined (missing @Prop)', () => {
-      expect(UserSchema.path('hashedRefreshToken')).toBeUndefined();
+    it('confirms M9.2 remediation: UserSchema defines hashedRefreshToken and resetOtpExpiresAt paths', () => {
+      expect(UserSchema.path('hashedRefreshToken')).toBeDefined();
+      expect(UserSchema.path('resetOtpExpiresAt')).toBeDefined();
     });
 
     it('confirms M8.6 audit finding: CreateReviewDto permits diemReview = 10 despite 5-star domain scale', () => {
