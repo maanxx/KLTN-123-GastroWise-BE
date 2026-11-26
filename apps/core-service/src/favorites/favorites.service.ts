@@ -39,33 +39,41 @@ export class FavoritesService {
       throw new NotFoundException('Invalid ID format');
     }
 
-    const user = await this.userModel.findById(userId).exec();
-    if (!user) {
+    const userObjId = new Types.ObjectId(userId);
+    const resId = new Types.ObjectId(restaurantId);
+
+    // Atomic conditional remove when currently present (avoids read-modify-write races)
+    const pulledUser = await this.userModel
+      .findOneAndUpdate(
+        { _id: userObjId, savedRestaurants: resId },
+        { $pull: { savedRestaurants: resId } },
+        { new: true },
+      )
+      .exec();
+
+    if (pulledUser) {
+      return {
+        message: 'Removed from favorites',
+        isFavorite: false,
+      };
+    }
+
+    // Atomic deduplicated add via $addToSet
+    const addedUser = await this.userModel
+      .findOneAndUpdate(
+        { _id: userObjId },
+        { $addToSet: { savedRestaurants: resId } },
+        { new: true },
+      )
+      .exec();
+
+    if (!addedUser) {
       throw new NotFoundException('User not found');
     }
 
-    const resId = new Types.ObjectId(restaurantId);
-
-    // Check if the restaurant is already in savedRestaurants
-    const isFavorite = user.savedRestaurants.some(
-      (id) => id.toString() === restaurantId,
-    );
-
-    if (isFavorite) {
-      // Remove it
-      user.savedRestaurants = user.savedRestaurants.filter(
-        (id) => id.toString() !== restaurantId,
-      );
-    } else {
-      // Add it
-      user.savedRestaurants.push(resId);
-    }
-
-    await user.save();
-
     return {
-      message: isFavorite ? 'Removed from favorites' : 'Added to favorites',
-      isFavorite: !isFavorite,
+      message: 'Added to favorites',
+      isFavorite: true,
     };
   }
 

@@ -10,7 +10,8 @@ import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
-import { createHash, randomInt, randomUUID, timingSafeEqual } from 'crypto';
+import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'crypto';
+import { normalizeEmail } from '@shared/utils/email.util';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { UserDocument } from '../users/schemas/user.schema';
@@ -30,15 +31,27 @@ export class AuthService {
 
   // --- HÀM ĐĂNG KÝ ---
   async register(registerDto: RegisterDto) {
+    const normalizedEmail = normalizeEmail(registerDto.email);
     const existingUser = await this.usersService
-      .findOneByEmail(registerDto.email)
+      .findOneByEmail(normalizedEmail)
       .catch(() => null);
 
     if (existingUser) {
       throw new BadRequestException('Email already exists');
     }
 
-    const newUser: UserDocument = await this.usersService.create(registerDto);
+    let newUser: UserDocument;
+    try {
+      newUser = await this.usersService.create({
+        ...registerDto,
+        email: normalizedEmail,
+      });
+    } catch (err: any) {
+      if (err?.status === 409 || err?.code === 11000) {
+        throw new BadRequestException(err.message || 'Account already exists');
+      }
+      throw err;
+    }
 
     const tokens = await this._generateTokens(
       newUser._id.toString(),
@@ -64,9 +77,9 @@ export class AuthService {
 
   // --- HÀM ĐĂNG NHẬP ---
   async login(loginDto: LoginDto) {
-    // 1. Tìm user bằng email
+    // 1. Tìm user bằng email đã chuẩn hóa
     const user: UserDocument = await this.usersService.findOneByEmail(
-      loginDto.email,
+      normalizeEmail(loginDto.email),
     );
 
     // 2. So sánh mật khẩu
@@ -239,37 +252,15 @@ export class AuthService {
     lastName: string;
     picture?: string;
   }) {
-    if (!googleUser) {
+    if (!googleUser || !googleUser.email) {
       throw new BadRequestException('Unauthenticated');
     }
 
-    let user: UserDocument;
-
-    try {
-      // 1. Thử tìm user bằng email
-      user = await this.usersService.findOneByEmail(googleUser.email);
-
-      // Nếu user đã tồn tại, kiểm tra xem có cần cập nhật avatar từ Google không
-      if (googleUser.picture && user.picture !== googleUser.picture) {
-        user = await this.usersService.update(user._id.toString(), {
-          picture: googleUser.picture,
-        } as any);
-      }
-    } catch (error) {
-      // 2. Nếu không tìm thấy (NotFoundException), thì tạo user mới
-      if (error.status === 404) {
-        user = await this.usersService.create({
-          email: googleUser.email,
-          username: googleUser.email.split('@')[0],
-          firstName: googleUser.firstName,
-          lastName: googleUser.lastName,
-          picture: googleUser.picture,
-          password: Math.random().toString(36).substring(7),
-        } as any);
-      } else {
-        throw error;
-      }
-    }
+    const normalizedEmail = normalizeEmail(googleUser.email);
+    const user = await this._findOrCreateGoogleUser({
+      ...googleUser,
+      email: normalizedEmail,
+    });
 
     if (user.status === 'banned') {
       throw new ForbiddenException(
@@ -277,7 +268,7 @@ export class AuthService {
       );
     }
 
-    // 3. Tạo JWT
+    // Tạo JWT
     const tokens = await this._generateTokens(
       user._id.toString(),
       user.email,
@@ -293,6 +284,68 @@ export class AuthService {
     );
 
     return tokens;
+  }
+
+  private async _findOrCreateGoogleUser(googleUser: {
+    email: string;
+    firstName: string;
+    lastName: string;
+    picture?: string;
+  }): Promise<UserDocument> {
+    const existing = await this.usersService
+      .findOneByEmail(googleUser.email)
+      .catch((err) => {
+        if (err?.status === 404) return null;
+        throw err;
+      });
+
+    if (existing) {
+      if (googleUser.picture && existing.picture !== googleUser.picture) {
+        return this.usersService.update(existing._id.toString(), {
+          picture: googleUser.picture,
+        } as any);
+      }
+      return existing;
+    }
+
+    const baseLocal =
+      googleUser.email
+        .split('@')[0]
+        .replace(/[^a-zA-Z0-9._-]/g, '_')
+        .slice(0, 32) || 'user';
+    const generatedSecret = randomBytes(32).toString('hex');
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const candidateUsername =
+        attempt === 0
+          ? baseLocal
+          : `${baseLocal}_${randomBytes(3).toString('hex')}`;
+      try {
+        return await this.usersService.create({
+          email: googleUser.email,
+          username: candidateUsername,
+          firstName: googleUser.firstName,
+          lastName: googleUser.lastName,
+          picture: googleUser.picture,
+          password: generatedSecret,
+        } as any);
+      } catch (err: any) {
+        const msg = String(err?.message || '').toLowerCase();
+        const isDup = err?.status === 409 || err?.code === 11000;
+        if (!isDup) {
+          throw err;
+        }
+        // Concurrent signup for the same normalized email: link cleanly without overwriting identity
+        if (err?.keyPattern?.email || msg.includes('email')) {
+          return this.usersService.findOneByEmail(googleUser.email);
+        }
+        // Username collision (same local-part across domains): retry with randomized suffix
+      }
+    }
+
+    throw new BadRequestException(
+      'Unable to allocate a unique username for Google account',
+    );
   }
 
   private _sanitizeUser(user: any) {
@@ -332,8 +385,9 @@ export class AuthService {
 
   // --- HÀM QUÊN MẬT KHẨU ---
   async forgotPassword(email: string) {
+    const normalizedEmail = normalizeEmail(email);
     const user = await this.usersService
-      .findOneByEmail(email)
+      .findOneByEmail(normalizedEmail)
       .catch(() => null);
     if (!user) {
       throw new BadRequestException('Email không tồn tại trong hệ thống!');
@@ -445,8 +499,9 @@ export class AuthService {
 
   // --- HÀM ĐẶT LẠI MẬT KHẨU BẰNG EMAIL OTP ---
   async resetPassword(email: string, otp: string, newPassword: string) {
+    const normalizedEmail = normalizeEmail(email);
     const user = await this.usersService
-      .findOneByEmail(email)
+      .findOneByEmail(normalizedEmail)
       .catch(() => null);
     if (!user) {
       throw new BadRequestException('Email không tồn tại!');

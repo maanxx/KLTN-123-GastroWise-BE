@@ -319,4 +319,90 @@ describe('ItinerariesService (Planning Microservice ACL & Heuristics)', () => {
       expect(emptyItinerary.stops).toEqual([]);
     });
   });
+
+  describe('M9.5 Geospatial Integrity & Distance Regression', () => {
+    it('rejects itinerary generation when starting coordinates are missing or [0, 0]', async () => {
+      await expect(
+        service.generateItinerary('user-123', {
+          prompt: 'Missing coords',
+          start_time: '11:00',
+          end_time: '14:00',
+        } as any),
+      ).rejects.toThrow(/Valid non-zero starting coordinates/);
+
+      await expect(
+        service.generateItinerary('user-123', {
+          prompt: 'Zero coords',
+          start_time: '11:00',
+          end_time: '14:00',
+          lat: 0,
+          lng: 0,
+        } as any),
+      ).rejects.toThrow(/Valid non-zero starting coordinates/);
+    });
+
+    it('filters out un-geocoded candidates and rejects un-geocoded addStop instead of fabricating Q1 coordinates', async () => {
+      mockCoreApiClient.getCandidates.mockResolvedValueOnce([
+        { restaurant_id: 'no-gps', name: 'Missing GPS Venue', rating: 4.9, tags: ['Phở'] },
+        { restaurant_id: 'zero-gps', name: 'Null Island', lat: 0, lng: 0, rating: 4.9, tags: ['Phở'] },
+        { restaurant_id: 'valid-gps', name: 'Valid Venue', lat: 10.78, lng: 106.69, rating: 4.5, tags: ['Phở'] },
+      ]);
+      mockAiApiClient.optimizeRoute.mockResolvedValueOnce({
+        stops: [],
+        total_distance_km: 0,
+        total_duration_mins: 0,
+        solver: 'None',
+      });
+
+      const itinerary = await service.generateItinerary('user-123', {
+        prompt: 'Phở ngon',
+        start_time: '11:00',
+        end_time: '14:00',
+        lat: 10.77,
+        lng: 106.7,
+        budget: 200000,
+      });
+      expect(itinerary.stops).toHaveLength(1);
+      expect(itinerary.stops[0].restaurant_id).toBe('valid-gps');
+
+      // addStop must reject a restaurant without valid coordinates
+      mockItineraryModel.findById.mockReturnValueOnce({
+        exec: jest.fn().mockResolvedValue({
+          _id: new Types.ObjectId(),
+          user_id: 'user-123',
+          stops: [],
+          start_location: { type: 'Point', coordinates: [106.7, 10.77] },
+        }),
+      });
+      mockCoreApiClient.getRestaurantById.mockResolvedValueOnce({
+        restaurant_id: 'no-gps',
+        name: 'No Coords Restaurant',
+      });
+
+      await expect(
+        service.addStop(
+          new Types.ObjectId().toString(),
+          { restaurant_id: 'no-gps' },
+          'user-123',
+          'user',
+        ),
+      ).rejects.toThrow(/does not have valid non-zero coordinates/);
+    });
+
+    it('tracks previous longitude accurately across consecutive stops in recalculateTimetableAndMetrics', () => {
+      const metrics = service.recalculateTimetableAndMetrics(
+        [
+          { restaurant_id: 's1', restaurant_name: 'Stop 1', restaurant_lat: 10.77, restaurant_lng: 106.72 },
+          { restaurant_id: 's2', restaurant_name: 'Stop 2', restaurant_lat: 10.77, restaurant_lng: 106.72 },
+        ],
+        10.77,
+        106.68,
+        '11:00',
+        'motorbike',
+      );
+      // Leg 1 moves 0.04 deg lon (~4.37 km), Leg 2 stays at same coordinates (0 km)
+      expect(metrics.stops[0].distance_to_next_km).toBeGreaterThan(4.0);
+      expect(metrics.stops[1].distance_to_next_km).toBe(0);
+    });
+  });
 });

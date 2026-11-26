@@ -149,11 +149,11 @@ describe('M8.6 Data Integrity & Consistency Fixture Tests (In-Memory Only)', () 
   });
 
   describe('2. Mongoose Schema Enum & Numeric Boundary Constraints', () => {
-    it('enforces Restaurant.status enum and sets default GeoJSON coordinates', () => {
+    it('enforces Restaurant.status enum and leaves un-geocoded GeoJSON location null by default', () => {
       const validDoc = new RestaurantModel({ name: 'Quan An Ngon' });
       expect(validDoc.validateSync()).toBeUndefined();
       expect(validDoc.status).toBe('open');
-      expect(validDoc.location?.coordinates).toEqual([106.7009, 10.7769]);
+      expect(validDoc.location).toBeNull();
 
       const badDoc = new RestaurantModel({ status: 'archived' });
       expect(badDoc.validateSync()?.errors.status).toBeDefined();

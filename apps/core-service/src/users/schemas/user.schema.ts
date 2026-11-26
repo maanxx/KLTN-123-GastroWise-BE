@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import mongoose, { HydratedDocument } from 'mongoose';
 import * as bcrypt from 'bcrypt'; // 1. Import bcrypt
+import { normalizeEmail } from '@shared/utils/email.util';
 
 export type UserDocument = HydratedDocument<User>;
 
@@ -36,10 +37,15 @@ export type UserDocument = HydratedDocument<User>;
   },
 })
 export class User {
-  @Prop({ required: true, unique: true })
+  @Prop({ required: true, unique: true, trim: true })
   username: string;
 
-  @Prop({ required: true, unique: true }) // Thêm unique cho email
+  @Prop({
+    required: true,
+    unique: true,
+    lowercase: true,
+    trim: true,
+  }) // Email luôn được chuẩn hóa lowercase + trim trước khi lưu
   email: string;
 
   @Prop({ required: true })
@@ -101,6 +107,13 @@ export class User {
 export const UserSchema = SchemaFactory.createForClass(User);
 
 UserSchema.pre<UserDocument>('save', async function (next) {
+  if (this.email) {
+    this.email = normalizeEmail(this.email);
+  }
+  if (typeof this.username === 'string') {
+    this.username = this.username.trim();
+  }
+
   // Chỉ băm mật khẩu nếu nó vừa được thay đổi (hoặc là user mới)
   if (!this.isModified('password')) {
     return next();

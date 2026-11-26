@@ -1,5 +1,6 @@
 // src/restaurants/restaurants.controller.ts
 import {
+  BadRequestException,
   Controller,
   Get,
   Post,
@@ -23,6 +24,7 @@ import { ChatRestaurantDto } from './dto/chat-restaurant.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
+import { parseValidCoordinatePair } from '@shared/utils/geo.utils';
 
 @Controller('restaurants')
 export class RestaurantsController {
@@ -60,9 +62,15 @@ export class RestaurantsController {
     @Query('search') search?: string,
   ) {
     const effectiveLon = lon !== undefined && lon !== null ? lon : lng;
+    const center = parseValidCoordinatePair(lat, effectiveLon);
+    if (!center) {
+      throw new BadRequestException(
+        'Valid non-zero lat and lon/lng query parameters are required for nearby search',
+      );
+    }
     return this.restaurantsService.findNearby(
-      Number(lat) || 10.7769,
-      Number(effectiveLon) || 106.7009,
+      center.lat,
+      center.lon,
       Number(radiusKm) || 5,
       Number(limit) || 20,
       tags,
