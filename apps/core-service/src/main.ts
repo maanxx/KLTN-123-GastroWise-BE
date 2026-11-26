@@ -20,7 +20,7 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
   // Global prefix for API versioning (aligns with Mobile /api/v1 prefix)
-  app.setGlobalPrefix('api/v1', { exclude: ['health'] });
+  app.setGlobalPrefix('api/v1', { exclude: ['health', 'health/ready'] });
 
   // Static assets for uploaded files
   app.useStaticAssets(join(__dirname, '..', '..', '..', 'uploads'), {

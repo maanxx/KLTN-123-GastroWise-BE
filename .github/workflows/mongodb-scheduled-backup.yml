@@ -1,0 +1,80 @@
+name: Scheduled MongoDB Encrypted Backup
+
+on:
+  schedule:
+    # Daily at 19:00 UTC (02:00 ICT)
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Backup retention tier (daily | weekly | monthly | pre-migration)'
+        required: false
+        default: 'daily'
+        type: choice
+        options:
+          - daily
+          - weekly
+          - monthly
+          - pre-migration
+      retention_days:
+        description: 'WORM Object Lock retention in days'
+        required: false
+        default: '30'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  backup-databases:
+    name: Dump, Encrypt & Upload (${{ matrix.database }})
+    runs-on: ubuntu-latest
+    environment: production-backup
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - database: gastro_core
+            uri_secret: BACKUP_MONGO_URI_CORE
+          - database: gastro_planning
+            uri_secret: BACKUP_MONGO_URI_PLANNING
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install MongoDB Database Tools & AWS CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg curl jq
+          wget -q https://fastdl.mongodb.org/tools/db/mongodb-database-tools-ubuntu2204-x86_64-100.10.0.deb
+          sudo apt-get install -y ./mongodb-database-tools-ubuntu2204-x86_64-100.10.0.deb
+          rm -f mongodb-database-tools-*.deb
+          mongodump --version
+
+      - name: Execute encrypted mongodump & WORM upload
+        env:
+          BACKUP_MONGO_URI: ${{ secrets[matrix.uri_secret] }}
+          BACKUP_DB_NAME: ${{ matrix.database }}
+          BACKUP_TIER: ${{ github.event.inputs.tier || 'daily' }}
+          BACKUP_RETENTION_DAYS: ${{ github.event.inputs.retention_days || '30' }}
+          BACKUP_USE_OPLOG: 'true'
+          BACKUP_REQUIRE_TLS: 'true'
+          BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
+          BACKUP_S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+          BACKUP_S3_ENDPOINT_URL: ${{ secrets.BACKUP_S3_ENDPOINT_URL }}
+          BACKUP_OBJECT_LOCK_MODE: GOVERNANCE
+          AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_S3_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.BACKUP_S3_REGION || 'ap-southeast-1' }}
+        run: |
+          chmod +x scripts/backup/mongo-backup.sh
+          ./scripts/backup/mongo-backup.sh
+
+      - name: Upload checksum manifest metadata artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-manifest-${{ matrix.database }}
+          path: /tmp/gastrowise-backups/*.manifest.json
+          retention-days: 30
