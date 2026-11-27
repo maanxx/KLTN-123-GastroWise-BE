@@ -12,6 +12,7 @@ export interface ParsedCliArgs {
   steps?: number;
   dryRun: boolean;
   retryFailedIdempotent: boolean;
+  allowAtlas: boolean;
 }
 
 export function parseMigrationCliArgs(argv: readonly string[]): ParsedCliArgs {
@@ -28,6 +29,7 @@ export function parseMigrationCliArgs(argv: readonly string[]): ParsedCliArgs {
   let steps: number | undefined;
   let dryRun = false;
   let retryFailedIdempotent = false;
+  let allowAtlas = false;
 
   for (const arg of args) {
     if (
@@ -63,6 +65,8 @@ export function parseMigrationCliArgs(argv: readonly string[]): ParsedCliArgs {
       dryRun = true;
     } else if (arg === '--retry-failed-idempotent') {
       retryFailedIdempotent = true;
+    } else if (arg === '--allow-atlas') {
+      allowAtlas = true;
     } else {
       throw new MigrationValidationError(`Unknown CLI option: "${arg}".`);
     }
@@ -81,5 +85,6 @@ export function parseMigrationCliArgs(argv: readonly string[]): ParsedCliArgs {
     steps,
     dryRun,
     retryFailedIdempotent,
+    allowAtlas,
   };
 }

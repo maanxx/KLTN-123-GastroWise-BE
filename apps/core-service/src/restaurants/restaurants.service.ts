@@ -611,7 +611,13 @@ export class RestaurantsService {
           15,
           limit,
         );
-      } catch {}
+      } catch (error: unknown) {
+        const reason =
+          error instanceof Error ? error.message : 'Unknown nearby error';
+        this.logger.warn(
+          `Fallback nearby search failed; falling back to top-rated list: ${reason}`,
+        );
+      }
     }
 
     if (!fallbackList || fallbackList.length === 0) {
@@ -1189,7 +1195,13 @@ export class RestaurantsService {
               profile.bitter ?? 0.5,
             ];
           }
-        } catch {}
+        } catch (error: unknown) {
+          const reason =
+            error instanceof Error ? error.message : 'Unknown TasteDNA error';
+          this.logger.warn(
+            `Unable to load TasteDNA profile for AI chat; continuing without taste vector: ${reason}`,
+          );
+        }
       }
 
       const aiBaseUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';

@@ -589,7 +589,104 @@ describe('M9.1 Versioned TypeScript MongoDB Migration Runner', () => {
         steps: undefined,
         dryRun: true,
         retryFailedIdempotent: false,
+        allowAtlas: false,
       });
+
+      const withAtlasFlag = parseMigrationCliArgs([
+        'up',
+        '--scope=core',
+        '--dry-run',
+        '--allow-atlas',
+      ]);
+      expect(withAtlasFlag.allowAtlas).toBe(true);
+    });
+
+    it('rejects Atlas mongodb+srv:// and mongodb.net targets by default without exposing credentials', () => {
+      const srvUri =
+        'mongodb+srv://atlasUser:TopSecretPass99@cluster0.abcde.mongodb.net/gastro_core';
+      let caughtSrv: unknown;
+      try {
+        resolveDatabaseConnectionConfig('core', {
+          MONGODB_URI_CORE: srvUri,
+        });
+      } catch (err: unknown) {
+        caughtSrv = err;
+      }
+      expect(caughtSrv).toBeInstanceOf(MigrationValidationError);
+      const srvMsg = (caughtSrv as Error).message;
+      expect(srvMsg).toContain('ALLOW_ATLAS_MIGRATION=true');
+      expect(srvMsg).not.toContain('TopSecretPass99');
+      expect(srvMsg).toContain('atlasUser:***@');
+
+      const hostUri =
+        'mongodb://atlasUser:AnotherSecret88@shard0.xyz.mongodb.net:27017/gastro_planning';
+      let caughtHost: unknown;
+      try {
+        resolveDatabaseConnectionConfig('planning', {
+          MONGODB_URI_PLANNING: hostUri,
+        });
+      } catch (err: unknown) {
+        caughtHost = err;
+      }
+      expect(caughtHost).toBeInstanceOf(MigrationValidationError);
+      expect((caughtHost as Error).message).not.toContain('AnotherSecret88');
+    });
+
+    it('allows Atlas targets when ALLOW_ATLAS_MIGRATION=true or --allow-atlas is explicitly provided', () => {
+      const srvUri =
+        'mongodb+srv://atlasUser:TopSecretPass99@cluster0.abcde.mongodb.net/gastro_core';
+
+      const envAuthorized = resolveDatabaseConnectionConfig('core', {
+        MONGODB_URI_CORE: srvUri,
+        ALLOW_ATLAS_MIGRATION: 'true',
+      });
+      expect(envAuthorized.atlasAuthorized).toBe(true);
+      expect(envAuthorized.redactedUri).not.toContain('TopSecretPass99');
+
+      const flagAuthorized = resolveDatabaseConnectionConfig(
+        'core',
+        { MONGODB_URI_CORE: srvUri },
+        { allowAtlas: true },
+      );
+      expect(flagAuthorized.atlasAuthorized).toBe(true);
+    });
+
+    it('allows localhost and Docker service hostnames without Atlas authorization', () => {
+      const localhostCfg = resolveDatabaseConnectionConfig('core', {
+        MONGODB_URI_CORE: 'mongodb://localhost:27017/gastro_core_test',
+      });
+      expect(localhostCfg.atlasAuthorized).toBe(false);
+
+      const loopbackCfg = resolveDatabaseConnectionConfig('core', {
+        MONGODB_URI_CORE: 'mongodb://127.0.0.1:27017/gastro_core_test',
+      });
+      expect(loopbackCfg.atlasAuthorized).toBe(false);
+
+      const dockerCfg = resolveDatabaseConnectionConfig('planning', {
+        MONGODB_URI_PLANNING:
+          'mongodb://gastro_planning_svc:testpass@mongo-test:27017/gastro_planning_test',
+      });
+      expect(dockerCfg.atlasAuthorized).toBe(false);
+    });
+
+    it('fails safely on missing URIs and ambiguous or malformed remote targets', () => {
+      expect(() => resolveDatabaseConnectionConfig('core', {})).toThrow(
+        MigrationValidationError,
+      );
+
+      expect(() =>
+        resolveDatabaseConnectionConfig('core', {
+          MONGODB_URI_CORE:
+            'mongodb://user:SecretAmbiguous@db.external-host.example.com:27017/gastro_core',
+        }),
+      ).toThrow(MigrationValidationError);
+
+      expect(() =>
+        resolveDatabaseConnectionConfig('core', {
+          MONGODB_URI_CORE: 'not-a-valid-mongo-uri',
+          ALLOW_ATLAS_MIGRATION: 'true',
+        }),
+      ).toThrow(MigrationValidationError);
     });
   });
 });
