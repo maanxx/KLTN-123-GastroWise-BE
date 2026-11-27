@@ -126,3 +126,16 @@ Bảng theo dõi toàn bộ các vấn đề kỹ thuật, lỗi kiến trúc, l
 - **Trạng thái:** **OPEN (HISTORICAL COMMIT)**
 - **Minh chứng:** File `scripts/remediate-config.js` đã được xóa khỏi working tree trong commit `4b8ab800`, hiện không còn xuất hiện trong cây thư mục hiện tại. Tuy nhiên vẫn tồn tại trong lịch sử commit `f6bc66fc`.
 - **Phương án đề xuất:** Tuân thủ nguyên tắc an toàn Git, KHÔNG force-push hoặc rewrite git history. Đề xuất DBA xoay vòng / thu hồi (revoke/delete) trực tiếp user database này trên MongoDB Atlas.
+
+---
+
+## 3. M9.7.1 RECONCILIATION STATUS (2026-11-27)
+
+- **Cross-repo / Infra issues still OPEN (`ISSUE-06`, `ISSUE-10`, `ISSUE-11`, `ISSUE-12`):** Preserved above without deletion.
+- **Database & Infrastructure Blockers (`docs/database/M8_8_BLOCKER_REGISTER.md`):**
+  - `BLK-01`..`BLK-09`: Code/Docker implementation completed in `M9.1`–`M9.5` and verified locally via unit/build checks (Note: `KLTN-123-GastroWise-AI` M9.4 patch remains unpushed externally).
+  - `BLK-10`: Backup scripts, CI workflows, and `/health/ready` probes implemented and locally shellcheck/unit-tested in `M9.6`–`M9.6.1`; cloud secrets, Atlas tier (`BLK-10a`), and S3 Object Lock (`BLK-10b`) remain unverified on live infrastructure.
+  - `BLK-11`: **UNRESOLVED / BLOCKED** — requires authorized isolated staging Atlas snapshot audit.
+- **New M9.7.0 Backend Findings:**
+  - `F-M2` (P1): `scripts/migrations/cli.ts` lacks an explicit `mongodb+srv://` / Atlas production guard.
+  - `L-01` (P2): Silent `catch {}` blocks (`no-empty` ESLint errors) at `apps/core-service/src/restaurants/restaurants.service.ts` lines 614 and 1192.
