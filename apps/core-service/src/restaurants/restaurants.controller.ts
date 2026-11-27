@@ -1,5 +1,6 @@
 // src/restaurants/restaurants.controller.ts
 import {
+  BadRequestException,
   Controller,
   Get,
   Post,
@@ -17,9 +18,13 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { RestaurantsService } from './restaurants.service';
 import { CreateRestaurantDto } from './dto/create-restaurant.dto';
 import { UpdateRestaurantDto } from './dto/update-restaurant.dto';
+import { CreateMenuItemDto } from './dto/create-menu-item.dto';
+import { UpdateMenuItemDto } from './dto/update-menu-item.dto';
+import { ChatRestaurantDto } from './dto/chat-restaurant.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
+import { parseValidCoordinatePair } from '@shared/utils/geo.utils';
 
 @Controller('restaurants')
 export class RestaurantsController {
@@ -57,9 +62,15 @@ export class RestaurantsController {
     @Query('search') search?: string,
   ) {
     const effectiveLon = lon !== undefined && lon !== null ? lon : lng;
+    const center = parseValidCoordinatePair(lat, effectiveLon);
+    if (!center) {
+      throw new BadRequestException(
+        'Valid non-zero lat and lon/lng query parameters are required for nearby search',
+      );
+    }
     return this.restaurantsService.findNearby(
-      Number(lat) || 10.7769,
-      Number(effectiveLon) || 106.7009,
+      center.lat,
+      center.lon,
       Number(radiusKm) || 5,
       Number(limit) || 20,
       tags,
@@ -115,7 +126,7 @@ export class RestaurantsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'owner')
   @Post(':id/menu')
-  createMenuItem(@Param('id') id: string, @Body() dto: any) {
+  createMenuItem(@Param('id') id: string, @Body() dto: CreateMenuItemDto) {
     return this.restaurantsService.createMenuItem(id, dto);
   }
 
@@ -125,7 +136,10 @@ export class RestaurantsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'owner')
   @Patch('menu/:menuId')
-  updateMenuItem(@Param('menuId') menuId: string, @Body() dto: any) {
+  updateMenuItem(
+    @Param('menuId') menuId: string,
+    @Body() dto: UpdateMenuItemDto,
+  ) {
     return this.restaurantsService.updateMenuItem(menuId, dto);
   }
 
@@ -226,10 +240,7 @@ export class RestaurantsController {
   }
 
   @Post('chat')
-  async chat(
-    @Req() req: any,
-    @Body() body: { message: string; userLat?: string; userLon?: string },
-  ) {
+  async chat(@Req() req: any, @Body() body: ChatRestaurantDto) {
     let userId = req.user?.sub || req.user?._id || req.user?.id;
     if (!userId && req.headers?.authorization) {
       try {

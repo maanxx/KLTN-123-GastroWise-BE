@@ -45,6 +45,12 @@ lerna-debug.log*
 # Remediate & migration scripts with potential credentials
 scripts/remediate*.js
 
+# Backup artifacts (never commit DB dumps or checksums)
+backups/
+*.archive.gz
+*.archive.gz.enc
+*.archive.gz.sha256
+
 # temp directory
 .temp
 .tmp

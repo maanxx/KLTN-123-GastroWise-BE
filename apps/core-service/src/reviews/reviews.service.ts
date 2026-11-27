@@ -1,5 +1,13 @@
 // src/reviews/reviews.service.ts
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+  UnauthorizedException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { HttpService } from '@nestjs/axios';
@@ -16,6 +24,8 @@ import { InteractionsService } from '../interactions/interactions.service';
 @Injectable()
 export class ReviewsService {
   private readonly logger = new Logger(ReviewsService.name);
+  private readonly aiBaseUrl: string;
+  private readonly internalAiKey: string;
 
   constructor(
     @InjectModel(Review.name) private reviewModel: Model<ReviewDocument>,
@@ -24,19 +34,26 @@ export class ReviewsService {
     private readonly httpService: HttpService,
     private readonly tasteDnaService: TasteDnaService,
     private readonly interactionsService: InteractionsService,
-  ) {}
+  ) {
+    this.aiBaseUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
+    const key = process.env.INTERNAL_AI_KEY;
+    if (!key || !key.trim()) {
+      throw new Error(
+        'Missing mandatory security configuration: INTERNAL_AI_KEY must be set in environment variables',
+      );
+    }
+    this.internalAiKey = key.trim();
+  }
 
   // --- 1. Hàm gọi Python AI Microservice Phân Tích Cảm Thuyết ---
   async analyzeSentiment(content: string) {
     try {
-      const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
-      const headers: Record<string, string> = {};
-      if (process.env.INTERNAL_AI_KEY) {
-        headers['X-Internal-AI-Key'] = process.env.INTERNAL_AI_KEY;
-      }
+      const headers: Record<string, string> = {
+        'X-Internal-AI-Key': this.internalAiKey,
+      };
       const aiResponse = await firstValueFrom(
         this.httpService.post(
-          `${aiUrl}/analyze-sentiment`,
+          `${this.aiBaseUrl}/analyze-sentiment`,
           { review: content },
           { headers, timeout: 3000 },
         ),
@@ -52,6 +69,21 @@ export class ReviewsService {
         };
       }
     } catch (pythonAiErr: any) {
+      const status = pythonAiErr?.response?.status;
+      if (status === 401) {
+        this.logger.error(
+          'CRITICAL: AI Service sentiment authentication missing or rejected (HTTP 401).',
+        );
+        throw new UnauthorizedException(
+          'AI Service authentication failed (HTTP 401)',
+        );
+      }
+      if (status === 403) {
+        this.logger.error(
+          'CRITICAL: AI Service sentiment authentication forbidden (HTTP 403 invalid key).',
+        );
+        throw new ForbiddenException('AI Service forbidden (HTTP 403)');
+      }
       this.logger.warn(
         `⚠️ Python AI Microservice offline. Trả về nhãn NEUTRAL mặc định: ${pythonAiErr.message}`,
       );
@@ -82,13 +114,11 @@ export class ReviewsService {
 
   // --- 2. Hàm tạo mới Review & Tự động Reinforce Taste DNA (TASK-P1-02) ---
   async create(createReviewDto: CreateReviewDto): Promise<Review> {
-    const aiResult = await this.analyzeSentiment(createReviewDto.noiDung);
-
     let resolvedRestaurantId = createReviewDto.restaurantId;
     if (
-      resolvedRestaurantId &&
-      (!Types.ObjectId.isValid(resolvedRestaurantId) ||
-        !/^[0-9a-fA-F]{24}$/.test(resolvedRestaurantId))
+      !resolvedRestaurantId ||
+      !Types.ObjectId.isValid(resolvedRestaurantId) ||
+      !/^[0-9a-fA-F]{24}$/.test(resolvedRestaurantId)
     ) {
       const restaurant = await this.restaurantModel
         .findOne({
@@ -98,16 +128,48 @@ export class ReviewsService {
           ],
         })
         .exec();
-      if (restaurant) {
-        resolvedRestaurantId = restaurant._id.toString();
+      if (!restaurant) {
+        throw new BadRequestException(
+          `Invalid restaurant identifier "${String(createReviewDto.restaurantId)}"`,
+        );
+      }
+      resolvedRestaurantId = restaurant._id.toString();
+    } else {
+      const exists = await this.restaurantModel
+        .findById(resolvedRestaurantId)
+        .exec();
+      if (!exists) {
+        throw new NotFoundException(
+          `Restaurant with ID "${resolvedRestaurantId}" not found`,
+        );
       }
     }
 
+    const restObjId = new Types.ObjectId(resolvedRestaurantId);
+    const hasValidUserId =
+      Boolean(createReviewDto.userId) &&
+      Types.ObjectId.isValid(createReviewDto.userId as string);
+    const userObjId = hasValidUserId
+      ? new Types.ObjectId(createReviewDto.userId)
+      : undefined;
+
+    if (userObjId) {
+      const duplicate = await this.reviewModel
+        .findOne({ userId: userObjId, restaurantId: restObjId })
+        .exec();
+      if (duplicate) {
+        throw new ConflictException(
+          'User has already submitted a review for this restaurant',
+        );
+      }
+    }
+
+    const aiResult = await this.analyzeSentiment(createReviewDto.noiDung);
+
     const newReviewData = {
       ...createReviewDto,
-      restaurantId: resolvedRestaurantId
-        ? new Types.ObjectId(resolvedRestaurantId)
-        : undefined,
+      restaurantId: restObjId,
+      ...(userObjId ? { userId: userObjId } : {}),
       aiSentimentLabel: aiResult.label || 'NEUTRAL',
       aiSentimentScore: aiResult.score || 0.5,
       hashtags: aiResult.hashtags || [],
@@ -115,43 +177,20 @@ export class ReviewsService {
     };
 
     const createdReview = new this.reviewModel(newReviewData);
-    const savedReview = await createdReview.save();
-
-    // 1. Tự động tính toán lại điểm trung bình và số lượng review cho Nhà hàng
-    if (resolvedRestaurantId && Types.ObjectId.isValid(resolvedRestaurantId)) {
-      try {
-        const stats = await this.reviewModel.aggregate([
-          {
-            $match: { restaurantId: new Types.ObjectId(resolvedRestaurantId) },
-          },
-          {
-            $group: {
-              _id: '$restaurantId',
-              avgRating: { $avg: '$diemReview' },
-              totalReviews: { $sum: 1 },
-            },
-          },
-        ]);
-
-        if (stats.length > 0) {
-          const rawAvg = stats[0].avgRating || 5.0;
-          const normalizedAvg = Number(rawAvg.toFixed(1));
-          await this.restaurantModel.updateOne(
-            { _id: new Types.ObjectId(resolvedRestaurantId) },
-            {
-              $set: {
-                diemTrungBinh: normalizedAvg,
-                reviewsCount: stats[0].totalReviews,
-              },
-            },
-          );
-        }
-      } catch (statErr: any) {
-        this.logger.warn(
-          `Không thể cập nhật điểm trung bình nhà hàng: ${statErr.message}`,
+    let savedReview: ReviewDocument;
+    try {
+      savedReview = await createdReview.save();
+    } catch (err: any) {
+      if (err?.code === 11000) {
+        throw new ConflictException(
+          'User has already submitted a review for this restaurant',
         );
       }
+      throw err;
     }
+
+    // 1. Tự động tính toán lại điểm trung bình và số lượng review cho Nhà hàng
+    await this._recalculateRestaurantStats(restObjId);
 
     // 2. Ghi nhận sự kiện tương tác vào telemetry pipeline (TASK-P0-02)
     const userIdStr = createReviewDto.userId
@@ -391,12 +430,66 @@ export class ReviewsService {
     };
   }
 
+  private async _recalculateRestaurantStats(
+    restaurantId: Types.ObjectId,
+  ): Promise<void> {
+    try {
+      const stats = await this.reviewModel.aggregate([
+        { $match: { restaurantId } },
+        {
+          $group: {
+            _id: '$restaurantId',
+            avgRating: { $avg: '$diemReview' },
+            totalReviews: { $sum: 1 },
+          },
+        },
+      ]);
+
+      if (stats.length > 0) {
+        const rawAvg = stats[0].avgRating || 5.0;
+        const normalizedAvg = Number(rawAvg.toFixed(1));
+        await this.restaurantModel.updateOne(
+          { _id: restaurantId },
+          {
+            $set: {
+              diemTrungBinh: normalizedAvg,
+              reviewsCount: stats[0].totalReviews,
+            },
+          },
+        );
+      } else {
+        await this.restaurantModel.updateOne(
+          { _id: restaurantId },
+          { $set: { diemTrungBinh: 0, reviewsCount: 0 } },
+        );
+      }
+    } catch (statErr: any) {
+      this.logger.warn(
+        `Không thể cập nhật điểm trung bình nhà hàng: ${statErr.message}`,
+      );
+    }
+  }
+
   async deleteReview(id: string) {
-    return this.reviewModel.findByIdAndDelete(id).exec();
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException(`Invalid review ID format: ${id}`);
+    }
+    const deleted = await this.reviewModel.findByIdAndDelete(id).exec();
+    if (!deleted) {
+      throw new NotFoundException(`Review #${id} not found`);
+    }
+    if (deleted.restaurantId) {
+      await this._recalculateRestaurantStats(
+        new Types.ObjectId(deleted.restaurantId.toString()),
+      );
+    }
+    return deleted;
   }
 
   async updateReview(id: string, dto: any) {
-    return this.reviewModel.findByIdAndUpdate(id, dto, { new: true }).exec();
+    return this.reviewModel
+      .findByIdAndUpdate(id, dto, { new: true, runValidators: true })
+      .exec();
   }
 
   // --- 4. Hàm Quét và Cập nhật Review cũ (Công cụ Admin) ---

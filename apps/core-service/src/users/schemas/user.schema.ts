@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import mongoose, { HydratedDocument } from 'mongoose';
 import * as bcrypt from 'bcrypt'; // 1. Import bcrypt
+import { normalizeEmail } from '@shared/utils/email.util';
 
 export type UserDocument = HydratedDocument<User>;
 
@@ -10,9 +11,12 @@ export type UserDocument = HydratedDocument<User>;
   toJSON: {
     virtuals: true,
     transform: function (doc, ret: any) {
-      // Xóa password và hashedRefreshToken khỏi kết quả JSON trả về
+      // Xóa password, tokens và secrets khỏi kết quả JSON trả về
       delete ret.password;
       delete ret.hashedRefreshToken;
+      delete ret.twoFactorSecret;
+      delete ret.resetOtp;
+      delete ret.resetOtpExpiresAt;
       delete ret._id; // (Tùy chọn, nếu bạn dùng virtual 'id')
       delete ret.__v;
       return ret;
@@ -23,6 +27,9 @@ export type UserDocument = HydratedDocument<User>;
     transform: function (doc, ret: any) {
       delete ret.password;
       delete ret.hashedRefreshToken;
+      delete ret.twoFactorSecret;
+      delete ret.resetOtp;
+      delete ret.resetOtpExpiresAt;
       delete ret._id;
       delete ret.__v;
       return ret;
@@ -30,19 +37,26 @@ export type UserDocument = HydratedDocument<User>;
   },
 })
 export class User {
-  @Prop({ required: true, unique: true })
+  @Prop({ required: true, unique: true, trim: true })
   username: string;
 
-  @Prop({ required: true, unique: true }) // Thêm unique cho email
+  @Prop({
+    required: true,
+    unique: true,
+    lowercase: true,
+    trim: true,
+  }) // Email luôn được chuẩn hóa lowercase + trim trước khi lưu
   email: string;
 
   @Prop({ required: true })
   password: string;
 
-  // 3. Thêm trường lưu refresh token đã băm
   @Prop({ required: false }) // Không bắt buộc
   picture?: string;
-  hashedRefreshToken?: string;
+
+  // 3. Thêm trường lưu refresh token đã băm
+  @Prop({ required: false, type: String, default: null })
+  hashedRefreshToken?: string | null;
 
   @Prop({ required: false })
   firstName: string;
@@ -83,13 +97,23 @@ export class User {
   @Prop({ default: false })
   isTwoFactorEnabled?: boolean;
 
-  @Prop({ required: false })
-  resetOtp?: string;
+  @Prop({ required: false, type: String, default: null })
+  resetOtp?: string | null;
+
+  @Prop({ required: false, type: Date, default: null })
+  resetOtpExpiresAt?: Date | null;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
 
 UserSchema.pre<UserDocument>('save', async function (next) {
+  if (this.email) {
+    this.email = normalizeEmail(this.email);
+  }
+  if (typeof this.username === 'string') {
+    this.username = this.username.trim();
+  }
+
   // Chỉ băm mật khẩu nếu nó vừa được thay đổi (hoặc là user mới)
   if (!this.isModified('password')) {
     return next();

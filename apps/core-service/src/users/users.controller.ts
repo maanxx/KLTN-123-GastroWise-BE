@@ -15,6 +15,7 @@ import {
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { SafeUserResponseDto, toSafeUser } from './dto/safe-user-response.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -45,11 +46,24 @@ export class UsersController {
 
   /**
    * User / Admin: Xem thông tin tài khoản
+   * Quy tắc RBAC: Admin có quyền xem mọi user. User thường chỉ được xem hồ sơ chính mình (ngăn chặn IDOR).
    */
   @UseGuards(JwtAuthGuard)
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.usersService.findOne(id);
+  async findOne(
+    @Req() req: any,
+    @Param('id') id: string,
+  ): Promise<SafeUserResponseDto> {
+    const callerRole = req.user?.role || 'user';
+    const callerId = req.user?.userId || req.user?.sub;
+
+    if (callerRole !== 'admin' && callerId !== id) {
+      throw new ForbiddenException(
+        'Access Denied: You can only view your own profile',
+      );
+    }
+    const user = await this.usersService.findOne(id);
+    return toSafeUser(user);
   }
 
   /**
@@ -59,11 +73,11 @@ export class UsersController {
    */
   @UseGuards(JwtAuthGuard)
   @Patch(':id')
-  update(
+  async update(
     @Req() req: any,
     @Param('id') id: string,
     @Body() updateUserDto: UpdateUserDto,
-  ) {
+  ): Promise<SafeUserResponseDto> {
     const callerRole = req.user?.role || 'user';
     const callerId = req.user?.userId || req.user?.sub;
 
@@ -78,7 +92,8 @@ export class UsersController {
       delete (updateUserDto as any).status;
     }
 
-    return this.usersService.update(id, updateUserDto);
+    const updated = await this.usersService.update(id, updateUserDto);
+    return toSafeUser(updated);
   }
 
   /**

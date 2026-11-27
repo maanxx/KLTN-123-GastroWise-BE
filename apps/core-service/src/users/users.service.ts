@@ -1,17 +1,77 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { CreateUserDto } from './dto/create-user.dto';
-import { UpdateUserDto } from './dto/update-user.dto'; // 1. Import DTO này
+import { UpdateUserDto } from './dto/update-user.dto';
 import { InjectModel } from '@nestjs/mongoose';
 import { User, UserDocument } from './schemas/user.schema';
-import mongoose, { Model } from 'mongoose'; // 2. Import mongoose (sửa lại)
+import {
+  TasteDnaProfile,
+  TasteDnaDocument,
+} from '../taste-dna/schemas/taste-dna.schema';
+import { FavoriteCollection } from '../favorites/schemas/favorite-collection.schema';
+import { Notification } from './schemas/notification.schema';
+import {
+  ChatSession,
+  ChatSessionDocument,
+} from '../restaurants/schemas/chat-session.schema';
+import { Review, ReviewDocument } from '../reviews/schemas/review.schema';
+import {
+  Restaurant,
+  RestaurantDocument,
+} from '../restaurants/schemas/restaurant.schema';
+import mongoose, { Model } from 'mongoose';
+import { escapeRegexLiteral, normalizeEmail } from '@shared/utils/email.util';
 
 @Injectable()
 export class UsersService {
-  constructor(@InjectModel(User.name) private userModel: Model<UserDocument>) {}
+  constructor(
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @Optional()
+    @InjectModel(TasteDnaProfile.name)
+    private tasteDnaModel?: Model<TasteDnaDocument>,
+    @Optional()
+    @InjectModel(FavoriteCollection.name)
+    private favoriteCollectionModel?: Model<FavoriteCollection>,
+    @Optional()
+    @InjectModel(Notification.name)
+    private notificationModel?: Model<Notification>,
+    @Optional()
+    @InjectModel(ChatSession.name)
+    private chatSessionModel?: Model<ChatSessionDocument>,
+    @Optional()
+    @InjectModel(Review.name)
+    private reviewModel?: Model<ReviewDocument>,
+    @Optional()
+    @InjectModel(Restaurant.name)
+    private restaurantModel?: Model<RestaurantDocument>,
+  ) {}
 
   async create(createUserDto: CreateUserDto): Promise<UserDocument> {
-    const createdUser = new this.userModel(createUserDto);
-    return createdUser.save();
+    const normalizedPayload: CreateUserDto = {
+      ...createUserDto,
+      email: normalizeEmail(createUserDto.email),
+      ...(typeof createUserDto.username === 'string'
+        ? { username: createUserDto.username.trim() }
+        : {}),
+    };
+
+    const createdUser = new this.userModel(normalizedPayload);
+    try {
+      return await createdUser.save();
+    } catch (err: any) {
+      if (err?.code === 11000) {
+        const keyPattern = err?.keyPattern || {};
+        if (keyPattern.username) {
+          throw new ConflictException('Username already exists');
+        }
+        throw new ConflictException('Email already exists');
+      }
+      throw err;
+    }
   }
 
   async findAll(query: any = {}): Promise<any> {
@@ -78,7 +138,7 @@ export class UsersService {
     }
     // findByIdAndUpdate sẽ tìm, cập nhật và trả về bản ghi MỚI (vì có { new: true })
     const updatedUser = await this.userModel
-      .findByIdAndUpdate(id, updateUserDto, { new: true })
+      .findByIdAndUpdate(id, updateUserDto, { new: true, runValidators: true })
       .exec();
 
     if (!updatedUser) {
@@ -87,7 +147,6 @@ export class UsersService {
     return updatedUser;
   }
 
-  // 5. THÊM HÀM NÀY
   async remove(id: string): Promise<UserDocument> {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       throw new NotFoundException(`Invalid ID format: ${id}`);
@@ -96,23 +155,67 @@ export class UsersService {
     if (!deletedUser) {
       throw new NotFoundException(`User #${id} not found`);
     }
+
+    const userObjId = new mongoose.Types.ObjectId(id);
+
+    // Cascade delete user-owned dependent documents & anonymize/unlink shared records
+    await Promise.all([
+      this.tasteDnaModel?.deleteMany({ userId: userObjId }),
+      this.favoriteCollectionModel?.deleteMany({ userId: userObjId }),
+      this.notificationModel?.deleteMany({ userId: userObjId }),
+      this.chatSessionModel?.deleteMany({ userId: userObjId }),
+      this.reviewModel?.updateMany(
+        { userId: userObjId },
+        { $set: { userId: null, userName: 'Deleted User' } },
+      ),
+      this.restaurantModel?.updateMany(
+        { ownerId: userObjId },
+        { $set: { ownerId: null } },
+      ),
+    ]);
+
     return deletedUser;
   }
 
   async findOneByEmail(email: string): Promise<UserDocument> {
-    // .select('+password') RẤT QUAN TRỌNG để lấy cả mật khẩu
-    const user = await this.userModel.findOne({ email }).select('+password');
+    const normalizedEmail = normalizeEmail(email);
+    // Exact lowercase lookup first (uses unique email index IXSCAN)
+    let user: UserDocument | null = (await this.userModel
+      .findOne({ email: normalizedEmail })
+      .select('+password')) as unknown as UserDocument | null;
+
+    // Backward-compatible anchored case-insensitive fallback for pre-V004 legacy mixed-case emails
+    if (!user && email && email.trim() !== normalizedEmail) {
+      const legacyPattern = new RegExp(
+        `^${escapeRegexLiteral(email.trim())}$`,
+        'i',
+      );
+      user = (await this.userModel
+        .findOne({ email: { $regex: legacyPattern } })
+        .select('+password')) as unknown as UserDocument | null;
+    }
+
     if (!user) {
-      throw new NotFoundException(`User with email ${email} not found`);
+      throw new NotFoundException(`User with email ${normalizedEmail} not found`);
     }
     return user;
   }
 
-  async updateRefreshToken(userId: string, refreshToken: string | null) {
+  async updateRefreshToken(
+    userId: string,
+    hashedRefreshToken: string | null,
+  ): Promise<UserDocument | null> {
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException(`Invalid ID format: ${userId}`);
+    }
     // Lưu ý: refreshToken đã được băm ở auth.service trước khi gọi hàm này
-    return this.userModel.findByIdAndUpdate(userId, {
-      hashedRefreshToken: refreshToken,
-    });
+    return this.userModel
+      .findByIdAndUpdate(
+        userId,
+        { hashedRefreshToken: hashedRefreshToken ?? null },
+        { new: true, runValidators: true },
+      )
+      .exec();
   }
 
   async updateProfile(
@@ -124,7 +227,10 @@ export class UsersService {
     }
 
     const updatedUser = await this.userModel
-      .findByIdAndUpdate(userId, updateUserDto, { new: true }) // { new: true } để trả về data MỚI
+      .findByIdAndUpdate(userId, updateUserDto, {
+        new: true,
+        runValidators: true,
+      }) // { new: true } để trả về data MỚI
       .exec();
 
     if (!updatedUser) {

@@ -1,28 +1,33 @@
-// src/restaurants/restaurants.service.ts
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
-  OnApplicationBootstrap,
   Logger,
   Optional,
-  Inject,
 } from '@nestjs/common';
 import { CreateRestaurantDto } from './dto/create-restaurant.dto';
 import { UpdateRestaurantDto } from './dto/update-restaurant.dto';
 import { InjectModel } from '@nestjs/mongoose';
 import { Restaurant, RestaurantDocument } from './schemas/restaurant.schema';
 import { MenuItem, MenuItemDocument } from './schemas/menu-item.schema';
+import { Review, ReviewDocument } from '../reviews/schemas/review.schema';
+import { User, UserDocument } from '../users/schemas/user.schema';
+import { FavoriteCollection } from '../favorites/schemas/favorite-collection.schema';
 import { Model, Types } from 'mongoose';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import FormData from 'form-data';
 import { TasteDnaService } from '../taste-dna/taste-dna.service';
 import { InteractionsService } from '../interactions/interactions.service';
-
-const aiUrl = process.env.AI_SERVICE_URL;
+import {
+  extractValidGeoPoint,
+  isValidGeoJsonPoint,
+  parseValidCoordinatePair,
+  toGeoJsonPoint,
+} from '@shared/utils/geo.utils';
 
 @Injectable()
-export class RestaurantsService implements OnApplicationBootstrap {
+export class RestaurantsService {
   private readonly logger = new Logger(RestaurantsService.name);
   private readonly aiBaseUrl: string;
   private readonly internalAiKey: string;
@@ -37,6 +42,15 @@ export class RestaurantsService implements OnApplicationBootstrap {
     private readonly tasteDnaService?: TasteDnaService,
     @Optional()
     private readonly interactionsService?: InteractionsService,
+    @Optional()
+    @InjectModel(Review.name)
+    private readonly reviewModel?: Model<ReviewDocument>,
+    @Optional()
+    @InjectModel(User.name)
+    private readonly userModel?: Model<UserDocument>,
+    @Optional()
+    @InjectModel(FavoriteCollection.name)
+    private readonly favoriteCollectionModel?: Model<FavoriteCollection>,
   ) {
     this.aiBaseUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
     const key = process.env.INTERNAL_AI_KEY;
@@ -46,75 +60,6 @@ export class RestaurantsService implements OnApplicationBootstrap {
       );
     }
     this.internalAiKey = key;
-  }
-
-  async onApplicationBootstrap() {
-    await this.ensureGeoJsonLocations();
-  }
-
-  /**
-   * Tự động chuẩn hóa GeoJSON Point coordinates cho các nhà hàng có lat/lon
-   */
-  async ensureGeoJsonLocations() {
-    try {
-      const pendingCount = await this.restaurantModel.countDocuments({
-        $or: [
-          { 'location.coordinates': { $exists: false } },
-          { 'location.coordinates': { $size: 0 } },
-          { location: null },
-        ],
-        lat: { $exists: true, $ne: null },
-        lon: { $exists: true, $ne: null },
-      });
-
-      if (pendingCount > 0) {
-        this.logger.log(
-          `[GeoJSON Normalization] Tìm thấy ${pendingCount} nhà hàng chưa có Point coordinates. Đang chuẩn hóa...`,
-        );
-        const cursor = this.restaurantModel
-          .find({
-            $or: [
-              { 'location.coordinates': { $exists: false } },
-              { 'location.coordinates': { $size: 0 } },
-              { location: null },
-            ],
-            lat: { $exists: true, $ne: null },
-            lon: { $exists: true, $ne: null },
-          })
-          .cursor();
-
-        let updated = 0;
-        for await (const doc of cursor) {
-          const lat =
-            typeof doc.lat === 'string'
-              ? parseFloat((doc.lat as string).replace(',', '.'))
-              : Number(doc.lat);
-          const lon =
-            typeof doc.lon === 'string'
-              ? parseFloat((doc.lon as string).replace(',', '.'))
-              : Number(doc.lon);
-          if (!isNaN(lat) && !isNaN(lon) && lat !== 0 && lon !== 0) {
-            await this.restaurantModel.updateOne(
-              { _id: doc._id },
-              {
-                $set: {
-                  location: {
-                    type: 'Point',
-                    coordinates: [lon, lat], // [longitude, latitude]
-                  },
-                },
-              },
-            );
-            updated++;
-          }
-        }
-        this.logger.log(
-          `[GeoJSON Normalization] Đã cập nhật thành công ${updated} nhà hàng.`,
-        );
-      }
-    } catch (err: any) {
-      this.logger.warn(`[GeoJSON Normalization] Cảnh báo: ${err.message}`);
-    }
   }
 
   async getMenu(idOrSlug: string) {
@@ -140,15 +85,26 @@ export class RestaurantsService implements OnApplicationBootstrap {
   }
 
   async createMenuItem(restaurantId: string, dto: any) {
-    let targetRestId = restaurantId;
+    let targetRestId: string | null = null;
     if (restaurantId && Types.ObjectId.isValid(restaurantId)) {
-      targetRestId = restaurantId;
+      const rest = await this.restaurantModel.findById(restaurantId).lean().exec();
+      if (rest) {
+        targetRestId = rest._id.toString();
+      }
     } else if (restaurantId) {
       const rest = await this.restaurantModel
         .findOne({ slug: restaurantId })
+        .lean()
         .exec();
       if (rest) targetRestId = rest._id.toString();
     }
+
+    if (!targetRestId) {
+      throw new NotFoundException(
+        `Không tìm thấy nhà hàng "${restaurantId}" để thêm món ăn.`,
+      );
+    }
+
     const item = new this.menuItemModel({
       restaurantId: new Types.ObjectId(targetRestId),
       name: dto.name,
@@ -165,7 +121,7 @@ export class RestaurantsService implements OnApplicationBootstrap {
 
   async updateMenuItem(menuId: string, dto: any) {
     return this.menuItemModel
-      .findByIdAndUpdate(menuId, dto, { new: true })
+      .findByIdAndUpdate(menuId, dto, { new: true, runValidators: true })
       .exec();
   }
 
@@ -174,15 +130,51 @@ export class RestaurantsService implements OnApplicationBootstrap {
   }
 
   async create(createRestaurantDto: any): Promise<RestaurantDocument> {
-    const lat = Number(createRestaurantDto.lat) || 10.7769;
-    const lon = Number(createRestaurantDto.lon) || 106.7009;
     const restaurantData: any = {
       ...createRestaurantDto,
-      location: {
-        type: 'Point',
-        coordinates: [lon, lat],
-      },
+      ...(createRestaurantDto.moTa && !createRestaurantDto.description
+        ? { description: createRestaurantDto.moTa }
+        : {}),
     };
+
+    const hasLat = createRestaurantDto.lat !== undefined && createRestaurantDto.lat !== null;
+    const hasLon = createRestaurantDto.lon !== undefined && createRestaurantDto.lon !== null;
+    const hasLocation = createRestaurantDto.location !== undefined;
+
+    if (hasLocation) {
+      if (createRestaurantDto.location === null) {
+        restaurantData.location = null;
+        if (!hasLat && !hasLon) {
+          delete restaurantData.lat;
+          delete restaurantData.lon;
+        }
+      } else {
+        if (!isValidGeoJsonPoint(createRestaurantDto.location)) {
+          throw new BadRequestException(
+            'Invalid GeoJSON location: must be { type: "Point", coordinates: [lon, lat] } within WGS84 bounds and non-[0,0]',
+          );
+        }
+        const [lon, lat] = createRestaurantDto.location.coordinates;
+        restaurantData.lat = lat;
+        restaurantData.lon = lon;
+        restaurantData.location = { type: 'Point', coordinates: [lon, lat] };
+      }
+    } else if (hasLat || hasLon) {
+      const geoPoint = toGeoJsonPoint(createRestaurantDto.lat, createRestaurantDto.lon);
+      if (!geoPoint) {
+        throw new BadRequestException(
+          'Invalid restaurant coordinates: lat [-90..90] and lon [-180..180] must both be valid numbers and not [0, 0]',
+        );
+      }
+      restaurantData.lon = geoPoint.coordinates[0];
+      restaurantData.lat = geoPoint.coordinates[1];
+      restaurantData.location = geoPoint;
+    } else {
+      delete restaurantData.lat;
+      delete restaurantData.lon;
+      restaurantData.location = null;
+    }
+
     const created = new this.restaurantModel(restaurantData);
     return created.save();
   }
@@ -195,9 +187,20 @@ export class RestaurantsService implements OnApplicationBootstrap {
     tags?: string,
     search?: string,
   ) {
+    const searchCenter = parseValidCoordinatePair(lat, lon);
+    if (!searchCenter) {
+      throw new BadRequestException(
+        'Valid non-zero latitude and longitude are required for nearby search',
+      );
+    }
+
     const radiusMeters = Math.max(1, Number(radiusKm) || 5) * 1000;
     const matchStage: any = {
       status: { $ne: 'closed' },
+      'location.type': 'Point',
+      'location.coordinates.0': { $type: 'number', $gte: -180, $lte: 180 },
+      'location.coordinates.1': { $type: 'number', $gte: -90, $lte: 90 },
+      'location.coordinates': { $ne: [0, 0] },
     };
 
     if (tags && tags !== 'all' && tags !== 'Tất cả') {
@@ -224,7 +227,7 @@ export class RestaurantsService implements OnApplicationBootstrap {
           $geoNear: {
             near: {
               type: 'Point',
-              coordinates: [Number(lon), Number(lat)],
+              coordinates: [searchCenter.lon, searchCenter.lat],
             },
             distanceField: 'distanceMeters',
             maxDistance: radiusMeters,
@@ -252,17 +255,20 @@ export class RestaurantsService implements OnApplicationBootstrap {
         .exec();
       const withDist = candidates
         .map((item: any) => {
-          const dto = this.mapRestaurantToDTO(item);
+          const point = extractValidGeoPoint(item);
+          if (!point) return null;
           const dist = this.getDistanceFromLatLonInKm(
-            lat,
-            lon,
-            item.lat || 0,
-            item.lon || 0,
+            searchCenter.lat,
+            searchCenter.lon,
+            point.lat,
+            point.lon,
           );
+          if (dist > radiusKm) return null;
+          const dto = this.mapRestaurantToDTO(item);
           dto.distance = Number(dist.toFixed(2));
           return dto;
         })
-        .filter((item: any) => item.distance <= radiusKm);
+        .filter((item: any): item is any => item !== null);
 
       withDist.sort((a: any, b: any) => a.distance - b.distance);
       return withDist.slice(0, Number(limit) || 20);
@@ -292,6 +298,7 @@ export class RestaurantsService implements OnApplicationBootstrap {
         this.httpService.post(`${aiUrl}/predict-food`, formData, {
           headers: {
             ...formData.getHeaders(),
+            'X-Internal-AI-Key': this.internalAiKey,
           },
         }),
       );
@@ -404,8 +411,13 @@ export class RestaurantsService implements OnApplicationBootstrap {
         payload.user_gps = [parseFloat(userLat), parseFloat(userLon)];
       }
 
+      const headers: Record<string, string> = {
+        'X-Internal-AI-Key': this.internalAiKey,
+      };
       const aiResponse = await firstValueFrom(
-        this.httpService.post(`${aiUrl}/weather-recommend`, payload),
+        this.httpService.post(`${aiUrl}/weather-recommend`, payload, {
+          headers,
+        }),
       );
 
       const weatherData = aiResponse.data.weather;
@@ -599,7 +611,13 @@ export class RestaurantsService implements OnApplicationBootstrap {
           15,
           limit,
         );
-      } catch {}
+      } catch (error: unknown) {
+        const reason =
+          error instanceof Error ? error.message : 'Unknown nearby error';
+        this.logger.warn(
+          `Fallback nearby search failed; falling back to top-rated list: ${reason}`,
+        );
+      }
     }
 
     if (!fallbackList || fallbackList.length === 0) {
@@ -873,8 +891,13 @@ export class RestaurantsService implements OnApplicationBootstrap {
               : null,
         };
         const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';
+        const headers: Record<string, string> = {
+          'X-Internal-AI-Key': this.internalAiKey,
+        };
         const aiResponse = await firstValueFrom(
-          this.httpService.post(`${aiUrl}/recommend`, payload),
+          this.httpService.post(`${aiUrl}/recommend`, payload, {
+            headers,
+          }),
         );
 
         const recommendedItems = aiResponse.data.scores || [];
@@ -925,24 +948,21 @@ export class RestaurantsService implements OnApplicationBootstrap {
         .exec();
 
       if (userLat && userLon) {
-        const uLat = parseFloat(userLat);
-        const uLon = parseFloat(userLon);
-
-        allCandidates = allCandidates.map((res: any) => {
-          const parseCoord = (val: any) => {
-            if (typeof val === 'number') return val;
-            if (typeof val === 'string')
-              return parseFloat(val.replace(',', '.'));
-            return 0;
-          };
-          const resLat = parseCoord(res.lat);
-          const resLon = parseCoord(res.lon);
-          const dist =
-            resLat && resLon
-              ? this.getDistanceFromLatLonInKm(uLat, uLon, resLat, resLon)
-              : 99999;
-          return { ...res, distance: dist };
-        });
+        const userPoint = parseValidCoordinatePair(userLat, userLon);
+        if (userPoint) {
+          allCandidates = allCandidates.map((res: any) => {
+            const point = extractValidGeoPoint(res);
+            const dist = point
+              ? this.getDistanceFromLatLonInKm(
+                  userPoint.lat,
+                  userPoint.lon,
+                  point.lat,
+                  point.lon,
+                )
+              : null;
+            return { ...res, distance: dist };
+          });
+        }
       }
 
       if (isOpenNowBool) {
@@ -962,9 +982,11 @@ export class RestaurantsService implements OnApplicationBootstrap {
         });
       } else if (isSortDistance) {
         allCandidates.sort((a: any, b: any) => {
-          return order === 'asc'
-            ? a.distance - b.distance
-            : b.distance - a.distance;
+          const dA =
+            typeof a.distance === 'number' ? a.distance : Number.POSITIVE_INFINITY;
+          const dB =
+            typeof b.distance === 'number' ? b.distance : Number.POSITIVE_INFINITY;
+          return order === 'asc' ? dA - dB : dB - dA;
         });
       } else {
         allCandidates.sort((a: any, b: any) => {
@@ -1034,30 +1056,51 @@ export class RestaurantsService implements OnApplicationBootstrap {
       throw new NotFoundException(`ID nhà hàng "${id}" không hợp lệ.`);
     }
 
-    // Tự động đồng bộ GeoJSON Point location nếu lat hoặc lon thay đổi
-    if (
-      updateRestaurantDto.lat !== undefined ||
-      updateRestaurantDto.lon !== undefined
-    ) {
-      const existing = await this.restaurantModel.findById(id).lean();
-      const newLat =
-        updateRestaurantDto.lat !== undefined
-          ? Number(updateRestaurantDto.lat)
-          : Number(existing?.lat || 0);
-      const newLon =
-        updateRestaurantDto.lon !== undefined
-          ? Number(updateRestaurantDto.lon)
-          : Number(existing?.lon || 0);
-      if (!isNaN(newLat) && !isNaN(newLon) && newLat !== 0 && newLon !== 0) {
-        updateRestaurantDto.location = {
-          type: 'Point',
-          coordinates: [newLon, newLat],
-        };
+    const dto = { ...updateRestaurantDto };
+
+    // Đồng bộ & validate GeoJSON Point location khi lat/lon hoặc location được cập nhật
+    if (dto.location !== undefined) {
+      if (dto.location === null) {
+        dto.location = null;
+        if (dto.lat === undefined) dto.lat = null;
+        if (dto.lon === undefined) dto.lon = null;
+      } else if (!isValidGeoJsonPoint(dto.location)) {
+        throw new BadRequestException(
+          'Invalid GeoJSON location: must be { type: "Point", coordinates: [lon, lat] } within WGS84 bounds and non-[0,0]',
+        );
+      } else {
+        dto.lon = dto.location.coordinates[0];
+        dto.lat = dto.location.coordinates[1];
+      }
+    } else if (dto.lat !== undefined || dto.lon !== undefined) {
+      if (dto.lat === null && dto.lon === null) {
+        dto.location = null;
+      } else {
+        const existing = await this.restaurantModel.findById(id).lean();
+        if (!existing) {
+          throw new NotFoundException(`Không tìm thấy nhà hàng với ID "${id}"`);
+        }
+        const mergedLat = dto.lat !== undefined ? dto.lat : existing.lat;
+        const mergedLon = dto.lon !== undefined ? dto.lon : existing.lon;
+        const geoPoint = toGeoJsonPoint(mergedLat, mergedLon);
+        if (!geoPoint) {
+          throw new BadRequestException(
+            'Invalid restaurant coordinates: lat [-90..90] and lon [-180..180] must be valid numbers and not [0, 0]',
+          );
+        }
+        dto.lon = geoPoint.coordinates[0];
+        dto.lat = geoPoint.coordinates[1];
+        dto.location = geoPoint;
       }
     }
 
+    const payload = {
+      ...dto,
+      ...(dto.moTa && !dto.description ? { description: dto.moTa } : {}),
+    };
+
     const updated = await this.restaurantModel
-      .findByIdAndUpdate(id, updateRestaurantDto, { new: true })
+      .findByIdAndUpdate(id, payload, { new: true, runValidators: true })
       .exec();
     if (!updated) {
       throw new NotFoundException(`Không tìm thấy nhà hàng với ID "${id}"`);
@@ -1069,7 +1112,28 @@ export class RestaurantsService implements OnApplicationBootstrap {
     if (!Types.ObjectId.isValid(id)) {
       throw new NotFoundException(`ID nhà hàng "${id}" không hợp lệ.`);
     }
-    return this.restaurantModel.findByIdAndDelete(id).exec();
+    const deleted = await this.restaurantModel.findByIdAndDelete(id).exec();
+    if (!deleted) {
+      throw new NotFoundException(`Không tìm thấy nhà hàng với ID "${id}"`);
+    }
+
+    const restObjId = new Types.ObjectId(id);
+
+    // Cascade delete dependent child records & pull dangling bookmark references
+    await Promise.all([
+      this.menuItemModel.deleteMany({ restaurantId: restObjId }),
+      this.reviewModel?.deleteMany({ restaurantId: restObjId }),
+      this.userModel?.updateMany(
+        { savedRestaurants: restObjId },
+        { $pull: { savedRestaurants: restObjId } },
+      ),
+      this.favoriteCollectionModel?.updateMany(
+        { restaurantIds: restObjId },
+        { $pull: { restaurantIds: restObjId } },
+      ),
+    ]);
+
+    return deleted;
   }
 
   private getRandomReply(
@@ -1131,7 +1195,13 @@ export class RestaurantsService implements OnApplicationBootstrap {
               profile.bitter ?? 0.5,
             ];
           }
-        } catch {}
+        } catch (error: unknown) {
+          const reason =
+            error instanceof Error ? error.message : 'Unknown TasteDNA error';
+          this.logger.warn(
+            `Unable to load TasteDNA profile for AI chat; continuing without taste vector: ${reason}`,
+          );
+        }
       }
 
       const aiBaseUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5000';

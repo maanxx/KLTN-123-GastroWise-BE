@@ -5,6 +5,7 @@ import { ItinerariesModule } from './itineraries/itineraries.module';
 import { HealthModule } from './health/health.module';
 import { AclModule } from './acl/acl.module';
 import { AuthModule } from './auth/auth.module';
+import { resolveServiceMongoUri } from '@shared/database/mongo-uri.util';
 
 @Module({
   imports: [
@@ -12,18 +13,16 @@ import { AuthModule } from './auth/auth.module';
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => {
-        const uri =
-          configService.get<string>('MONGODB_URI_PLANNING') ||
-          configService.get<string>('MONGODB_URI');
-        if (!uri) {
-          throw new Error(
-            'MONGODB_URI_PLANNING or MONGODB_URI environment variable is required',
-          );
-        }
+        const { uri, dbName } = resolveServiceMongoUri(configService, {
+          uriEnvKeys: ['PLANNING_MONGODB_URI', 'MONGODB_URI_PLANNING'],
+          userEnvKey: 'PLANNING_DB_USER',
+          passwordEnvKey: 'PLANNING_DB_PASSWORD',
+          dbNameEnvKey: 'PLANNING_DB_NAME',
+          defaultDbName: 'gastro_planning',
+        });
         return {
           uri,
-          dbName:
-            configService.get<string>('PLANNING_DB_NAME') || 'gastro_planning',
+          dbName,
           serverSelectionTimeoutMS: 5000,
         };
       },

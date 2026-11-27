@@ -1,6 +1,7 @@
 // src/taste-dna/dto/update-taste-dna.dto.ts
 import {
   IsArray,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -61,6 +62,6 @@ export class UpdateTasteDnaDto {
   dislikedIngredients?: string[];
 
   @IsOptional()
-  @IsString()
+  @IsIn(['budget', 'medium', 'fine_dining'])
   budgetPreference?: string;
 }

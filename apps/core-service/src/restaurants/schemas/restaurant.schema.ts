@@ -1,6 +1,7 @@
 // src/restaurants/schemas/restaurant.schema.ts
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import mongoose, { HydratedDocument } from 'mongoose';
+import { isValidGeoJsonPoint } from '@shared/utils/geo.utils';
 
 export type RestaurantDocument = HydratedDocument<Restaurant>;
 
@@ -15,25 +16,38 @@ export class Restaurant {
   @Prop() giaCa: string;
   @Prop() tags: string;
 
-  @Prop() lat: number;
-  @Prop() lon: number;
+  @Prop({ min: -90, max: 90, required: false }) lat?: number;
+  @Prop({ min: -180, max: 180, required: false }) lon?: number;
 
-  // --- GeoJSON 2dsphere Location Support (Phase 2 Geospatial) ---
+  // --- GeoJSON 2dsphere Location Support (M9.5: Null when un-geocoded; never defaults to Q1) ---
   @Prop({
-    type: {
-      type: String,
-      enum: ['Point'],
-      default: 'Point',
-    },
-    coordinates: {
-      type: [Number], // [longitude, latitude]
-      default: [106.7009, 10.7769],
+    type: new mongoose.Schema(
+      {
+        type: {
+          type: String,
+          enum: ['Point'],
+          required: true,
+        },
+        coordinates: {
+          type: [Number], // [longitude, latitude]
+          required: true,
+        },
+      },
+      { _id: false },
+    ),
+    required: false,
+    default: null,
+    validate: {
+      validator: (val: any) =>
+        val === null || val === undefined || isValidGeoJsonPoint(val),
+      message:
+        'location must be null or a valid GeoJSON Point with [longitude, latitude] in valid WGS84 range and non-[0,0]',
     },
   })
   location?: {
-    type: string;
+    type: 'Point';
     coordinates: [number, number]; // [longitude, latitude]
-  };
+  } | null;
 
   @Prop() diemKhongGian: number;
   @Prop() diemViTri: number;

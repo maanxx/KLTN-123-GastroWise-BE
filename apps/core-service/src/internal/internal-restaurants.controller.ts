@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Param,
@@ -14,6 +15,10 @@ import {
 } from '../restaurants/schemas/restaurant.schema';
 import { InternalAuthGuard } from '@shared/guards/internal-auth.guard';
 import { RestaurantCandidateDto } from '@shared/contracts/core.contracts';
+import {
+  extractValidGeoPoint,
+  parseValidCoordinatePair,
+} from '@shared/utils/geo.utils';
 
 @UseGuards(InternalAuthGuard)
 @Controller('internal/restaurants')
@@ -40,16 +45,24 @@ export class InternalRestaurantsController {
 
     let query = this.restaurantModel.find(filter);
 
-    // Geospatial query if coordinates provided
-    if (lat !== undefined && lng !== undefined) {
+    // Geospatial query if coordinates provided (exclude un-geocoded & [0,0] docs)
+    if (lat !== undefined || lng !== undefined) {
+      const center = parseValidCoordinatePair(lat, lng);
+      if (!center) {
+        throw new BadRequestException(
+          'Valid non-zero lat and lng parameters are required when filtering candidates spatially',
+        );
+      }
       const maxDistanceMeters = (Number(radiusKm) || 10) * 1000;
       query = this.restaurantModel.find({
         ...filter,
+        'location.type': 'Point',
+        'location.coordinates': { $ne: [0, 0] },
         location: {
           $near: {
             $geometry: {
               type: 'Point',
-              coordinates: [Number(lng), Number(lat)],
+              coordinates: [center.lon, center.lat],
             },
             $maxDistance: maxDistanceMeters,
           },
@@ -62,19 +75,24 @@ export class InternalRestaurantsController {
       .lean()
       .exec();
 
-    const candidates: RestaurantCandidateDto[] = docs.map((doc: any) => ({
-      restaurant_id: doc._id.toString(),
-      name: doc.tenQuan || 'Unknown',
-      address: doc.diaChi || '',
-      location: doc.location,
-      lat: doc.lat ?? (doc.location?.coordinates?.[1] || 10.7769),
-      lng: doc.lon ?? (doc.location?.coordinates?.[0] || 106.7009),
-      rating: doc.diemTrungBinh || 0,
-      price_level: doc.giaCa,
-      tags: doc.tags ? doc.tags.split(',').map((t: string) => t.trim()) : [],
-      open_time: doc.gioMoCua,
-      featured_image: doc.avatarUrl,
-    }));
+    const candidates: RestaurantCandidateDto[] = docs.map((doc: any) => {
+      const point = extractValidGeoPoint(doc);
+      return {
+        restaurant_id: doc._id.toString(),
+        name: doc.tenQuan || 'Unknown',
+        address: doc.diaChi || '',
+        location: point
+          ? { type: 'Point', coordinates: [point.lon, point.lat] }
+          : undefined,
+        lat: point?.lat,
+        lng: point?.lon,
+        rating: doc.diemTrungBinh || 0,
+        price_level: doc.giaCa,
+        tags: doc.tags ? doc.tags.split(',').map((t: string) => t.trim()) : [],
+        open_time: doc.gioMoCua,
+        featured_image: doc.avatarUrl,
+      };
+    });
 
     return { candidates, total: candidates.length };
   }
@@ -86,13 +104,16 @@ export class InternalRestaurantsController {
       throw new NotFoundException(`Restaurant with ID "${id}" not found`);
     }
 
+    const point = extractValidGeoPoint(doc);
     return {
       restaurant_id: doc._id.toString(),
       name: doc.tenQuan || 'Unknown',
       address: doc.diaChi || '',
-      location: doc.location,
-      lat: doc.lat ?? (doc.location?.coordinates?.[1] || 10.7769),
-      lng: doc.lon ?? (doc.location?.coordinates?.[0] || 106.7009),
+      location: point
+        ? { type: 'Point', coordinates: [point.lon, point.lat] }
+        : undefined,
+      lat: point?.lat,
+      lng: point?.lon,
       rating: doc.diemTrungBinh || 0,
       price_level: doc.giaCa,
       tags: doc.tags ? doc.tags.split(',').map((t: string) => t.trim()) : [],

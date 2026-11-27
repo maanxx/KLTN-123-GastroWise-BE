@@ -2,6 +2,8 @@ import {
   Injectable,
   Logger,
   UnauthorizedException,
+  ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
@@ -10,7 +12,10 @@ import {
   RouteOptimizationResult,
   OptimizedStopResult,
 } from '@shared/contracts/planning.contracts';
-import { RouteOptimizeRequest } from '@shared/contracts/ai.contracts';
+import {
+  RouteOptimizeRequest,
+  RouteOptimizeCanonicalRequest,
+} from '@shared/contracts/ai.contracts';
 import {
   calculateHaversineDistanceKm,
   estimateTransitTimeMinutes,
@@ -42,9 +47,48 @@ export class AiApiClient {
   }
 
   /**
+   * Helper: Parse "HH:MM" string into minutes from midnight (default 660 = 11:00 AM)
+   */
+  private parseTimeToMinutes(timeStr?: string): number {
+    if (!timeStr) return 660;
+    const parts = timeStr.split(':').map(Number);
+    if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+      return parts[0] * 60 + parts[1];
+    }
+    return 660;
+  }
+
+  /**
+   * Helper: Map internal Planning RouteOptimizeRequest DTO to canonical AI schema
+   */
+  private mapToCanonicalAiRequest(
+    request: RouteOptimizeRequest,
+  ): RouteOptimizeCanonicalRequest {
+    return {
+      start_location: [request.start_lat, request.start_lng],
+      start_time_mins: this.parseTimeToMinutes(request.start_time),
+      budget: request.budget_vnd ?? 250000,
+      routing_mode: request.routing_mode || 'motorbike',
+      desired_stops: request.desired_stops ?? (request.restaurants?.length || 3),
+      candidates: (request.restaurants || []).map((r) => ({
+        id: r.id,
+        name: r.name || `Restaurant ${r.id}`,
+        lat: r.lat,
+        lon: (r as any).lon !== undefined ? (r as any).lon : r.lng,
+        meal_type: r.meal_type || 'main',
+        open_time: r.open || '08:00',
+        close_time: r.close || '22:00',
+        dining_duration_mins: r.duration_mins || 45,
+        avg_price: r.avg_price || 50000,
+        rating: r.rating || 4.5,
+      })),
+    };
+  }
+
+  /**
    * Gọi AI Microservice (OR-Tools TSPTW) với Circuit Breaker và 3500ms timeout
    * Tự động fallback sang Gastronomic Greedy Heuristic nếu AI offline hoặc timeout
-   * KHÔNG fallback khi gặp lỗi Authentication (401/403)
+   * KHÔNG fallback khi gặp lỗi Authentication (401/403) hoặc Contract Validation (400/422)
    */
   async optimizeRoute(
     request: RouteOptimizeRequest,
@@ -53,16 +97,22 @@ export class AiApiClient {
     const cid = correlationId || randomUUID();
     const startTime = Date.now();
     const url = `${this.aiUrl}/routes/optimize`;
+    const payload = this.mapToCanonicalAiRequest(request);
 
     try {
       const response = await firstValueFrom(
-        this.httpService.post<any>(url, request, {
+        this.httpService.post<any>(url, payload, {
           headers: this.getHeaders(cid),
           timeout: 3500,
         }),
       );
 
       const durationMs = Date.now() - startTime;
+      const solver =
+        response.data?.algorithm_used ||
+        response.data?.solver ||
+        'OR-Tools TSPTW';
+
       this.logger.log(
         JSON.stringify({
           timestamp: new Date().toISOString(),
@@ -73,31 +123,42 @@ export class AiApiClient {
           status: 200,
           durationMs,
           correlationId: cid,
-          solver: response.data?.solver || 'OR-Tools TSPTW',
+          solver,
         }),
       );
 
-      if (response.data && response.data.ordered_stops) {
+      const rawStops =
+        response.data?.stops || response.data?.ordered_stops;
+
+      if (Array.isArray(rawStops)) {
+        const hasZeroBasedIndex = rawStops.some(
+          (s: any) => typeof s.order_index === 'number' && s.order_index === 0,
+        );
         return {
-          stops: response.data.ordered_stops.map((s: any, idx: number) => ({
+          stops: rawStops.map((s: any, idx: number) => ({
             restaurant_id: s.id || s.restaurant_id,
-            order_index: idx,
-            arrival_time: s.arrival || s.arrival_time || '12:00',
-            departure_time: s.departure || s.departure_time || '13:00',
-            transit_time_mins: s.transit_mins || s.transit_time_mins || 15,
-            distance_km: s.distance_km || 1.5,
+            order_index:
+              typeof s.order_index === 'number'
+                ? hasZeroBasedIndex
+                  ? s.order_index + 1
+                  : s.order_index
+                : idx + 1,
+            arrival_time: s.arrival_time || s.arrival || '12:00',
+            departure_time: s.departure_time || s.departure || '13:00',
+            transit_time_mins: s.transit_time_mins ?? s.transit_mins ?? 15,
+            distance_km: s.distance_to_next_km ?? s.distance_km ?? 1.5,
           })),
-          total_distance_km: response.data.total_distance_km || 5.0,
-          total_duration_mins: response.data.total_duration_mins || 120,
-          solver: response.data.solver || 'OR-Tools TSPTW',
+          total_distance_km: response.data.total_distance_km ?? 5.0,
+          total_duration_mins: response.data.total_duration_mins ?? 120,
+          solver,
         };
       }
     } catch (err: any) {
       const durationMs = Date.now() - startTime;
       const status = err.response?.status;
 
-      // CRITICAL SECURITY CHECK: If authentication failed (401/403), NEVER fall back silently!
-      if (status === 401 || status === 403) {
+      // CRITICAL SECURITY & AUTHENTICATION CHECK: Never fallback on 401/403
+      if (status === 401) {
         this.logger.error(
           JSON.stringify({
             timestamp: new Date().toISOString(),
@@ -108,11 +169,51 @@ export class AiApiClient {
             status,
             durationMs,
             correlationId: cid,
-            message: 'CRITICAL: AI Service internal authentication failed. Keys mismatched or rejected.',
+            message: 'CRITICAL: AI Service internal authentication missing or rejected (401).',
           }),
         );
         throw new UnauthorizedException(
-          `AI Service authentication failed (HTTP ${status}) [cid: ${cid}]: ${err.response?.data?.detail || err.message}`,
+          `AI Service authentication failed (HTTP 401) [cid: ${cid}]: ${err.response?.data?.detail || err.message}`,
+        );
+      }
+
+      if (status === 403) {
+        this.logger.error(
+          JSON.stringify({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            context: 'AiApiClient',
+            method: 'POST',
+            url,
+            status,
+            durationMs,
+            correlationId: cid,
+            message: 'CRITICAL: AI Service internal authentication forbidden (403 invalid key).',
+          }),
+        );
+        throw new ForbiddenException(
+          `AI Service forbidden (HTTP 403) [cid: ${cid}]: ${err.response?.data?.detail || err.message}`,
+        );
+      }
+
+      // CONTRACT VALIDATION ERROR: Never fallback on 400 or 422
+      if (status === 400 || status === 422) {
+        this.logger.error(
+          JSON.stringify({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            context: 'AiApiClient',
+            method: 'POST',
+            url,
+            status,
+            durationMs,
+            correlationId: cid,
+            message: 'CRITICAL: AI Service request schema validation failed (400/422).',
+            details: err.response?.data,
+          }),
+        );
+        throw new BadRequestException(
+          `AI Service contract validation failed (HTTP ${status}) [cid: ${cid}]: ${JSON.stringify(err.response?.data?.detail || err.response?.data || err.message)}`,
         );
       }
 
@@ -150,7 +251,7 @@ export class AiApiClient {
     const stops: OptimizedStopResult[] = [];
     let totalDist = 0;
     let totalDuration = 0;
-    let order = 0;
+    let order = 1;
 
     while (remaining.length > 0) {
       let bestIdx = 0;

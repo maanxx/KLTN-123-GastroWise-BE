@@ -4,8 +4,11 @@ import {
   IsString,
   IsOptional,
   IsArray,
+  IsMongoId,
   Min,
   Max,
+  MinLength,
+  MaxLength,
 } from 'class-validator';
 
 export class CreateReviewDto {
@@ -20,11 +23,13 @@ export class CreateReviewDto {
   @IsNotEmpty()
   @IsNumber()
   @Min(1)
-  @Max(10)
+  @Max(5)
   diemReview: number;
 
   @IsNotEmpty()
   @IsString()
+  @MinLength(1)
+  @MaxLength(2000)
   noiDung: string;
 
   @IsNotEmpty()
@@ -32,7 +37,7 @@ export class CreateReviewDto {
   restaurantId: string;
 
   @IsOptional()
-  @IsString()
+  @IsMongoId()
   userId?: string;
 
   @IsOptional()
@@ -41,6 +46,7 @@ export class CreateReviewDto {
 
   @IsOptional()
   @IsArray()
+  @IsString({ each: true })
   images?: string[];
 
   @IsOptional()
@@ -49,5 +55,7 @@ export class CreateReviewDto {
 
   @IsOptional()
   @IsNumber()
+  @Min(0)
+  @Max(1)
   aiSentimentScore?: number;
 }

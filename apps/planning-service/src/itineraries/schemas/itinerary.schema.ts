@@ -84,7 +84,10 @@ export class Itinerary extends Document {
   })
   start_location: { type: string; coordinates: number[] };
 
-  @Prop({ default: 'generated' })
+  @Prop({
+    default: 'generated',
+    enum: ['generated', 'confirmed', 'completed', 'cancelled'],
+  })
   status: string;
 
   @Prop({ type: [ItineraryStop], default: [] })

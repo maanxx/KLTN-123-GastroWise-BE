@@ -1,0 +1,110 @@
+name: Weekly MongoDB Restore Verification Drill
+
+on:
+  schedule:
+    # Weekly Sunday at 20:00 UTC (03:00 ICT Monday)
+    - cron: '0 20 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-weekly-restore:
+    name: Restore Latest Archive to Ephemeral MongoDB 7.0 (${{ matrix.database }})
+    runs-on: ubuntu-latest
+    environment: backup-verification
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - database: gastro_core
+          - database: gastro_planning
+
+    services:
+      mongo-verify:
+        image: mongo:7.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd="mongosh --quiet --eval 'db.adminCommand(\"ping\").ok'"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install MongoDB Tools & mongosh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg jq
+          wget -q https://fastdl.mongodb.org/tools/db/mongodb-database-tools-ubuntu2204-x86_64-100.10.0.deb
+          sudo apt-get install -y ./mongodb-database-tools-ubuntu2204-x86_64-100.10.0.deb
+          wget -qO- https://www.mongodb.org/static/pgp/server-7.0.asc | sudo tee /etc/apt/trusted.gpg.d/server-7.0.asc >/dev/null
+          echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-7.0.list
+          sudo apt-get update && sudo apt-get install -y mongodb-mongosh
+
+      - name: Download latest backup & run restore validation
+        env:
+          BACKUP_S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+          BACKUP_S3_ENDPOINT_URL: ${{ secrets.BACKUP_S3_ENDPOINT_URL }}
+          BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_S3_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.BACKUP_S3_REGION || 'ap-southeast-1' }}
+          RESTORE_TARGET_URI: mongodb://127.0.0.1:27017/${{ matrix.database }}_verify
+          RESTORE_SOURCE_DB: ${{ matrix.database }}
+          RESTORE_TARGET_DB: ${{ matrix.database }}_verify
+          MATRIX_DATABASE: ${{ matrix.database }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/restore-drill
+
+          # Build endpoint flag safely (quoted to prevent word-split on spaces)
+          ENDPOINT_ARGS=()
+          if [[ -n "${BACKUP_S3_ENDPOINT_URL:-}" ]]; then
+            ENDPOINT_ARGS=(--endpoint-url "${BACKUP_S3_ENDPOINT_URL}")
+          fi
+
+          # Construct S3 prefix using shell-env var (GitHub matrix var injected above)
+          BUCKET_BARE="${BACKUP_S3_BUCKET#s3://}"
+          PREFIX="${BUCKET_BARE}/${MATRIX_DATABASE}/daily/"
+
+          # Find the latest encrypted or plain archive in the prefix
+          LATEST_KEY="$(aws s3 ls "s3://${PREFIX}" "${ENDPOINT_ARGS[@]}" \
+            | grep -E '\.archive\.gz(\.enc)?$' | sort | tail -n 1 | awk '{print $4}')"
+          if [[ -z "${LATEST_KEY}" ]]; then
+            echo "No daily backup found under s3://${PREFIX}" >&2
+            exit 1
+          fi
+
+          # Download archive
+          aws s3 cp "s3://${PREFIX}${LATEST_KEY}" "/tmp/restore-drill/${LATEST_KEY}" "${ENDPOINT_ARGS[@]}"
+
+          # Download SHA-256 sidecar (mandatory — verify-restore.sh checks it when present,
+          # but here we enforce its existence so a missing checksum file is itself a failure)
+          SHA_KEY="${LATEST_KEY}.sha256"
+          aws s3 cp "s3://${PREFIX}${SHA_KEY}" "/tmp/restore-drill/${SHA_KEY}" "${ENDPOINT_ARGS[@]}"
+          echo "Checksum sidecar downloaded: ${SHA_KEY}"
+
+          chmod +x scripts/backup/verify-restore.sh
+
+          # Run restore validation; capture exit code explicitly (tee would hide it under pipefail)
+          AUDIT_FILE="/tmp/restore-drill/${MATRIX_DATABASE}_audit.json"
+          ./scripts/backup/verify-restore.sh "/tmp/restore-drill/${LATEST_KEY}" | tee "${AUDIT_FILE}"
+          # Explicit non-zero exit propagation: re-run only the script exit if tee consumed it
+          RESTORE_EXIT="${PIPESTATUS[0]}"
+          if [[ "${RESTORE_EXIT}" -ne 0 ]]; then
+            echo "verify-restore.sh exited with code ${RESTORE_EXIT}" >&2
+            exit "${RESTORE_EXIT}"
+          fi
+
+      - name: Upload restore verification audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-restore-audit-${{ matrix.database }}
+          path: /tmp/restore-drill/*_audit.json
+          retention-days: 90

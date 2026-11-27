@@ -1,6 +1,10 @@
 import {
   calculateHaversineDistanceKm,
   estimateTransitTimeMinutes,
+  extractValidGeoPoint,
+  isValidGeoJsonPoint,
+  parseValidCoordinatePair,
+  toGeoJsonPoint,
 } from './geo.utils';
 
 describe('GeoUtils (Shared Library)', () => {
@@ -23,5 +27,36 @@ describe('GeoUtils (Shared Library)', () => {
 
     const mins10kmMotorbike = estimateTransitTimeMinutes(10, 'motorbike');
     expect(mins10kmMotorbike).toBe(24); // 10km / 25km/h * 60 = 24 mins
+  });
+
+  it('validates coordinate ranges and rejects missing, null, out-of-range, and [0,0]', () => {
+    expect(parseValidCoordinatePair(10.7769, 106.7009)).toEqual({
+      lat: 10.7769,
+      lon: 106.7009,
+    });
+    expect(parseValidCoordinatePair('10,7769', '106,7009')).toEqual({
+      lat: 10.7769,
+      lon: 106.7009,
+    });
+    expect(parseValidCoordinatePair(undefined, undefined)).toBeNull();
+    expect(parseValidCoordinatePair(null, null)).toBeNull();
+    expect(parseValidCoordinatePair(0, 0)).toBeNull();
+    expect(parseValidCoordinatePair(90.1, 106.7)).toBeNull();
+    expect(parseValidCoordinatePair(-90.1, 106.7)).toBeNull();
+    expect(parseValidCoordinatePair(10.7, 180.1)).toBeNull();
+    expect(parseValidCoordinatePair(10.7, -180.1)).toBeNull();
+
+    expect(toGeoJsonPoint(10.78, 106.69)).toEqual({
+      type: 'Point',
+      coordinates: [106.69, 10.78],
+    });
+    expect(toGeoJsonPoint(0, 0)).toBeNull();
+    expect(
+      isValidGeoJsonPoint({ type: 'Point', coordinates: [106.69, 10.78] }),
+    ).toBe(true);
+    expect(isValidGeoJsonPoint({ type: 'Point', coordinates: [0, 0] })).toBe(
+      false,
+    );
+    expect(extractValidGeoPoint({ location: null })).toBeNull();
   });
 });

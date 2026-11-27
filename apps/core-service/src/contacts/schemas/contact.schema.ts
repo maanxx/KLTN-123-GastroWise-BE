@@ -30,7 +30,10 @@ export class Contact {
   @Prop({ default: 'Chờ phân tích' })
   aiClassification: string;
 
-  @Prop({ default: 'CHỜ XỬ LÝ' })
+  @Prop({
+    default: 'CHỜ XỬ LÝ',
+    enum: ['CHỜ XỬ LÝ', 'ĐANG XỬ LÝ', 'ĐÃ GIẢI QUYẾT'],
+  })
   status: string;
 
   // ─── Audit Trail Fields ───────────────────────────────────────────────────

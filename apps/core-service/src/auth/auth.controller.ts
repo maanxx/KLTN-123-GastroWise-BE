@@ -17,6 +17,13 @@ import {
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import {
+  Enable2FADto,
+  ForgotPasswordDto,
+  RefreshTokenDto,
+  ResetPassword2FADto,
+  ResetPasswordDto,
+} from './dto/auth-actions.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { Request } from 'express';
 import type { Response } from 'express'; // Import Response từ express
@@ -79,7 +86,7 @@ export class AuthController {
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  refresh(@Body() body: { userId: string; refreshToken: string }) {
+  refresh(@Body() body: RefreshTokenDto) {
     return this.authService.refresh(body.userId, body.refreshToken);
   }
 
@@ -138,7 +145,7 @@ export class AuthController {
 
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
-  forgotPassword(@Body() body: { email: string }) {
+  forgotPassword(@Body() body: ForgotPasswordDto) {
     if (!body.email) {
       throw new BadRequestException('Vui lòng nhập Email!');
     }
@@ -147,9 +154,7 @@ export class AuthController {
 
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
-  resetPassword(
-    @Body() body: { email: string; otp: string; newPassword: string },
-  ) {
+  resetPassword(@Body() body: ResetPasswordDto) {
     if (!body.email || !body.newPassword) {
       throw new BadRequestException(
         'Vui lòng điền đầy đủ Email và Mật khẩu mới!',
@@ -173,15 +178,13 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @Post('2fa/enable')
   @HttpCode(HttpStatus.OK)
-  enable2FA(@Req() req: RequestWithUser, @Body() body: { code: string }) {
+  enable2FA(@Req() req: RequestWithUser, @Body() body: Enable2FADto) {
     return this.authService.enable2FA(req.user.sub, body.code);
   }
 
   @Post('2fa/reset-password')
   @HttpCode(HttpStatus.OK)
-  resetPasswordWith2FA(
-    @Body() body: { email: string; totpCode: string; newPassword: string },
-  ) {
+  resetPasswordWith2FA(@Body() body: ResetPassword2FADto) {
     if (!body.email || !body.totpCode || !body.newPassword) {
       throw new BadRequestException(
         'Vui lòng điền đầy đủ Email, Mã 2FA và Mật khẩu mới!',

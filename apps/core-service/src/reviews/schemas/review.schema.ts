@@ -12,7 +12,7 @@ export class Review {
   @Prop({ index: true })
   urlGoc: string;
 
-  @Prop()
+  @Prop({ min: 1, max: 5 })
   diemReview: number;
 
   @Prop()
@@ -62,3 +62,13 @@ export const ReviewSchema = SchemaFactory.createForClass(Review);
 // [TASK-PERF-01] Compound indexes for high-performance review listing and moderation
 ReviewSchema.index({ restaurantId: 1, createdAt: -1 });
 ReviewSchema.index({ restaurantId: 1, status: 1, createdAt: -1 });
+
+// [M9.5 / V004] Partial unique index enforcing at most 1 review per authenticated user per restaurant
+ReviewSchema.index(
+  { userId: 1, restaurantId: 1 },
+  {
+    unique: true,
+    name: 'uniq_user_restaurant_review',
+    partialFilterExpression: { userId: { $type: 'objectId' } },
+  },
+);

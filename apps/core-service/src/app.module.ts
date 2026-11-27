@@ -11,6 +11,7 @@ import { InteractionsModule } from './interactions/interactions.module';
 import { TasteDnaModule } from './taste-dna/taste-dna.module';
 import { HealthModule } from './health/health.module';
 import { InternalModule } from './internal/internal.module';
+import { resolveServiceMongoUri } from '@shared/database/mongo-uri.util';
 
 @Module({
   imports: [
@@ -18,17 +19,16 @@ import { InternalModule } from './internal/internal.module';
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => {
-        const uri =
-          configService.get<string>('MONGODB_URI_CORE') ||
-          configService.get<string>('MONGODB_URI');
-        if (!uri) {
-          throw new Error(
-            'MONGODB_URI_CORE or MONGODB_URI environment variable is required',
-          );
-        }
+        const { uri, dbName } = resolveServiceMongoUri(configService, {
+          uriEnvKeys: ['CORE_MONGODB_URI', 'MONGODB_URI_CORE'],
+          userEnvKey: 'CORE_DB_USER',
+          passwordEnvKey: 'CORE_DB_PASSWORD',
+          dbNameEnvKey: 'CORE_DB_NAME',
+          defaultDbName: 'gastro_core',
+        });
         return {
           uri,
-          dbName: configService.get<string>('CORE_DB_NAME') || 'gastro_core',
+          dbName,
           serverSelectionTimeoutMS: 5000,
         };
       },

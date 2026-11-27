@@ -68,3 +68,24 @@
 | Core Service Users Service | `apps/core-service/src/users/users.service.spec.ts` | 8 | ✅ PASS |
 | Core Service Taste DNA Service | `apps/core-service/src/taste-dna/taste-dna.service.spec.ts` | 5 | ✅ PASS |
 | **Total Microservices Regression Suite** | **15 Suites** | **71 Tests** | **✅ 100% PASS** |
+
+---
+
+## 3. CUMULATIVE PROGRESS THROUGH M9.7.0 (2026-11-27)
+
+**Current Branch:** `feature/m9-6-backup-pipeline-readiness-probes` (`0c7c3d8`)
+**Audit Status:** ✅ **READY WITH NON-BLOCKING ISSUES** (for PR review; staging & cloud infra gates remain open)
+
+### 3.1 Milestones Implemented After Milestone 1
+- **M2.1 – M2.3.1:** Independent builds, Docker Compose network validation, IDOR/RBAC hardening, and AI contract alignment (`libs/shared/src/contracts/ai.contracts.ts`).
+- **M8.1 – M8.8:** Database architecture, schema/index, migration strategy, backup/DR, data integrity, runtime validation, and blocker register (`docs/database/`).
+- **M9.1 – M9.6.1:** Versioned TS migration runner (`V002`–`V004`), refresh token + OTP security fixes, DTO/schema validation alignment, Docker MongoDB `--auth` & least-privilege SCRAM roles, GeoJSON/referential integrity cleanup, `/health/ready` readiness probes, and hardened S3/AES-256 backup/restore CI pipeline.
+
+### 3.2 Latest Verified Local Execution Evidence (M9.7.0)
+| Check | Scope | Observed Result |
+| :--- | :--- | :--- |
+| `npm run build:all` | `core-service` + `planning-service` | ✅ **PASS** (`EXIT: 0`) |
+| `npx tsc -p tsconfig.build.json --noEmit` | Full TypeScript build config | ✅ **PASS** (`0` errors) |
+| `npm run test:microservices` | `libs/` + `apps/` | ✅ **PASS** (`30` suites, `185` tests) |
+| `shellcheck -S warning scripts/backup/*.sh` | Backup & audit shell scripts | ✅ **PASS** (`0` warnings/errors) |
+| Live Docker / Cloud Atlas / S3 | Runtime containers & live cloud infra | ⚠️ **NOT VERIFIED IN M9.7.0** (Docker daemon offline; `BLK-11` & `BLK-10a/b/c` pending infra access) |

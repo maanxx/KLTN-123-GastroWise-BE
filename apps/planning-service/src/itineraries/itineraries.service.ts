@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
   ForbiddenException,
@@ -8,15 +9,17 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { HttpService } from '@nestjs/axios';
-import { firstValueFrom } from 'rxjs';
 import { Itinerary } from './schemas/itinerary.schema';
 import { GenerateItineraryDto } from './dto/generate-itinerary.dto';
-import { ReorderStopsDto } from './dto/reorder-stops.dto';
 import { AddStopDto } from './dto/add-stop.dto';
 import { RecalculateItineraryDto } from './dto/recalculate-itinerary.dto';
 import { CoreApiClient } from '../acl/core-api.client';
 import { AiApiClient } from '../acl/ai-api.client';
 import { randomUUID as uuidv4 } from 'crypto';
+import {
+  extractValidGeoPoint,
+  parseValidCoordinatePair,
+} from '@shared/utils/geo.utils';
 
 export function calculateHaversineDistanceKm(
   lat1: number,
@@ -24,10 +27,16 @@ export function calculateHaversineDistanceKm(
   lat2: number,
   lon2: number,
 ): number {
-  if (!lat1 || !lon1 || !lat2 || !lon2) return 1.5;
+  const p1 = parseValidCoordinatePair(lat1, lon1);
+  const p2 = parseValidCoordinatePair(lat2, lon2);
+  if (!p1 || !p2) {
+    throw new BadRequestException(
+      'Invalid or un-geocoded coordinates supplied for Haversine distance calculation',
+    );
+  }
   const R = 6371; // km
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const dLat = ((p2.lat - p1.lat) * Math.PI) / 180;
+  const dLon = ((p2.lon - p1.lon) * Math.PI) / 180;
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos((lat1 * Math.PI) / 180) *
@@ -133,8 +142,15 @@ export class ItinerariesService {
     routingMode: string = 'motorbike',
     budget: number = 250000,
   ) {
-    let prevLat = startLat;
-    const prevLng = startLng;
+    const startPoint = parseValidCoordinatePair(startLat, startLng);
+    if (!startPoint) {
+      throw new BadRequestException(
+        'Valid non-zero start coordinates are required for itinerary distance recalculation',
+      );
+    }
+
+    let prevLat = startPoint.lat;
+    let prevLng = startPoint.lon;
     const startMins = parseTimeToMinutes(startTimeStr);
     let currTimeMins = startMins;
     let totalDistKm = 0;
@@ -148,12 +164,21 @@ export class ItinerariesService {
     const speed = speeds[routingMode] || 24.0;
 
     const updatedStops = stops.map((stop, idx) => {
-      const sLat = Number(stop.restaurant_lat || stop.lat) || startLat;
-      const sLng =
-        Number(stop.restaurant_lng || stop.lon || stop.lng) || startLng;
+      const stopPoint = parseValidCoordinatePair(
+        stop.restaurant_lat ?? stop.lat,
+        stop.restaurant_lng ?? stop.lon ?? stop.lng,
+      );
+      if (!stopPoint) {
+        throw new BadRequestException(
+          `Stop "${stop.restaurant_name || stop.restaurant_id || idx}" is missing valid non-zero coordinates`,
+        );
+      }
+      const sLat = stopPoint.lat;
+      const sLng = stopPoint.lon;
       const dist = calculateHaversineDistanceKm(prevLat, prevLng, sLat, sLng);
       totalDistKm += dist;
       prevLat = sLat;
+      prevLng = sLng;
 
       const transitMins = Math.max(3, Math.round((dist / speed) * 60));
       const arrivalMins = currTimeMins + transitMins;
@@ -209,8 +234,14 @@ export class ItinerariesService {
     dto: GenerateItineraryDto,
   ): Promise<Itinerary> {
     const prompt = (dto.prompt || '').trim();
-    const userLat = dto.lat || 10.7769;
-    const userLng = dto.lng || 106.7009;
+    const startPoint = parseValidCoordinatePair(dto.lat, dto.lng);
+    if (!startPoint) {
+      throw new BadRequestException(
+        'Valid non-zero starting coordinates (lat, lng) are required to generate an itinerary',
+      );
+    }
+    const userLat = startPoint.lat;
+    const userLng = startPoint.lon;
     const userBudget = dto.budget || 250000;
     const desiredStops = Math.min(Math.max(dto.desired_stops || 3, 2), 6);
     const routingMode = dto.routing_mode || 'motorbike';
@@ -263,32 +294,41 @@ export class ItinerariesService {
       );
     }
 
-    // Score candidates
-    const scoredCandidates = candidates.map((r) => {
-      const rLat = r.lat ?? 10.7769;
-      const rLng = r.lng ?? 106.7009;
-      const dist = calculateHaversineDistanceKm(userLat, userLng, rLat, rLng);
-      const rating = Number(r.rating) || 4.0;
-      const tasteScore = calculateTasteAffinityScore(r, tasteProfile);
-      const proximityScore = Math.max(0, 1 - dist / 25);
-      const compositeScore =
-        (rating / 5.0) * 0.4 + tasteScore * 0.3 + proximityScore * 0.3;
+    // Score candidates (exclude un-geocoded or invalid [0,0] venues before distance/route math)
+    const scoredCandidates = candidates
+      .map((r) => {
+        const point = extractValidGeoPoint(r);
+        if (!point) {
+          return null;
+        }
+        const dist = calculateHaversineDistanceKm(
+          userLat,
+          userLng,
+          point.lat,
+          point.lon,
+        );
+        const rating = Number(r.rating) || 4.0;
+        const tasteScore = calculateTasteAffinityScore(r, tasteProfile);
+        const proximityScore = Math.max(0, 1 - dist / 25);
+        const compositeScore =
+          (rating / 5.0) * 0.4 + tasteScore * 0.3 + proximityScore * 0.3;
 
-      return {
-        id: r.restaurant_id,
-        name: r.name,
-        lat: rLat,
-        lon: rLng,
-        meal_type: this.inferMealType(r.tags || [], r.name),
-        open_time: r.open_time?.split('-')[0]?.trim() || '08:00',
-        close_time: r.open_time?.split('-')[1]?.trim() || '22:00',
-        dining_duration_mins: 45,
-        avg_price: 50000,
-        rating,
-        tags: Array.isArray(r.tags) ? r.tags.join(', ') : r.tags || '',
-        compositeScore,
-      };
-    });
+        return {
+          id: r.restaurant_id,
+          name: r.name,
+          lat: point.lat,
+          lon: point.lon,
+          meal_type: this.inferMealType(r.tags || [], r.name),
+          open_time: r.open_time?.split('-')[0]?.trim() || '08:00',
+          close_time: r.open_time?.split('-')[1]?.trim() || '22:00',
+          dining_duration_mins: 45,
+          avg_price: 50000,
+          rating,
+          tags: Array.isArray(r.tags) ? r.tags.join(', ') : r.tags || '',
+          compositeScore,
+        };
+      })
+      .filter((c): c is NonNullable<typeof c> => c !== null);
 
     scoredCandidates.sort((a, b) => b.compositeScore - a.compositeScore);
 
@@ -320,25 +360,38 @@ export class ItinerariesService {
 
       if (aiResult && aiResult.stops && aiResult.stops.length > 0) {
         const candidateMap = new Map(scoredCandidates.map((c) => [c.id, c]));
-        optimizedStops = aiResult.stops.map((s) => {
+        const hasZeroBasedOrder = aiResult.stops.some(
+          (s) => typeof s.order_index === 'number' && s.order_index === 0,
+        );
+        optimizedStops = aiResult.stops.map((s, idx) => {
           const cand = candidateMap.get(s.restaurant_id);
+          if (!cand) {
+            return null;
+          }
+          const normalizedOrderIndex =
+            typeof s.order_index === 'number'
+              ? hasZeroBasedOrder
+                ? s.order_index + 1
+                : s.order_index
+              : idx + 1;
           return {
             stop_id: uuidv4(),
             restaurant_id: s.restaurant_id,
-            order_index: s.order_index + 1,
-            restaurant_name: cand?.name || 'Nhà hàng GastroWise',
-            restaurant_lat: cand?.lat || userLat,
-            restaurant_lng: cand?.lon || userLng,
-            meal_type: cand?.meal_type || 'main',
+            order_index: normalizedOrderIndex,
+            restaurant_name: cand.name || 'Nhà hàng GastroWise',
+            restaurant_lat: cand.lat,
+            restaurant_lng: cand.lon,
+            meal_type: cand.meal_type || 'main',
             arrival_time: s.arrival_time,
             departure_time: s.departure_time,
             dining_duration_mins: 45,
             transit_time_mins: s.transit_time_mins,
             distance_to_next_km: s.distance_km,
             estimated_cost: 50000,
-            tags: cand?.tags || '',
+            tags: cand.tags || '',
           };
-        });
+        })
+        .filter((item): item is NonNullable<typeof item> => item !== null);
 
         totalDistKm = aiResult.total_distance_km;
         totalDurationMins = aiResult.total_duration_mins;
@@ -485,13 +538,20 @@ export class ItinerariesService {
       reordered.push(s);
     }
 
-    const startLat = itinerary.start_location?.coordinates?.[1] || 10.7769;
-    const startLng = itinerary.start_location?.coordinates?.[0] || 106.7009;
+    const startPoint = parseValidCoordinatePair(
+      itinerary.start_location?.coordinates?.[1],
+      itinerary.start_location?.coordinates?.[0],
+    );
+    if (!startPoint) {
+      throw new BadRequestException(
+        'Itinerary is missing a valid start_location for reordering',
+      );
+    }
 
     const metrics = this.recalculateTimetableAndMetrics(
       reordered,
-      startLat,
-      startLng,
+      startPoint.lat,
+      startPoint.lon,
       itinerary.start_time || '11:00',
       itinerary.routing_mode || 'motorbike',
       itinerary.budget || 250000,
@@ -541,16 +601,30 @@ export class ItinerariesService {
       );
     }
 
-    const startLat = itinerary.start_location?.coordinates?.[1] || 10.7769;
-    const startLng = itinerary.start_location?.coordinates?.[0] || 106.7009;
+    const startPoint = parseValidCoordinatePair(
+      itinerary.start_location?.coordinates?.[1],
+      itinerary.start_location?.coordinates?.[0],
+    );
+    if (!startPoint) {
+      throw new BadRequestException(
+        'Itinerary is missing a valid start_location',
+      );
+    }
+
+    const restPoint = extractValidGeoPoint(restaurant);
+    if (!restPoint) {
+      throw new BadRequestException(
+        `Restaurant "${restaurant.name || dto.restaurant_id}" does not have valid non-zero coordinates`,
+      );
+    }
 
     const newStop = {
       stop_id: uuidv4(),
       restaurant_id: restaurant.restaurant_id,
       order_index: itinerary.stops.length + 1,
       restaurant_name: restaurant.name || 'Nhà hàng GastroWise',
-      restaurant_lat: Number(restaurant.lat) || startLat,
-      restaurant_lng: Number(restaurant.lng) || startLng,
+      restaurant_lat: restPoint.lat,
+      restaurant_lng: restPoint.lon,
       restaurant_address: restaurant.address || '',
       meal_type: this.inferMealType(
         restaurant.tags || [],
@@ -576,8 +650,8 @@ export class ItinerariesService {
 
     const metrics = this.recalculateTimetableAndMetrics(
       currentStops,
-      startLat,
-      startLng,
+      startPoint.lat,
+      startPoint.lon,
       itinerary.start_time || '11:00',
       itinerary.routing_mode || 'motorbike',
       itinerary.budget || 250000,
@@ -625,13 +699,20 @@ export class ItinerariesService {
       );
     }
 
-    const startLat = itinerary.start_location?.coordinates?.[1] || 10.7769;
-    const startLng = itinerary.start_location?.coordinates?.[0] || 106.7009;
+    const startPoint = parseValidCoordinatePair(
+      itinerary.start_location?.coordinates?.[1],
+      itinerary.start_location?.coordinates?.[0],
+    );
+    if (!startPoint) {
+      throw new BadRequestException(
+        'Itinerary is missing a valid start_location',
+      );
+    }
 
     const metrics = this.recalculateTimetableAndMetrics(
       filteredStops,
-      startLat,
-      startLng,
+      startPoint.lat,
+      startPoint.lon,
       itinerary.start_time || '11:00',
       itinerary.routing_mode || 'motorbike',
       itinerary.budget || 250000,
@@ -675,20 +756,33 @@ export class ItinerariesService {
     if (dto.budget !== undefined) itinerary.budget = dto.budget;
     if (dto.start_time) itinerary.start_time = dto.start_time;
     if (dto.routing_mode) itinerary.routing_mode = dto.routing_mode;
-    if (dto.lat !== undefined && dto.lng !== undefined) {
+    if (dto.lat !== undefined || dto.lng !== undefined) {
+      const updatedStart = parseValidCoordinatePair(dto.lat, dto.lng);
+      if (!updatedStart) {
+        throw new BadRequestException(
+          'Valid non-zero lat and lng are required when updating start_location',
+        );
+      }
       itinerary.start_location = {
         type: 'Point',
-        coordinates: [dto.lng, dto.lat],
+        coordinates: [updatedStart.lon, updatedStart.lat],
       };
     }
 
-    const startLat = itinerary.start_location?.coordinates?.[1] || 10.7769;
-    const startLng = itinerary.start_location?.coordinates?.[0] || 106.7009;
+    const startPoint = parseValidCoordinatePair(
+      itinerary.start_location?.coordinates?.[1],
+      itinerary.start_location?.coordinates?.[0],
+    );
+    if (!startPoint) {
+      throw new BadRequestException(
+        'Itinerary is missing a valid start_location',
+      );
+    }
 
     const metrics = this.recalculateTimetableAndMetrics(
       itinerary.stops,
-      startLat,
-      startLng,
+      startPoint.lat,
+      startPoint.lon,
       itinerary.start_time || '11:00',
       itinerary.routing_mode || 'motorbike',
       itinerary.budget || 250000,

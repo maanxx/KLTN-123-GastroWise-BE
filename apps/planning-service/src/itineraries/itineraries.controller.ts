@@ -14,6 +14,7 @@ import { GenerateItineraryDto } from './dto/generate-itinerary.dto';
 import { ReorderStopsDto } from './dto/reorder-stops.dto';
 import { AddStopDto } from './dto/add-stop.dto';
 import { RecalculateItineraryDto } from './dto/recalculate-itinerary.dto';
+import { UpdateItineraryStatusDto } from './dto/update-itinerary-status.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -144,7 +145,7 @@ export class ItinerariesController {
   async updateStatus(
     @Request() req,
     @Param('id') id: string,
-    @Body() body: { status: string },
+    @Body() body: UpdateItineraryStatusDto,
   ) {
     const actorId = req.user.userId || req.user.sub;
     const actorRole = req.user.role || 'user';

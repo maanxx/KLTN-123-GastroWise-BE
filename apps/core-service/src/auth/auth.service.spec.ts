@@ -38,6 +38,7 @@ describe('AuthService', () => {
 
   const mockJwtService = {
     signAsync: jest.fn(),
+    verifyAsync: jest.fn(),
   };
 
   const mockConfigService = {
@@ -126,15 +127,17 @@ describe('AuthService', () => {
   // --- TEST REFRESH ---
   describe('refresh', () => {
     it('should return new tokens if refresh token is valid', async () => {
+      mockJwtService.verifyAsync.mockResolvedValue({ sub: mockUser._id });
       mockUsersService.findOne.mockResolvedValue(mockUser);
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
       mockJwtService.signAsync.mockResolvedValue('new_token');
 
-      const result = await service.refresh('uid', 'rt');
+      const result = await service.refresh(mockUser._id, 'rt');
       expect(result).toHaveProperty('accessToken');
     });
 
     it('should throw ForbiddenException if user not found', async () => {
+      mockJwtService.verifyAsync.mockResolvedValue({ sub: 'uid' });
       mockUsersService.findOne.mockResolvedValue(null);
       await expect(service.refresh('uid', 'rt')).rejects.toThrow(
         ForbiddenException,
