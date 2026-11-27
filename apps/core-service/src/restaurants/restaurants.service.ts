@@ -25,6 +25,11 @@ import {
   parseValidCoordinatePair,
   toGeoJsonPoint,
 } from '@shared/utils/geo.utils';
+import {
+  formatRestaurantTagsString,
+  normalizeRestaurantRating,
+  normalizeRestaurantTags,
+} from '@shared/utils/restaurant-normalizer.util';
 
 @Injectable()
 export class RestaurantsService {
@@ -728,15 +733,13 @@ export class RestaurantsService {
 
   private mapRestaurantToDTO(res: any) {
     const r = res.toObject ? res.toObject() : res;
-    const rawRating = r.diemTrungBinh
-      ? Number(r.diemTrungBinh)
-      : r.rating
-        ? Number(r.rating)
-        : 5.0;
-    const normalizedRating =
-      rawRating > 5
-        ? Number((rawRating / 2).toFixed(1))
-        : Number(rawRating.toFixed(1));
+    const {
+      rating: normalizedRating,
+      rawRating,
+      ratingScale,
+    } = normalizeRestaurantRating(r);
+    const normalizedTags = normalizeRestaurantTags(r.tags);
+    const formattedTags = formatRestaurantTagsString(r.tags);
 
     return {
       id: r._id ? r._id.toString() : r.id,
@@ -757,16 +760,16 @@ export class RestaurantsService {
         `https://picsum.photos/seed/${r._id || r.id}/1200/500`,
       rating: normalizedRating,
       diemTrungBinh: normalizedRating,
+      rawRating,
+      ratingScale,
       priceRange: r.giaCa || r.priceRange || '30.000đ - 150.000đ',
       giaCa: r.giaCa || r.priceRange || '30.000đ - 150.000đ',
       openingHours:
         r.gioMoCua || r.openingHours || r.openTime || '08:00 - 22:00',
       gioMoCua: r.gioMoCua || r.openingHours || r.openTime || '08:00 - 22:00',
       openTime: r.gioMoCua || r.openingHours || r.openTime || '08:00 - 22:00',
-      cuisineTypes: r.tags
-        ? r.tags.split(',').map((t: string) => t.trim())
-        : ['Nhà hàng'],
-      tags: r.tags || '',
+      cuisineTypes: normalizedTags.length > 0 ? normalizedTags : ['Nhà hàng'],
+      tags: formattedTags,
       phone: r.contactPhone || r.phone || '0901 234 567',
       contactPhone: r.contactPhone || r.phone || '0901 234 567',
       description: r.description || '',

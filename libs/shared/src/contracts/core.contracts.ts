@@ -9,6 +9,8 @@ export class RestaurantCandidateDto {
   lat?: number;
   lng?: number;
   rating: number;
+  raw_rating?: number;
+  rating_scale?: '10_point' | '5_point' | 'default';
   price_level?: number | string;
   tags?: string[];
   cuisine_type?: string[];

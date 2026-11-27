@@ -420,6 +420,91 @@ describe('ACL Security & Fault Tolerance Tests', () => {
       });
       expect(emptyRes.stops).toEqual([]);
     });
+
+    it('forwards explicit candidate name, rating (including 0), avg_price, tags, and converts 0-based order_index once', async () => {
+      mockHttpService.post.mockReturnValueOnce(
+        of({
+          data: {
+            stops: [
+              {
+                id: 'c1',
+                order_index: 0,
+                arrival_time: '11:05',
+                departure_time: '11:50',
+                transit_time_mins: 5,
+                distance_to_next_km: 1.1,
+                estimated_cost: 65000,
+              },
+              {
+                id: 'c2',
+                order_index: 1,
+                arrival_time: '12:00',
+                departure_time: '12:45',
+                transit_time_mins: 10,
+                distance_to_next_km: 0.0,
+                estimated_cost: 80000,
+              },
+            ],
+            total_distance_km: 1.1,
+            total_duration_mins: 100,
+            algorithm_used: 'OR-Tools TSPTW',
+          },
+        }),
+      );
+
+      const res = await client.optimizeRoute({
+        restaurants: [
+          {
+            id: 'c1',
+            name: 'Phở Thực Tế',
+            lat: 10.77,
+            lng: 106.7,
+            open: '08:00',
+            close: '22:00',
+            duration_mins: 45,
+            avg_price: 65000,
+            rating: 0,
+            tags: 'phở bò, nóng',
+            district: 'Quận 1',
+          },
+          {
+            id: 'c2',
+            name: 'Cơm Tấm 10-pt',
+            lat: 10.78,
+            lng: 106.71,
+            open: '08:00',
+            close: '22:00',
+            duration_mins: 45,
+            avg_price: 80000,
+            rating: 8.6,
+            tags: 'cơm tấm',
+          },
+        ],
+        start_lat: 10.76,
+        start_lng: 106.69,
+        start_time: '11:00',
+        routing_mode: 'motorbike',
+        budget_vnd: 250000,
+        desired_stops: 2,
+      });
+
+      const sentPayload = mockHttpService.post.mock.calls[0][1];
+      expect(sentPayload.desired_stops).toBe(2);
+      expect(sentPayload.candidates[0]).toMatchObject({
+        id: 'c1',
+        name: 'Phở Thực Tế',
+        avg_price: 65000,
+        rating: 0,
+        lat: 10.77,
+        lon: 106.7,
+        dining_duration_mins: 45,
+        tags: 'phở bò, nóng',
+        district: 'Quận 1',
+      });
+      expect(sentPayload.candidates[1].rating).toBe(4.3);
+      expect(res.stops.map((s) => s.order_index)).toEqual([1, 2]);
+      expect(res.stops[0].estimated_cost).toBe(65000);
+    });
   });
 });
 

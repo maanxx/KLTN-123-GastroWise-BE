@@ -318,6 +318,88 @@ describe('ItinerariesService (Planning Microservice ACL & Heuristics)', () => {
       });
       expect(emptyItinerary.stops).toEqual([]);
     });
+
+    it('M10.1 Regression: forwards normalized rating, parsed price, name, tags to AiApiClient without double order_index offset', async () => {
+      mockCoreApiClient.getCandidates.mockResolvedValueOnce([
+        {
+          restaurant_id: 'c10',
+          name: 'Phở Foody 10-pt',
+          lat: 10.775,
+          lng: 106.701,
+          rating: 8.6,
+          rating_scale: '10_point',
+          price_level: '65.000đ',
+          tags: ['phở bò', 'nóng'],
+          open_time: '06:00 - 22:00',
+        },
+        {
+          restaurant_id: 'c5',
+          name: 'Cà Phê 5-pt',
+          lat: 10.778,
+          lng: 106.704,
+          rating: 4.5,
+          rating_scale: '5_point',
+          average_cost: 45000,
+          tags: 'cà phê, máy lạnh',
+          open_time: '07:00 - 23:00',
+        },
+      ]);
+      mockAiApiClient.optimizeRoute.mockResolvedValueOnce({
+        stops: [
+          {
+            restaurant_id: 'c10',
+            order_index: 1,
+            arrival_time: '11:05',
+            departure_time: '11:50',
+            transit_time_mins: 5,
+            distance_km: 0.8,
+            estimated_cost: 65000,
+          },
+          {
+            restaurant_id: 'c5',
+            order_index: 2,
+            arrival_time: '12:00',
+            departure_time: '12:45',
+            transit_time_mins: 10,
+            distance_km: 0.0,
+            estimated_cost: 45000,
+          },
+        ],
+        total_distance_km: 0.8,
+        total_duration_mins: 100,
+        solver: 'OR-Tools TSPTW',
+      });
+
+      const itinerary = await service.generateItinerary('user-123', {
+        prompt: 'Phở và cà phê',
+        start_time: '11:00',
+        end_time: '14:00',
+        lat: 10.77,
+        lng: 106.7,
+        budget: 200000,
+        desired_stops: 2,
+      });
+
+      const optimizeArg = mockAiApiClient.optimizeRoute.mock.calls[0][0];
+      expect(optimizeArg.desired_stops).toBe(2);
+      // After 8.6 -> 4.3 normalization, c5 (4.5) ranks ahead of c10 (4.3)
+      expect(optimizeArg.restaurants[0]).toMatchObject({
+        id: 'c5',
+        name: 'Cà Phê 5-pt',
+        rating: 4.5,
+        avg_price: 45000,
+        tags: 'cà phê, máy lạnh',
+      });
+      expect(optimizeArg.restaurants[1]).toMatchObject({
+        id: 'c10',
+        name: 'Phở Foody 10-pt',
+        rating: 4.3,
+        avg_price: 65000,
+        tags: 'phở bò, nóng',
+      });
+      expect(itinerary.stops.map((s) => s.order_index)).toEqual([1, 2]);
+      expect(itinerary.total_cost).toBe(110000);
+    });
   });
 
   describe('M9.5 Geospatial Integrity & Distance Regression', () => {

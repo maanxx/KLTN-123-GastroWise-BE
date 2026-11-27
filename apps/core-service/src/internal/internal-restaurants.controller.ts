@@ -19,6 +19,11 @@ import {
   extractValidGeoPoint,
   parseValidCoordinatePair,
 } from '@shared/utils/geo.utils';
+import {
+  normalizeRestaurantRating,
+  normalizeRestaurantTags,
+  parseRestaurantPriceVnd,
+} from '@shared/utils/restaurant-normalizer.util';
 
 @UseGuards(InternalAuthGuard)
 @Controller('internal/restaurants')
@@ -75,24 +80,9 @@ export class InternalRestaurantsController {
       .lean()
       .exec();
 
-    const candidates: RestaurantCandidateDto[] = docs.map((doc: any) => {
-      const point = extractValidGeoPoint(doc);
-      return {
-        restaurant_id: doc._id.toString(),
-        name: doc.tenQuan || 'Unknown',
-        address: doc.diaChi || '',
-        location: point
-          ? { type: 'Point', coordinates: [point.lon, point.lat] }
-          : undefined,
-        lat: point?.lat,
-        lng: point?.lon,
-        rating: doc.diemTrungBinh || 0,
-        price_level: doc.giaCa,
-        tags: doc.tags ? doc.tags.split(',').map((t: string) => t.trim()) : [],
-        open_time: doc.gioMoCua,
-        featured_image: doc.avatarUrl,
-      };
-    });
+    const candidates: RestaurantCandidateDto[] = docs.map((doc: any) =>
+      this.toCandidateDto(doc),
+    );
 
     return { candidates, total: candidates.length };
   }
@@ -104,21 +94,33 @@ export class InternalRestaurantsController {
       throw new NotFoundException(`Restaurant with ID "${id}" not found`);
     }
 
+    return this.toCandidateDto(doc);
+  }
+
+  private toCandidateDto(doc: Record<string, any>): RestaurantCandidateDto {
     const point = extractValidGeoPoint(doc);
+    const { rating, rawRating, ratingScale } = normalizeRestaurantRating(doc);
+
     return {
-      restaurant_id: doc._id.toString(),
-      name: doc.tenQuan || 'Unknown',
-      address: doc.diaChi || '',
+      restaurant_id: doc._id ? String(doc._id) : String(doc.id ?? ''),
+      name: doc.tenQuan || doc.name || 'Unknown',
+      address: doc.diaChi || doc.address || '',
       location: point
         ? { type: 'Point', coordinates: [point.lon, point.lat] }
         : undefined,
       lat: point?.lat,
       lng: point?.lon,
-      rating: doc.diemTrungBinh || 0,
-      price_level: doc.giaCa,
-      tags: doc.tags ? doc.tags.split(',').map((t: string) => t.trim()) : [],
-      open_time: doc.gioMoCua,
-      featured_image: doc.avatarUrl,
+      rating,
+      raw_rating: rawRating,
+      rating_scale: ratingScale,
+      price_level: doc.giaCa ?? doc.priceRange ?? doc.price,
+      average_cost: parseRestaurantPriceVnd(
+        doc.giaCa ?? doc.price ?? doc.averageCost ?? doc.priceRange,
+        50000,
+      ),
+      tags: normalizeRestaurantTags(doc.tags),
+      open_time: doc.gioMoCua ?? doc.open_time,
+      featured_image: doc.avatarUrl ?? doc.featured_image,
     };
   }
 }
