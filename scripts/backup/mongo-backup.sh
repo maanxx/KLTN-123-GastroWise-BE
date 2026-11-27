@@ -147,7 +147,16 @@ if [[ -n "${BACKUP_S3_BUCKET:-}" ]]; then
     EXTRA_LOCK_ARGS+=(--object-lock-mode "${BACKUP_OBJECT_LOCK_MODE}" --object-lock-retain-until-date "${RETAIN_UNTIL}")
   fi
 
+  # Upload artifact (encrypted .enc or plain .archive.gz)
   aws "${AWS_ARGS[@]}" "${ARTIFACT_PATH}" "${DEST_PREFIX}/$(basename "${ARTIFACT_PATH}")" --sse AES256 "${EXTRA_LOCK_ARGS[@]}"
+  # Upload SHA-256 sidecar (.sha256) so verify-restore.sh can enforce mandatory checksum verification
+  ARTIFACT_SHA_PATH="${ARTIFACT_PATH}.sha256"
+  if [[ -f "${ARTIFACT_SHA_PATH}" ]]; then
+    aws "${AWS_ARGS[@]}" "${ARTIFACT_SHA_PATH}" "${DEST_PREFIX}/$(basename "${ARTIFACT_SHA_PATH}")" --sse AES256 "${EXTRA_LOCK_ARGS[@]}"
+  else
+    echo "[mongo-backup] WARNING: SHA-256 sidecar not found at ${ARTIFACT_SHA_PATH} — skipping sidecar upload" >&2
+  fi
+  # Upload JSON manifest
   aws "${AWS_ARGS[@]}" "${MANIFEST_PATH}" "${DEST_PREFIX}/$(basename "${MANIFEST_PATH}")" --sse AES256 "${EXTRA_LOCK_ARGS[@]}"
-  echo "[mongo-backup] Uploaded archive and manifest to ${DEST_PREFIX}"
+  echo "[mongo-backup] Uploaded archive, sha256 sidecar and manifest to ${DEST_PREFIX}"
 fi

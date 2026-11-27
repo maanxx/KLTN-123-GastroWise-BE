@@ -28,18 +28,22 @@ const instanceSize = cluster?.replicationSpecs?.[0]?.regionConfigs?.[0]?.electab
   || cluster?.providerSettings?.instanceSizeName || 'UNKNOWN';
 const pitEnabled = Boolean(cluster?.pitEnabled);
 const backupEnabled = Boolean(cluster?.backupEnabled);
-const isShared = ['M0', 'M2', 'M5'].includes(instanceSize);
+// Explicitly known non-compliant shared tiers — but UNKNOWN also fails closed:
+// any instance size that is not a recognized dedicated tier is treated as non-compliant.
+const DEDICATED_TIERS = /^M(10|20|30|40|50|60|80|140|200|300|400|700)$/;
+const isDedicated = DEDICATED_TIERS.test(instanceSize);
 const summary = {
   clusterName: cluster.name,
   mongoDBVersion: cluster.mongoDBVersion,
   instanceSize,
   cloudBackupEnabled: backupEnabled,
   continuousPitEnabled: pitEnabled,
-  m10PlusCompliant: !isShared && backupEnabled && pitEnabled
+  m10PlusCompliant: isDedicated && backupEnabled && pitEnabled
 };
 console.log(JSON.stringify(summary, null, 2));
 if (!summary.m10PlusCompliant) {
-  console.error('[atlas-tier-audit] Cluster does not satisfy M10+ continuous PITR Cloud Backup compliance.');
+  console.error('[atlas-tier-audit] FAIL-CLOSED: instanceSize=' + instanceSize +
+    ' — cluster does not satisfy M10+ dedicated tier with continuous PITR Cloud Backup compliance.');
   process.exit(2);
 }
 " "${RESP}"

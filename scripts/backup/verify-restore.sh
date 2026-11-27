@@ -46,6 +46,12 @@ if [[ -f "${SHA_FILE}" ]]; then
     exit 1
   fi
   echo "[verify-restore] Checksum verified: ${ACTUAL_SHA}"
+else
+  # Sidecar is mandatory: a missing .sha256 means the backup pipeline failed to upload it,
+  # or the archive was tampered with. Refuse to restore without integrity proof.
+  echo "[verify-restore] ERROR: SHA-256 sidecar not found: ${SHA_FILE}" >&2
+  echo "[verify-restore] A missing sidecar may indicate a corrupted or tampered backup." >&2
+  exit 1
 fi
 
 WORK_ARCHIVE="${ARCHIVE_INPUT}"

@@ -57,21 +57,49 @@ jobs:
           RESTORE_TARGET_URI: mongodb://127.0.0.1:27017/${{ matrix.database }}_verify
           RESTORE_SOURCE_DB: ${{ matrix.database }}
           RESTORE_TARGET_DB: ${{ matrix.database }}_verify
+          MATRIX_DATABASE: ${{ matrix.database }}
         run: |
+          set -euo pipefail
           mkdir -p /tmp/restore-drill
-          ENDPOINT_FLAG=""
+
+          # Build endpoint flag safely (quoted to prevent word-split on spaces)
+          ENDPOINT_ARGS=()
           if [[ -n "${BACKUP_S3_ENDPOINT_URL:-}" ]]; then
-            ENDPOINT_FLAG="--endpoint-url ${BACKUP_S3_ENDPOINT_URL}"
+            ENDPOINT_ARGS=(--endpoint-url "${BACKUP_S3_ENDPOINT_URL}")
           fi
-          PREFIX="${BACKUP_S3_BUCKET#s3://}/${matrix.database}/daily/"
-          LATEST_KEY="$(aws s3 ls "s3://${PREFIX}" ${ENDPOINT_FLAG} | grep -E '\.archive\.gz(\.enc)?$' | sort | tail -n 1 | awk '{print $4}')"
+
+          # Construct S3 prefix using shell-env var (GitHub matrix var injected above)
+          BUCKET_BARE="${BACKUP_S3_BUCKET#s3://}"
+          PREFIX="${BUCKET_BARE}/${MATRIX_DATABASE}/daily/"
+
+          # Find the latest encrypted or plain archive in the prefix
+          LATEST_KEY="$(aws s3 ls "s3://${PREFIX}" "${ENDPOINT_ARGS[@]}" \
+            | grep -E '\.archive\.gz(\.enc)?$' | sort | tail -n 1 | awk '{print $4}')"
           if [[ -z "${LATEST_KEY}" ]]; then
             echo "No daily backup found under s3://${PREFIX}" >&2
             exit 1
           fi
-          aws s3 cp "s3://${PREFIX}${LATEST_KEY}" "/tmp/restore-drill/${LATEST_KEY}" ${ENDPOINT_FLAG}
+
+          # Download archive
+          aws s3 cp "s3://${PREFIX}${LATEST_KEY}" "/tmp/restore-drill/${LATEST_KEY}" "${ENDPOINT_ARGS[@]}"
+
+          # Download SHA-256 sidecar (mandatory — verify-restore.sh checks it when present,
+          # but here we enforce its existence so a missing checksum file is itself a failure)
+          SHA_KEY="${LATEST_KEY}.sha256"
+          aws s3 cp "s3://${PREFIX}${SHA_KEY}" "/tmp/restore-drill/${SHA_KEY}" "${ENDPOINT_ARGS[@]}"
+          echo "Checksum sidecar downloaded: ${SHA_KEY}"
+
           chmod +x scripts/backup/verify-restore.sh
-          ./scripts/backup/verify-restore.sh "/tmp/restore-drill/${LATEST_KEY}" | tee "/tmp/restore-drill/${matrix.database}_audit.json"
+
+          # Run restore validation; capture exit code explicitly (tee would hide it under pipefail)
+          AUDIT_FILE="/tmp/restore-drill/${MATRIX_DATABASE}_audit.json"
+          ./scripts/backup/verify-restore.sh "/tmp/restore-drill/${LATEST_KEY}" | tee "${AUDIT_FILE}"
+          # Explicit non-zero exit propagation: re-run only the script exit if tee consumed it
+          RESTORE_EXIT="${PIPESTATUS[0]}"
+          if [[ "${RESTORE_EXIT}" -ne 0 ]]; then
+            echo "verify-restore.sh exited with code ${RESTORE_EXIT}" >&2
+            exit "${RESTORE_EXIT}"
+          fi
 
       - name: Upload restore verification audit report
         if: always()
