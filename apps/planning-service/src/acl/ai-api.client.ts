@@ -22,6 +22,7 @@ import {
 } from '@shared/utils/geo.utils';
 import {
   DEFAULT_NEUTRAL_RATING,
+  formatRestaurantTagsString,
   normalizeRestaurantRating,
   normalizeStopOrderIndexes,
 } from '@shared/utils/restaurant-normalizer.util';
@@ -78,8 +79,17 @@ export class AiApiClient {
       candidates: (request.restaurants || []).map((r) => {
         const normalizedRating =
           r.rating !== undefined && r.rating !== null
-            ? normalizeRestaurantRating({ rating: r.rating }).rating
+            ? normalizeRestaurantRating({
+                rating: r.rating,
+                rawRating: (r as any).rawRating,
+                ratingScale: (r as any).ratingScale,
+              }).rating
             : DEFAULT_NEUTRAL_RATING;
+
+        const normalizedTags =
+          r.tags !== undefined && r.tags !== null
+            ? formatRestaurantTagsString(r.tags)
+            : undefined;
 
         return {
           id: r.id,
@@ -95,7 +105,7 @@ export class AiApiClient {
               ? r.avg_price
               : 50000,
           rating: normalizedRating,
-          tags: r.tags,
+          tags: normalizedTags,
           district: r.district,
         };
       }),

@@ -1,9 +1,10 @@
-export type RatingScaleKind = '10_point' | '5_point' | 'default';
+export type RatingScaleKind = '10_point' | '5_point' | 'ambiguous' | 'default';
 
 export interface NormalizedRatingResult {
   rating: number;
   rawRating: number;
   ratingScale: RatingScaleKind;
+  isAmbiguous: boolean;
 }
 
 export const DEFAULT_NEUTRAL_RATING = 3.0;
@@ -34,7 +35,7 @@ function clampFiveStar(value: number): number {
 
 function resolveExplicitRatingScale(
   rawScale: unknown,
-): '10_point' | '5_point' | null {
+): '10_point' | '5_point' | 'ambiguous' | null {
   if (typeof rawScale !== 'string') {
     return null;
   }
@@ -52,6 +53,9 @@ function resolveExplicitRatingScale(
     normalized === 'scale_5'
   ) {
     return '5_point';
+  }
+  if (normalized === 'ambiguous' || normalized === 'unknown') {
+    return 'ambiguous';
   }
   return null;
 }
@@ -103,6 +107,15 @@ export function formatRestaurantTagsString(rawTags: unknown): string {
 /**
  * Normalize heterogeneous restaurant ratings (Foody 10-point vs GastroWise 5-point)
  * into a bounded [0.0, 5.0] rating while preventing double normalization.
+ *
+ * Assumptions & Limitations for [0, 5] inputs without explicit scale metadata:
+ * - If Foody subscores exist (diemChatLuong, diemViTri, etc.) and reviewsCount === 0,
+ *   the value is classified as `10_point` and divided by 2.
+ * - If reviewsCount > 0 (user review recalculation), the value is classified as `5_point`.
+ * - Otherwise, when explicit scale metadata is absent and value is in [0, 5], scale
+ *   cannot be verified (`10_point` vs `5_point`). We pass the bounded value through
+ *   for display compatibility, but explicitly mark `ratingScale: 'ambiguous'` and
+ *   `isAmbiguous: true` instead of silently claiming `5_point`.
  */
 export function normalizeRestaurantRating(
   doc: Record<string, unknown> | null | undefined,
@@ -114,6 +127,7 @@ export function normalizeRestaurantRating(
       rating: defaultRating,
       rawRating: defaultRating,
       ratingScale: 'default',
+      isAmbiguous: false,
     };
   }
 
@@ -136,12 +150,15 @@ export function normalizeRestaurantRating(
         rating: defaultRating,
         rawRating: defaultRating,
         ratingScale: 'default',
+        isAmbiguous: false,
       };
     }
+    const scale = explicitScale ?? '5_point';
     return {
       rating: clampFiveStar(val),
       rawRating: recordedRaw ?? val,
-      ratingScale: explicitScale ?? '5_point',
+      ratingScale: scale,
+      isAmbiguous: scale === 'ambiguous',
     };
   }
 
@@ -152,31 +169,38 @@ export function normalizeRestaurantRating(
       rating: defaultRating,
       rawRating: defaultRating,
       ratingScale: 'default',
+      isAmbiguous: false,
     };
   }
 
   if (rawValue < 0) {
+    const scale = explicitScale ?? 'default';
     return {
       rating: 0,
       rawRating: rawValue,
-      ratingScale: explicitScale ?? '5_point',
+      ratingScale: scale,
+      isAmbiguous: scale === 'ambiguous',
     };
   }
 
   if (rawValue > 10) {
+    const scale = explicitScale ?? '10_point';
     return {
       rating: 5.0,
       rawRating: rawValue,
-      ratingScale: explicitScale ?? '10_point',
+      ratingScale: scale,
+      isAmbiguous: scale === 'ambiguous',
     };
   }
 
-  // If rawRating was already preserved on a candidate DTO without _ratingNormalized, treat rating as 5-pt.
+  // If rawRating was already preserved on a candidate DTO without _ratingNormalized, preserve scale without dividing again.
   if (recordedRaw !== null && toFiniteNumber(doc.rating) !== null) {
+    const scale = explicitScale ?? '5_point';
     return {
       rating: clampFiveStar(toFiniteNumber(doc.rating) as number),
       rawRating: recordedRaw,
-      ratingScale: explicitScale ?? '5_point',
+      ratingScale: scale,
+      isAmbiguous: scale === 'ambiguous',
     };
   }
 
@@ -185,6 +209,7 @@ export function normalizeRestaurantRating(
       rating: clampFiveStar(rawValue / 2),
       rawRating: rawValue,
       ratingScale: '10_point',
+      isAmbiguous: false,
     };
   }
 
@@ -193,6 +218,7 @@ export function normalizeRestaurantRating(
       rating: clampFiveStar(rawValue),
       rawRating: rawValue,
       ratingScale: '5_point',
+      isAmbiguous: false,
     };
   }
 
@@ -201,26 +227,48 @@ export function normalizeRestaurantRating(
       rating: clampFiveStar(rawValue / 2),
       rawRating: rawValue,
       ratingScale: '10_point',
+      isAmbiguous: false,
+    };
+  }
+
+  if (explicitScale === 'ambiguous') {
+    return {
+      rating: clampFiveStar(rawValue),
+      rawRating: rawValue,
+      ratingScale: 'ambiguous',
+      isAmbiguous: true,
     };
   }
 
   const hasFoodySubscores = FOODY_SUBSCORE_KEYS.some(
     (key) => toFiniteNumber(doc[key]) !== null,
   );
-  const reviewsCount = Math.max(0, toFiniteNumber(doc.reviewsCount) ?? 0);
+  const reviewsCountNum = toFiniteNumber(doc.reviewsCount);
+  const reviewsCount = Math.max(0, reviewsCountNum ?? 0);
 
   if (hasFoodySubscores && reviewsCount === 0) {
     return {
       rating: clampFiveStar(rawValue / 2),
       rawRating: rawValue,
       ratingScale: '10_point',
+      isAmbiguous: false,
+    };
+  }
+
+  if (reviewsCountNum !== null && reviewsCount > 0) {
+    return {
+      rating: clampFiveStar(rawValue),
+      rawRating: rawValue,
+      ratingScale: '5_point',
+      isAmbiguous: false,
     };
   }
 
   return {
     rating: clampFiveStar(rawValue),
     rawRating: rawValue,
-    ratingScale: '5_point',
+    ratingScale: 'ambiguous',
+    isAmbiguous: true,
   };
 }
 
@@ -267,8 +315,9 @@ export interface OrderableStop {
 }
 
 /**
- * Canonicalize stop order_index values to 1-based numbering [1..N] once,
- * preventing double +1 offset between AI solver responses and Planning service.
+ * Canonicalize stop order_index values deterministically to unique contiguous
+ * 1-based numbering [1..N] without silent duplicates, skipped positions, or
+ * double +1 offset across 0-based, 1-based, missing, duplicate, and mixed inputs.
  */
 export function normalizeStopOrderIndexes<T extends OrderableStop>(
   stops: readonly T[],
@@ -278,28 +327,28 @@ export function normalizeStopOrderIndexes<T extends OrderableStop>(
   }
 
   const typedStops: readonly OrderableStop[] = stops;
-  let hasZeroBasedIndex = false;
-  for (let i = 0; i < typedStops.length; i++) {
-    const val = typedStops[i].order_index;
-    if (typeof val === 'number' && val === 0) {
-      hasZeroBasedIndex = true;
-      break;
-    }
+  const ranked: Array<{ idx: number; rank: number }> = [];
+  for (let idx = 0; idx < typedStops.length; idx++) {
+    const raw = typedStops[idx]?.order_index;
+    const hasValidIndex =
+      typeof raw === 'number' && Number.isFinite(raw) && raw >= 0;
+    ranked.push({
+      idx,
+      rank: hasValidIndex ? raw : Number.POSITIVE_INFINITY,
+    });
   }
 
-  const result: Array<T & { order_index: number }> = [];
-  for (let idx = 0; idx < stops.length; idx++) {
-    const raw = typedStops[idx].order_index;
-    let normalized: number;
-    if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
-      normalized = hasZeroBasedIndex ? raw + 1 : raw === 0 ? 1 : raw;
-    } else {
-      normalized = idx + 1;
+  ranked.sort((a, b) => {
+    if (a.rank !== b.rank) {
+      return a.rank - b.rank;
     }
-    const copy = Object.assign({} as Record<string, unknown>, stops[idx], {
-      order_index: normalized,
-    }) as T & { order_index: number };
-    result.push(copy);
-  }
-  return result;
+    return a.idx - b.idx;
+  });
+
+  return ranked.map(
+    ({ idx }, pos) =>
+      Object.assign({} as Record<string, unknown>, stops[idx], {
+        order_index: pos + 1,
+      }) as T & { order_index: number },
+  );
 }

@@ -99,7 +99,8 @@ export class InternalRestaurantsController {
 
   private toCandidateDto(doc: Record<string, any>): RestaurantCandidateDto {
     const point = extractValidGeoPoint(doc);
-    const { rating, rawRating, ratingScale } = normalizeRestaurantRating(doc);
+    const { rating, rawRating, ratingScale, isAmbiguous } =
+      normalizeRestaurantRating(doc);
 
     return {
       restaurant_id: doc._id ? String(doc._id) : String(doc.id ?? ''),
@@ -113,6 +114,7 @@ export class InternalRestaurantsController {
       rating,
       raw_rating: rawRating,
       rating_scale: ratingScale,
+      is_ambiguous_rating: isAmbiguous,
       price_level: doc.giaCa ?? doc.priceRange ?? doc.price,
       average_cost: parseRestaurantPriceVnd(
         doc.giaCa ?? doc.price ?? doc.averageCost ?? doc.priceRange,

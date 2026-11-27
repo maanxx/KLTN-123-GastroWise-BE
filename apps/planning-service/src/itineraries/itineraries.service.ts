@@ -75,13 +75,7 @@ export function calculateTasteAffinityScore(
 ): number {
   if (!profile) return 0.5;
   let score = 0.5;
-  const tags = (
-    restaurant.tags
-      ? Array.isArray(restaurant.tags)
-        ? restaurant.tags.join(' ')
-        : restaurant.tags
-      : ''
-  ).toLowerCase();
+  const tags = formatRestaurantTagsString(restaurant.tags).toLowerCase();
   const name = (restaurant.name || restaurant.tenQuan || '').toLowerCase();
   const combined = `${tags} ${name}`;
 
@@ -131,8 +125,8 @@ export class ItinerariesService {
     private readonly httpService: HttpService,
   ) {}
 
-  public inferMealType(tags: string | string[], name: string): string {
-    const tagStr = Array.isArray(tags) ? tags.join(' ') : tags || '';
+  public inferMealType(tags: unknown, name: string): string {
+    const tagStr = formatRestaurantTagsString(tags);
     const combined = `${tagStr} ${name}`.toLowerCase();
     if (/cà phê|cafe|trà sữa|nước|sinh tố/i.test(combined)) return 'cafe';
     if (/chè|bánh ngọt|kem|tráng miệng/i.test(combined)) return 'dessert';
@@ -218,7 +212,7 @@ export class ItinerariesService {
         transit_time_mins: transitMins,
         distance_to_next_km: Number(dist.toFixed(2)),
         estimated_cost: stopCost,
-        tags: Array.isArray(stop.tags) ? stop.tags.join(', ') : stop.tags || '',
+        tags: formatRestaurantTagsString(stop.tags),
       };
     });
 

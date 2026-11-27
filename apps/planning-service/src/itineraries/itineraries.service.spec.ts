@@ -486,5 +486,93 @@ describe('ItinerariesService (Planning Microservice ACL & Heuristics)', () => {
       expect(metrics.stops[0].distance_to_next_km).toBeGreaterThan(4.0);
       expect(metrics.stops[1].distance_to_next_km).toBe(0);
     });
+
+    it('recalculateTimetableAndMetrics formats mixed array/unsupported stop tags and repairs duplicate/mixed AI order_index', async () => {
+      const metrics = service.recalculateTimetableAndMetrics(
+        [
+          {
+            restaurant_id: 's1',
+            restaurant_name: 'Quán Cà Phê',
+            restaurant_lat: 10.77,
+            restaurant_lng: 106.7,
+            tags: ['cà phê, sữa đá', 99 as any],
+          },
+        ],
+        10.76,
+        106.69,
+        '11:00',
+        'motorbike',
+      );
+      expect(metrics.stops[0].tags).toBe('cà phê, sữa đá');
+      expect(metrics.stops[0].meal_type).toBe('cafe');
+      expect(metrics.stops[0].order_index).toBe(1);
+
+      mockCoreApiClient.getCandidates.mockResolvedValueOnce([
+        {
+          restaurant_id: 'r1',
+          name: 'Bánh Mì Chảo',
+          lat: 10.77,
+          lng: 106.7,
+          rating: 4.0,
+          raw_rating: 4.0,
+          rating_scale: 'ambiguous',
+          average_cost: 55000,
+          tags: ['bánh mì', 'ăn vặt'],
+        },
+        {
+          restaurant_id: 'r2',
+          name: 'Chè Khúc Bạch',
+          lat: 10.78,
+          lng: 106.71,
+          rating: 4.5,
+          average_cost: 35000,
+          tags: ['chè', 'tráng miệng'],
+        },
+      ]);
+      mockAiApiClient.optimizeRoute.mockResolvedValueOnce({
+        stops: [
+          { restaurant_id: 'r1', order_index: 0, arrival_time: '11:05', departure_time: '11:50', transit_time_mins: 5, distance_km: 1.0 },
+          { restaurant_id: 'r2', order_index: 0, arrival_time: '12:00', departure_time: '12:45', transit_time_mins: 10, distance_km: 0.0 },
+        ],
+        total_distance_km: 1.0,
+        total_duration_mins: 100,
+        solver: 'OR-Tools TSPTW',
+      });
+
+      const itinerary = await service.generateItinerary('user-123', {
+        prompt: 'Ăn nhẹ',
+        start_time: '11:00',
+        end_time: '14:00',
+        lat: 10.76,
+        lng: 106.69,
+        budget: 200000,
+        desired_stops: 2,
+      });
+
+      expect(itinerary.stops.map((s) => s.order_index)).toEqual([1, 2]);
+      const optCall = mockAiApiClient.optimizeRoute.mock.calls[0][0];
+      expect(optCall.restaurants).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: 'r1',
+            name: 'Bánh Mì Chảo',
+            meal_type: 'starter',
+            avg_price: 55000,
+            rating: 4.0,
+            tags: 'bánh mì, ăn vặt',
+            duration_mins: 45,
+          }),
+          expect.objectContaining({
+            id: 'r2',
+            name: 'Chè Khúc Bạch',
+            meal_type: 'dessert',
+            avg_price: 35000,
+            rating: 4.5,
+            tags: 'chè, tráng miệng',
+            duration_mins: 45,
+          }),
+        ]),
+      );
+    });
   });
 });

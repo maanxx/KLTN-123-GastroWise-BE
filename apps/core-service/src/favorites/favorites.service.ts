@@ -2,6 +2,10 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { User, UserDocument } from '../users/schemas/user.schema';
+import {
+  formatRestaurantTagsString,
+  normalizeRestaurantRating,
+} from '@shared/utils/restaurant-normalizer.util';
 
 @Injectable()
 export class FavoritesService {
@@ -108,7 +112,11 @@ export class FavoritesService {
       ]);
 
       if (top && top.length > 0) {
-        return top;
+        return top.map((r) => ({
+          ...r,
+          diemTrungBinh: normalizeRestaurantRating(r).rating,
+          tags: formatRestaurantTagsString(r.tags),
+        }));
       }
     } catch (e) {
       // Fallback below
@@ -128,8 +136,8 @@ export class FavoritesService {
       tenQuan: r.tenQuan,
       diaChi: r.diaChi,
       avatarUrl: r.avatarUrl,
-      diemTrungBinh: r.diemTrungBinh || 5.0,
-      tags: r.tags,
+      diemTrungBinh: normalizeRestaurantRating(r).rating,
+      tags: formatRestaurantTagsString(r.tags),
     }));
   }
 }

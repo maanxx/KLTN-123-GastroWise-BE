@@ -20,6 +20,7 @@ import {
 import { CreateReviewDto } from './dto/create-review.dto';
 import { TasteDnaService } from '../taste-dna/taste-dna.service';
 import { InteractionsService } from '../interactions/interactions.service';
+import { formatRestaurantTagsString } from '@shared/utils/restaurant-normalizer.util';
 
 @Injectable()
 export class ReviewsService {
@@ -218,7 +219,7 @@ export class ReviewsService {
           ? await this.restaurantModel.findById(resolvedRestaurantId).lean()
           : null;
         if (restDoc) {
-          const tagStr = (restDoc.tags || '').toLowerCase();
+          const tagStr = formatRestaurantTagsString(restDoc.tags).toLowerCase();
           const nameStr = (restDoc.tenQuan || '').toLowerCase();
           const combined = `${tagStr} ${nameStr}`;
 
@@ -288,12 +289,14 @@ export class ReviewsService {
         );
       targetId = restaurant._id;
       targetName = restaurant.tenQuan || 'Nhà hàng';
-      targetCuisine = restaurant.tags || 'Món ngon';
+      targetCuisine =
+        formatRestaurantTagsString(restaurant.tags) || 'Món ngon';
     } else {
       const restaurant = await this.restaurantModel.findById(idOrSlug).exec();
       if (restaurant) {
         targetName = restaurant.tenQuan || 'Nhà hàng';
-        targetCuisine = restaurant.tags || 'Món ngon';
+        targetCuisine =
+          formatRestaurantTagsString(restaurant.tags) || 'Món ngon';
       }
     }
 

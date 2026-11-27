@@ -737,6 +737,7 @@ export class RestaurantsService {
       rating: normalizedRating,
       rawRating,
       ratingScale,
+      isAmbiguous: isAmbiguousRating,
     } = normalizeRestaurantRating(r);
     const normalizedTags = normalizeRestaurantTags(r.tags);
     const formattedTags = formatRestaurantTagsString(r.tags);
@@ -762,6 +763,7 @@ export class RestaurantsService {
       diemTrungBinh: normalizedRating,
       rawRating,
       ratingScale,
+      isAmbiguousRating,
       priceRange: r.giaCa || r.priceRange || '30.000đ - 150.000đ',
       giaCa: r.giaCa || r.priceRange || '30.000đ - 150.000đ',
       openingHours:

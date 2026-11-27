@@ -12,6 +12,7 @@ interface MappedRestaurantTestDto {
   rating: number;
   rawRating: number;
   ratingScale: string;
+  isAmbiguousRating?: boolean;
 }
 
 describe('M10.1 Core Restaurant Schema & Rating Compatibility', () => {
@@ -185,7 +186,42 @@ describe('M10.1 Core Restaurant Schema & Rating Compatibility', () => {
         tags: [],
         rating: 3.0,
         rating_scale: 'default',
+        is_ambiguous_rating: false,
         average_cost: 50000,
+      });
+    });
+
+    it('flags ambiguous [0, 5] ratings without metadata as ambiguous instead of verified 5_point', async () => {
+      const ambiguousDoc = {
+        _id: '674700000000000000000004',
+        tenQuan: 'Ambiguous Score Place',
+        diemTrungBinh: 4.0,
+        tags: ['bún bò, huế', 42 as any],
+        location: { type: 'Point', coordinates: [106.7, 10.77] },
+      };
+
+      mockRestaurantModel.findById.mockReturnValueOnce({
+        exec: jest.fn().mockResolvedValue(ambiguousDoc),
+      });
+      const dto = (await restaurantsService.findOne(
+        '674700000000000000000004',
+      )) as unknown as MappedRestaurantTestDto;
+      expect(dto.rating).toBe(4.0);
+      expect(dto.ratingScale).toBe('ambiguous');
+      expect(dto.isAmbiguousRating).toBe(true);
+      expect(dto.tags).toBe('bún bò, huế');
+
+      mockRestaurantModel.find.mockReturnValueOnce({
+        limit: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockResolvedValue([ambiguousDoc]),
+      });
+      const res = await internalController.getCandidates();
+      expect(res.candidates[0]).toMatchObject({
+        rating: 4.0,
+        rating_scale: 'ambiguous',
+        is_ambiguous_rating: true,
+        tags: ['bún bò', 'huế'],
       });
     });
   });
