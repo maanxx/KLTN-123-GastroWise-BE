@@ -1,5 +1,6 @@
 import { IngestionMode, IngestionValidationError } from './ingestion.types';
 import type { RawInputFormat } from './ingestion.staging';
+import type { RecoveryAction } from './ingestion.pipeline';
 
 export interface ParsedIngestionCliArgs {
   mode: IngestionMode;
@@ -8,11 +9,13 @@ export interface ParsedIngestionCliArgs {
   format: RawInputFormat;
   batchId?: string;
   rollbackBatchId?: string;
+  recoverBatchId?: string;
+  recoverAction?: RecoveryAction;
   reportOutPath?: string;
 }
 
 /**
- * Parses M10.2 ingestion CLI arguments with dry-run enabled by default
+ * Parses M10.2.1 ingestion CLI arguments with dry-run enabled by default
  * and blocks inline URI/credential flags as well as Atlas override flags.
  */
 export function parseIngestionCliArgs(
@@ -23,6 +26,8 @@ export function parseIngestionCliArgs(
   let format: RawInputFormat = 'auto';
   let batchId: string | undefined;
   let rollbackBatchId: string | undefined;
+  let recoverBatchId: string | undefined;
+  let recoverAction: RecoveryAction = 'auto';
   let reportOutPath: string | undefined;
   let sawApplyFlag = false;
   let sawDryRunFlag = false;
@@ -59,6 +64,16 @@ export function parseIngestionCliArgs(
       batchId = arg.slice('--batch-id='.length).trim();
     } else if (arg.startsWith('--rollback=')) {
       rollbackBatchId = arg.slice('--rollback='.length).trim();
+    } else if (arg.startsWith('--recover=')) {
+      recoverBatchId = arg.slice('--recover='.length).trim();
+    } else if (arg.startsWith('--recover-action=')) {
+      const val = arg.slice('--recover-action='.length).trim().toLowerCase();
+      if (val !== 'auto' && val !== 'complete' && val !== 'compensate') {
+        throw new IngestionValidationError(
+          `Invalid --recover-action="${val}". Expected auto, complete, or compensate.`,
+        );
+      }
+      recoverAction = val;
     } else if (arg.startsWith('--report-out=')) {
       reportOutPath = arg.slice('--report-out='.length).trim();
     } else {
@@ -71,6 +86,12 @@ export function parseIngestionCliArgs(
   if (sawApplyFlag && sawDryRunFlag) {
     throw new IngestionValidationError(
       'Cannot specify both --dry-run and --apply in the same invocation.',
+    );
+  }
+
+  if (rollbackBatchId !== undefined && recoverBatchId !== undefined) {
+    throw new IngestionValidationError(
+      'Cannot specify both --rollback and --recover in the same invocation.',
     );
   }
 
@@ -89,9 +110,25 @@ export function parseIngestionCliArgs(
     };
   }
 
+  if (recoverBatchId !== undefined) {
+    if (!recoverBatchId) {
+      throw new IngestionValidationError(
+        '--recover=<batchId> cannot be empty.',
+      );
+    }
+    return {
+      mode: 'recover',
+      dryRun: !sawApplyFlag,
+      format,
+      recoverBatchId,
+      recoverAction,
+      reportOutPath,
+    };
+  }
+
   if (!filePath) {
     throw new IngestionValidationError(
-      'Missing required "--file=<path>" option (or use "--rollback=<batchId>").',
+      'Missing required "--file=<path>" option (or use "--rollback=<batchId>" / "--recover=<batchId>").',
     );
   }
 

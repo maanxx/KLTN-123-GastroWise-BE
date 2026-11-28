@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   parseIngestionCliArgs,
+  recoverIngestionBatch,
   rollbackIngestionBatch,
   runRestaurantIngestionPipeline,
   withIngestionDatabase,
@@ -23,10 +24,19 @@ export async function runIngestionCli(
         rollback: await rollbackIngestionBatch(
           db,
           parsed.rollbackBatchId || '',
-          {
-            dryRun: parsed.dryRun,
-          },
+          { dryRun: parsed.dryRun },
         ),
+      };
+    }
+
+    if (parsed.mode === 'recover') {
+      return {
+        targetDb: config.dbName,
+        targetUriRedacted: config.redactedUri,
+        recovery: await recoverIngestionBatch(db, parsed.recoverBatchId || '', {
+          action: parsed.recoverAction,
+          dryRun: parsed.dryRun,
+        }),
       };
     }
 

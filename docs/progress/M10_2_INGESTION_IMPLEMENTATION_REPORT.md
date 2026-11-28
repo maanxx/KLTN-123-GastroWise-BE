@@ -10,31 +10,36 @@
 
 ## 1. Architecture & Data Flow Implemented
 
+> **Updated by M10.2.1:** Added strict host/DB allowlist (`gastro_core_test` only + URI DB match), write-ahead `pending` batch ledger lifecycle with `failed` / `recovery_required` recovery (`--recover`), compare-and-set rollback conflict detection, bounded indexed deduplication queries, `matched_count` vs `updated_count` tracking, and `foodyReviewsCount` provenance gating. See `docs/progress/M10_2_1_SAFETY_HARDENING_REPORT.md` for details.
+
 ```text
 Raw JSON / JSONL Fixture (scripts/ingestion/fixtures/sample_shopeefood_raw.json)
    │
-   ▼ [1] Raw Staging Layer (libs/shared/src/ingestion/ingestion.staging.ts)
-   ├─ Compute SHA-256 batch checksum + unique batchId (`ingest_<UTC>_<sha8>`)
-   ├─ Preserve verbatim original payload, source, sourceId, sourceUrl, scrapedAt
-   └─ Upsert idempotently into `restaurants_raw_staging` (only in `--apply` mode)
+   ▼ [1] Strict DB Target Guard & Raw Staging Layer (ingestion.connection.ts, ingestion.staging.ts)
+   ├─ Enforce approved local host + `gastro_core_test` DB matching URI path & CORE_DB_NAME
+   ├─ Enforce unique `batchId` (reject reuse of existing ledgers)
+   ├─ Compute SHA-256 batch checksum + unique `batchId` (`ingest_<UTC>_<sha8>`)
+   └─ Persist `pending` batch ledger BEFORE staging (`restaurants_raw_staging`) & restaurant writes
    │
    ▼ [2] Validation & Normalization (libs/shared/src/ingestion/ingestion.normalizer.ts)
    ├─ Reject missing `RestaurantID`/`externalSourceId`, missing `Name`/`tenQuan`, `IsDelete: true`, malformed records
    ├─ Map Foody/ShopeeFood fields to Core schema (`tenQuan`, `diaChi`, `cityId`, `lat`/`lon`/GeoJSON `location`,
    │  `giaCa`, `gioMoCua`, deduplicated `tags`, validated `avatarUrl`, `urlGoc`, `slug`, `AvgPointList` subscores)
-   ├─ Separate `TotalReview` -> `foodyReviewsCount` (keep native `reviewsCount = 0` on inserts)
+   ├─ Map `TotalReview`/`foodyReviewsCount` (only use `reviewsCount` with explicit Foody provenance flag)
    ├─ Normalize 10-pt Foody scores cleanly; flag ambiguous `[0, 5]` ratings without provenance (`ratingScale: 'ambiguous'`)
    └─ Never fabricate coordinates (`location: null`), prices (`''`), opening hours (`''`), or missing scores
    │
-   ▼ [3] Deterministic Deduplication & Safe Upsert (libs/shared/src/ingestion/ingestion.pipeline.ts)
-   ├─ Intra-batch + DB matching order: (1) `(externalSource, externalSourceId)`, (2) canonical `slug`/`urlGoc`, (3) normalized `(tenQuan, diaChi)`
+   ▼ [3] Targeted Deduplication & Safe Upsert (libs/shared/src/ingestion/ingestion.pipeline.ts)
+   ├─ Intra-batch + DB matching via bounded `$or` indexed queries (no full-collection `find({})` scans)
+   ├─ Match order: (1) `(externalSource, externalSourceId)`, (2) canonical `slug`/`urlGoc`, (3) normalized `(tenQuan, diaChi)`
    ├─ Preserve user-owned fields (`ownerId`, native `reviewsCount`, `isVerified`, `isFeatured`, `createdAt`, user-reviewed ratings)
-   ├─ Record pre-update backups + inserted IDs in `ingestion_batches` ledger
-   └─ Execute single `bulkWrite` (or 0 DB writes in default `--dry-run`)
+   ├─ Track `matched_count` alongside `updated_count` (`modifiedCount`)
+   └─ Persist pre-update backups + post-ingestion state digests in `ingestion_batches` ledger
    │
-   ▼ [4] Quality Report & Safe LIFO Rollback
-   ├─ Output all 13 required metrics + structured `validationErrors` + `warnings`
-   └─ `--rollback=<batchId>` deletes only batch-inserted records without `ownerId`/`reviewsCount > 0` and restores updated docs
+   ▼ [4] Quality Report, CAS Rollback & Crash Recovery
+   ├─ Output all metrics (`matched_count` + `updated_count`) + structured `validationErrors` + `warnings`
+   ├─ `--rollback=<batchId>` verifies post-ingestion digest + LIFO overlap order via CAS; returns structured conflicts instead of overwriting
+   └─ `--recover=<batchId>` completes or compensates interrupted `pending` / `recovery_required` / `failed` batches
 ```
 
 ---
@@ -81,16 +86,22 @@ Raw JSON / JSONL Fixture (scripts/ingestion/fixtures/sample_shopeefood_raw.json)
    ```
 
 3. **Rollback Instructions (LIFO Order — Preview First, Then Apply):**
-   - Always preview rollback first (dry-run by default):
+   - Always preview rollback or recovery first (dry-run by default):
      ```bash
      npm run ingest:restaurants -- --rollback=m10_2_local_batch_01
+     npm run ingest:restaurants -- --recover=m10_2_local_batch_01
      ```
-   - Apply rollback (roll back newer batches first if multiple batches updated the same documents):
+   - Apply rollback in reverse (LIFO) order across overlapping batches:
      ```bash
      npm run ingest:restaurants -- --rollback=m10_2_local_batch_01 --apply
      ```
+   - Apply crash recovery (`--recover-action=auto|complete|compensate`):
+     ```bash
+     npm run ingest:restaurants -- --recover=m10_2_local_batch_01 --recover-action=auto --apply
+     ```
    - Rollback safety rules:
-     - Never deletes records that subsequently gained an `ownerId` or native `reviewsCount > 0`.
+     - Uses compare-and-set digests (`postIngestionDigest`, `updatedAt`, `ingestionBatchId`); never overwrites documents modified after ingestion or touched by newer overlapping batches.
+     - Never deletes records that subsequently gained an `ownerId`, `reviewsCount > 0`, `isVerified`, or `isFeatured`.
      - Restores updated catalog fields back to the exact `previousFields` recorded in `ingestion_batches`.
 
 ---

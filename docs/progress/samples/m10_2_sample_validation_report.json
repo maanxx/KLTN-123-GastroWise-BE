@@ -1,5 +1,5 @@
 {
-  "batchId": "m10_2_sample_dryrun_v1",
+  "batchId": "m10_2_1_sample_dryrun",
   "mode": "dry-run",
   "source": "foody_shopeefood",
   "targetDb": "gastro_core_test",
@@ -13,6 +13,7 @@
     "raw_scraped_count": 7,
     "valid_record_count": 4,
     "inserted_count": 0,
+    "matched_count": 0,
     "updated_count": 0,
     "rejected_count": 1,
     "duplicate_count": 2,

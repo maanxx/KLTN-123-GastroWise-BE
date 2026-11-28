@@ -1,11 +1,15 @@
+import { createHash } from 'crypto';
 import { ObjectId } from 'mongodb';
-import type { AnyBulkWriteOperation, Db } from 'mongodb';
+import type { AnyBulkWriteOperation, Collection, Db } from 'mongodb';
 import {
   INGESTION_BATCHES_COLLECTION,
   IngestionBatchLedgerDocument,
   IngestionBatchSummary,
+  IngestionInsertedRecordBackup,
   IngestionMode,
   IngestionQualityMetrics,
+  IngestionRecoveryResult,
+  IngestionRollbackConflict,
   IngestionRollbackResult,
   IngestionUpdatedBackup,
   IngestionValidationError,
@@ -37,6 +41,11 @@ export interface RunIngestionOptions {
   now?: Date;
 }
 
+export type RecoveryAction = 'auto' | 'complete' | 'compensate';
+
+export const STANDALONE_MONGODB_LIMITATION_NOTE =
+  'Standalone MongoDB does not support multi-document ACID transactions. Atomicity is enforced via write-ahead pending ledger persistence, pre-generated deterministic ObjectIds, compare-and-set rollback filters, and deterministic crash recovery.';
+
 interface RestaurantDocRecord extends Record<string, unknown> {
   _id: ObjectId;
 }
@@ -53,6 +62,10 @@ function normalizeUrlKey(value: unknown): string {
     return '';
   }
   return value.trim().replace(/\/+$/, '').toLowerCase();
+}
+
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 const BACKUP_TRACKED_KEYS = [
@@ -85,8 +98,89 @@ const BACKUP_TRACKED_KEYS = [
   'updatedAt',
 ] as const;
 
+const DIGEST_STATE_KEYS = [
+  ...BACKUP_TRACKED_KEYS,
+  'ingestionBatchId',
+  'ownerId',
+  'reviewsCount',
+  'isVerified',
+  'isFeatured',
+  'createdAt',
+] as const;
+
+function canonicalizeValue(value: unknown): unknown {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null || typeof value !== 'object') {
+    return value;
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (value instanceof ObjectId) {
+    return value.toString();
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeValue(item));
+  }
+  const record = value as Record<string, unknown>;
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(record).sort()) {
+    const normalized = canonicalizeValue(record[key]);
+    if (normalized !== undefined) {
+      sorted[key] = normalized;
+    }
+  }
+  return sorted;
+}
+
+/**
+ * Computes a deterministic SHA-256 digest over tracked catalog, batch, and protected user fields.
+ */
+export function computeTrackedDocumentDigest(
+  doc: Record<string, unknown>,
+): string {
+  const snapshot: Record<string, unknown> = {};
+  for (const key of DIGEST_STATE_KEYS) {
+    if (key in doc && doc[key] !== undefined) {
+      const val = canonicalizeValue(doc[key]);
+      if (val !== undefined) {
+        snapshot[key] = val;
+      }
+    }
+  }
+  const serialized = JSON.stringify(canonicalizeValue(snapshot));
+  return createHash('sha256').update(serialized, 'utf8').digest('hex');
+}
+
+function serializeIdentifier(value: unknown): string {
+  if (value instanceof ObjectId) {
+    return value.toString();
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function sameOptionalObjectId(a: unknown, b: unknown): boolean {
+  if (a === undefined || a === null) {
+    return b === undefined || b === null;
+  }
+  if (b === undefined || b === null) {
+    return false;
+  }
+  return serializeIdentifier(a) === serializeIdentifier(b);
+}
+
 function extractBackupFields(
   existingDoc: RestaurantDocRecord,
+  postUpdateSet: Record<string, unknown>,
+  now: Date,
 ): IngestionUpdatedBackup {
   const previousFields: Record<string, unknown> = {};
   for (const key of BACKUP_TRACKED_KEYS) {
@@ -101,10 +195,31 @@ function extractBackupFields(
     previousFields.ingestionBatchId = existingDoc.ingestionBatchId;
   }
 
+  const simulatedPostDoc: Record<string, unknown> = {
+    ...existingDoc,
+    ...postUpdateSet,
+  };
+
+  const expectedOwnerId =
+    existingDoc.ownerId instanceof ObjectId ||
+    typeof existingDoc.ownerId === 'string'
+      ? existingDoc.ownerId
+      : null;
+
   return {
     docId: existingDoc._id,
     hadBatchIdBefore,
     previousFields,
+    postIngestionDigest: computeTrackedDocumentDigest(simulatedPostDoc),
+    expectedPostUpdatedAt: now,
+    expectedOwnerId,
+    expectedReviewsCount:
+      typeof existingDoc.reviewsCount === 'number' &&
+      Number.isFinite(existingDoc.reviewsCount)
+        ? existingDoc.reviewsCount
+        : 0,
+    expectedIsVerified: Boolean(existingDoc.isVerified),
+    expectedIsFeatured: Boolean(existingDoc.isFeatured),
   };
 }
 
@@ -236,19 +351,119 @@ function buildSafeUpdateSetPayload(
   return updateSet;
 }
 
+const TARGETED_LOOKUP_PROJECTION = {
+  _id: 1,
+  externalSource: 1,
+  externalSourceId: 1,
+  tenQuan: 1,
+  diaChi: 1,
+  cityId: 1,
+  lat: 1,
+  lon: 1,
+  location: 1,
+  diemTrungBinh: 1,
+  rawRating: 1,
+  ratingScale: 1,
+  _ratingNormalized: 1,
+  diemKhongGian: 1,
+  diemViTri: 1,
+  diemChatLuong: 1,
+  diemPhucVu: 1,
+  diemGiaCa: 1,
+  foodyReviewsCount: 1,
+  giaCa: 1,
+  gioMoCua: 1,
+  tags: 1,
+  avatarUrl: 1,
+  urlGoc: 1,
+  slug: 1,
+  contactPhone: 1,
+  status: 1,
+  reviewsCount: 1,
+  ownerId: 1,
+  isVerified: 1,
+  isFeatured: 1,
+  ingestionBatchId: 1,
+  createdAt: 1,
+  updatedAt: 1,
+} as const;
+
+const LOOKUP_CHUNK_SIZE = 50;
+
 /**
- * Executes the M10.2 ingestion pipeline: Raw Staging -> Validation & Normalization
- * -> Deterministic Deduplication -> Idempotent Bulk Upsert (or Dry-Run Preview)
- * -> Quality Report & Rollback Ledger.
+ * Fetches only potentially matching restaurant documents using bounded targeted queries
+ * (never executes an unbounded full-collection `find({})` scan).
+ */
+async function fetchTargetedMatchingRestaurants(
+  restaurantsCol: Collection<RestaurantDocRecord>,
+  candidates: readonly NormalizedRestaurantCandidate[],
+): Promise<RestaurantDocRecord[]> {
+  if (candidates.length === 0) {
+    return [];
+  }
+
+  const byDocId = new Map<string, RestaurantDocRecord>();
+
+  for (let i = 0; i < candidates.length; i += LOOKUP_CHUNK_SIZE) {
+    const chunk = candidates.slice(i, i + LOOKUP_CHUNK_SIZE);
+    const extIds = Array.from(
+      new Set(chunk.map((c) => c.externalSourceId).filter(Boolean)),
+    );
+    const slugs = Array.from(
+      new Set(chunk.map((c) => normalizeMatchKey(c.slug)).filter(Boolean)),
+    );
+    const urls = Array.from(
+      new Set(chunk.map((c) => c.urlGoc.trim()).filter(Boolean)),
+    );
+    const names = Array.from(
+      new Set(chunk.map((c) => c.tenQuan.trim()).filter(Boolean)),
+    );
+
+    const orClauses: Array<Record<string, unknown>> = [];
+    if (extIds.length > 0) {
+      orClauses.push({ externalSourceId: { $in: extIds } });
+    }
+    if (slugs.length > 0) {
+      orClauses.push({ slug: { $in: slugs } });
+    }
+    if (urls.length > 0) {
+      orClauses.push({ urlGoc: { $in: urls } });
+    }
+    if (names.length > 0) {
+      const pattern = `^(?:${names.map(escapeRegexLiteral).join('|')})$`;
+      orClauses.push({ tenQuan: { $regex: pattern, $options: 'i' } });
+    }
+
+    if (orClauses.length === 0) {
+      continue;
+    }
+
+    const docs = (await restaurantsCol
+      .find({ $or: orClauses }, { projection: TARGETED_LOOKUP_PROJECTION })
+      .toArray()) as RestaurantDocRecord[];
+
+    for (const doc of docs) {
+      byDocId.set(String(doc._id), doc);
+    }
+  }
+
+  return Array.from(byDocId.values());
+}
+
+/**
+ * Executes the M10.2.1 hardened ingestion pipeline:
+ * Batch Uniqueness Guard -> Write-Ahead Pending Ledger -> Raw Staging
+ * -> Validation & Normalization -> Targeted Deduplication
+ * -> Idempotent Bulk Upsert -> Applied Ledger / Crash-Recovery State.
  */
 export async function runRestaurantIngestionPipeline(
   db: Db,
   options: RunIngestionOptions,
 ): Promise<IngestionBatchSummary> {
   const mode: IngestionMode = options.mode || 'dry-run';
-  if (mode === 'rollback') {
+  if (mode === 'rollback' || mode === 'recover') {
     throw new IngestionValidationError(
-      'Use rollbackIngestionBatch() for rollback operations.',
+      'Use rollbackIngestionBatch() or recoverIngestionBatch() for rollback/recovery operations.',
     );
   }
 
@@ -259,6 +474,19 @@ export async function runRestaurantIngestionPipeline(
   const batchId =
     options.batchId?.trim() || createIngestionBatchId(checksumSha256, now);
 
+  const ledgerCol = db.collection<IngestionBatchLedgerDocument>(
+    INGESTION_BATCHES_COLLECTION,
+  );
+  const existingLedger = await ledgerCol.findOne({
+    $or: [{ _id: batchId }, { batchId }],
+  });
+  if (existingLedger) {
+    const checksumMismatch = existingLedger.checksumSha256 !== checksumSha256;
+    throw new IngestionValidationError(
+      `Refusing to reuse batchId "${batchId}": existing ledger status is "${existingLedger.status}" (checksumMismatch=${String(checksumMismatch)}). Use a new unique batchId or run recovery if needed.`,
+    );
+  }
+
   const parsedRecords = parseRawIngestionInput(
     options.rawContent,
     options.format || 'auto',
@@ -268,10 +496,6 @@ export async function runRestaurantIngestionPipeline(
     checksumSha256,
     source,
     scrapedAt: now,
-  });
-
-  const rawStagedCount = await stageRawIngestionRecords(db, stagingDocs, {
-    dryRun,
   });
 
   const validationErrors: IngestionValidationIssue[] = [];
@@ -285,6 +509,7 @@ export async function runRestaurantIngestionPipeline(
     raw_scraped_count: parsedRecords.length,
     valid_record_count: 0,
     inserted_count: 0,
+    matched_count: 0,
     updated_count: 0,
     rejected_count: 0,
     duplicate_count: 0,
@@ -376,52 +601,14 @@ export async function runRestaurantIngestionPipeline(
 
   metrics.valid_record_count = deduplicatedCandidates.length;
 
-  // Resolve existing DB matches across deduplicated candidates
+  // Resolve existing DB matches via targeted indexed queries (no full-collection scan)
   const restaurantsCol = db.collection<RestaurantDocRecord>(
     RESTAURANTS_COLLECTION,
   );
-  const existingDocs = await restaurantsCol
-    .find(
-      {},
-      {
-        projection: {
-          _id: 1,
-          externalSource: 1,
-          externalSourceId: 1,
-          tenQuan: 1,
-          diaChi: 1,
-          cityId: 1,
-          lat: 1,
-          lon: 1,
-          location: 1,
-          diemTrungBinh: 1,
-          rawRating: 1,
-          ratingScale: 1,
-          _ratingNormalized: 1,
-          diemKhongGian: 1,
-          diemViTri: 1,
-          diemChatLuong: 1,
-          diemPhucVu: 1,
-          diemGiaCa: 1,
-          foodyReviewsCount: 1,
-          giaCa: 1,
-          gioMoCua: 1,
-          tags: 1,
-          avatarUrl: 1,
-          urlGoc: 1,
-          slug: 1,
-          contactPhone: 1,
-          status: 1,
-          reviewsCount: 1,
-          ownerId: 1,
-          isVerified: 1,
-          isFeatured: 1,
-          ingestionBatchId: 1,
-          updatedAt: 1,
-        },
-      },
-    )
-    .toArray();
+  const existingDocs = await fetchTargetedMatchingRestaurants(
+    restaurantsCol,
+    deduplicatedCandidates,
+  );
 
   const existingByTier1 = new Map<string, RestaurantDocRecord>();
   const existingBySlug = new Map<string, RestaurantDocRecord>();
@@ -456,6 +643,7 @@ export async function runRestaurantIngestionPipeline(
 
   const bulkOps: AnyBulkWriteOperation<RestaurantDocRecord>[] = [];
   const insertedIds: ObjectId[] = [];
+  const insertedRecords: IngestionInsertedRecordBackup[] = [];
   const updatedBackups: IngestionUpdatedBackup[] = [];
   let plannedInserts = 0;
   let plannedUpdates = 0;
@@ -477,8 +665,8 @@ export async function runRestaurantIngestionPipeline(
 
     if (existing) {
       plannedUpdates += 1;
-      updatedBackups.push(extractBackupFields(existing));
       const updateSet = buildSafeUpdateSetPayload(cand, existing, now);
+      updatedBackups.push(extractBackupFields(existing, updateSet, now));
       bulkOps.push({
         updateOne: {
           filter: { _id: existing._id },
@@ -490,6 +678,11 @@ export async function runRestaurantIngestionPipeline(
       plannedInserts += 1;
       const newDoc = buildInsertRestaurantDoc(cand, now);
       insertedIds.push(newDoc._id);
+      insertedRecords.push({
+        docId: newDoc._id,
+        postIngestionDigest: computeTrackedDocumentDigest(newDoc),
+        expectedPostUpdatedAt: now,
+      });
       bulkOps.push({
         insertOne: {
           document: newDoc,
@@ -498,38 +691,126 @@ export async function runRestaurantIngestionPipeline(
     }
   }
 
-  if (!dryRun) {
+  if (dryRun) {
+    return {
+      batchId,
+      mode,
+      source,
+      targetDb: options.targetDb || db.databaseName,
+      targetUriRedacted: options.targetUriRedacted || 'local',
+      checksumSha256,
+      rawStagedCount: 0,
+      plannedInserts,
+      plannedUpdates,
+      duplicatesSkipped: metrics.duplicate_count,
+      metrics,
+      validationErrors,
+      warnings,
+    };
+  }
+
+  // Write-ahead persistence: insert `pending` ledger BEFORE mutating `restaurants`.
+  // Fails fast via atomic _id uniqueness if batchId already exists concurrently.
+  const pendingLedger: IngestionBatchLedgerDocument = {
+    _id: batchId,
+    batchId,
+    source,
+    checksumSha256,
+    status: 'pending',
+    targetDb: options.targetDb || db.databaseName,
+    collection: RESTAURANTS_COLLECTION,
+    startedAt: now,
+    appliedAt: null,
+    failedAt: null,
+    rolledBackAt: null,
+    failureStage: null,
+    error: null,
+    metrics: { ...metrics },
+    insertedIds,
+    insertedRecords,
+    updatedBackups,
+    rolledBackDocIds: [],
+  };
+
+  await ledgerCol.insertOne(pendingLedger);
+
+  let rawStagedCount = 0;
+  try {
+    rawStagedCount = await stageRawIngestionRecords(db, stagingDocs, {
+      dryRun: false,
+    });
+  } catch (err) {
+    await markLedgerFailureBestEffort(
+      ledgerCol,
+      batchId,
+      'failed',
+      'staging',
+      err,
+    );
+    throw err;
+  }
+
+  try {
     if (bulkOps.length > 0) {
       const bulkResult = await restaurantsCol.bulkWrite(bulkOps, {
         ordered: false,
       });
       metrics.inserted_count = bulkResult.insertedCount;
-      metrics.updated_count = bulkResult.matchedCount;
+      metrics.matched_count = bulkResult.matchedCount;
+      metrics.updated_count = bulkResult.modifiedCount;
     }
-
-    const ledgerCol = db.collection<IngestionBatchLedgerDocument>(
-      INGESTION_BATCHES_COLLECTION,
+  } catch (err) {
+    const touchedIds = [
+      ...insertedIds,
+      ...updatedBackups.map((backup) => backup.docId),
+    ];
+    let anyLanded = 0;
+    if (touchedIds.length > 0) {
+      try {
+        const landedDocs = await restaurantsCol
+          .find(
+            { _id: { $in: touchedIds }, ingestionBatchId: batchId },
+            { projection: { _id: 1 } },
+          )
+          .toArray();
+        anyLanded = landedDocs.length;
+      } catch {
+        anyLanded = 1; // Conservative: require recovery check when probe fails
+      }
+    }
+    const nextStatus = anyLanded > 0 ? 'recovery_required' : 'failed';
+    await markLedgerFailureBestEffort(
+      ledgerCol,
+      batchId,
+      nextStatus,
+      'restaurant_write',
+      err,
     );
+    throw err;
+  }
+
+  try {
     await ledgerCol.updateOne(
-      { _id: batchId },
+      { _id: batchId, status: 'pending' },
       {
         $set: {
-          _id: batchId,
-          batchId,
-          source,
-          checksumSha256,
           status: 'applied',
-          targetDb: options.targetDb || db.databaseName,
-          collection: RESTAURANTS_COLLECTION,
-          appliedAt: now,
-          rolledBackAt: null,
+          appliedAt: new Date(),
+          failureStage: null,
+          error: null,
           metrics,
-          insertedIds,
-          updatedBackups,
         },
       },
-      { upsert: true },
     );
+  } catch (err) {
+    await markLedgerFailureBestEffort(
+      ledgerCol,
+      batchId,
+      'recovery_required',
+      'ledger_finalize',
+      err,
+    );
+    throw err;
   }
 
   return {
@@ -549,9 +830,345 @@ export async function runRestaurantIngestionPipeline(
   };
 }
 
+async function markLedgerFailureBestEffort(
+  ledgerCol: Collection<IngestionBatchLedgerDocument>,
+  batchId: string,
+  status: 'failed' | 'recovery_required',
+  failureStage: 'staging' | 'restaurant_write' | 'ledger_finalize',
+  err: unknown,
+): Promise<void> {
+  try {
+    await ledgerCol.updateOne(
+      { _id: batchId },
+      {
+        $set: {
+          status,
+          failedAt: new Date(),
+          failureStage,
+          error: {
+            name: err instanceof Error ? err.name : 'Error',
+            message: err instanceof Error ? err.message : String(err),
+          },
+        },
+      },
+    );
+  } catch {
+    // Best-effort only: pending ledger already holds recovery metadata.
+  }
+}
+
+function normalizeInsertedRecords(
+  ledger: IngestionBatchLedgerDocument,
+): IngestionInsertedRecordBackup[] {
+  if (
+    Array.isArray(ledger.insertedRecords) &&
+    ledger.insertedRecords.length > 0
+  ) {
+    return ledger.insertedRecords;
+  }
+  return (ledger.insertedIds || []).map((docId) => ({
+    docId,
+    postIngestionDigest: '',
+    expectedPostUpdatedAt: ledger.appliedAt || ledger.startedAt,
+  }));
+}
+
+async function executeCompareAndSetRollback(
+  db: Db,
+  ledger: IngestionBatchLedgerDocument,
+  options: { dryRun: boolean; allowIncompleteStates: boolean },
+): Promise<{
+  deletedInsertedCount: number;
+  restoredUpdatedCount: number;
+  skippedUserOwnedOrModifiedCount: number;
+  missingDocumentsCount: number;
+  conflicts: IngestionRollbackConflict[];
+  newlyRolledBackIds: ObjectId[];
+  hasBlockingConflict: boolean;
+}> {
+  const restaurantsCol = db.collection<RestaurantDocRecord>(
+    RESTAURANTS_COLLECTION,
+  );
+  const alreadyRolledBack = new Set(
+    (ledger.rolledBackDocIds || []).map((id) => String(id)),
+  );
+
+  const insertedRecords = normalizeInsertedRecords(ledger).filter(
+    (r) => !alreadyRolledBack.has(String(r.docId)),
+  );
+  const updatedBackups = (ledger.updatedBackups || []).filter(
+    (b) => !alreadyRolledBack.has(String(b.docId)),
+  );
+
+  const targetIds = [
+    ...insertedRecords.map((r) => r.docId),
+    ...updatedBackups.map((b) => b.docId),
+  ];
+
+  const currentDocs =
+    targetIds.length > 0
+      ? ((await restaurantsCol
+          .find(
+            { _id: { $in: targetIds } },
+            { projection: TARGETED_LOOKUP_PROJECTION },
+          )
+          .toArray()) as RestaurantDocRecord[])
+      : [];
+
+  const currentMap = new Map<string, RestaurantDocRecord>(
+    currentDocs.map((d) => [String(d._id), d]),
+  );
+
+  let deletedInsertedCount = 0;
+  let restoredUpdatedCount = 0;
+  let skippedUserOwnedOrModifiedCount = 0;
+  let missingDocumentsCount = 0;
+  const conflicts: IngestionRollbackConflict[] = [];
+  const newlyRolledBackIds: ObjectId[] = [];
+  let hasBlockingConflict = false;
+
+  // Verify and delete batch-inserted records using CAS
+  for (const rec of insertedRecords) {
+    const idStr = String(rec.docId);
+    const current = currentMap.get(idStr);
+
+    if (!current) {
+      missingDocumentsCount += 1;
+      conflicts.push({
+        docId: idStr,
+        operation: 'delete_insert',
+        reasonCode: 'DOCUMENT_MISSING',
+        reason: `Inserted document ${idStr} is already missing from ${RESTAURANTS_COLLECTION}.`,
+      });
+      newlyRolledBackIds.push(rec.docId);
+      continue;
+    }
+
+    const currentBatch =
+      typeof current.ingestionBatchId === 'string'
+        ? current.ingestionBatchId
+        : null;
+    const userOwnedModified =
+      current.ownerId !== undefined ||
+      (typeof current.reviewsCount === 'number' && current.reviewsCount > 0) ||
+      Boolean(current.isVerified) ||
+      Boolean(current.isFeatured);
+
+    if (userOwnedModified) {
+      skippedUserOwnedOrModifiedCount += 1;
+      hasBlockingConflict = true;
+      conflicts.push({
+        docId: idStr,
+        operation: 'delete_insert',
+        reasonCode: 'USER_OWNED_MODIFIED',
+        reason:
+          'Inserted document acquired user-owned or verified fields (ownerId/reviewsCount/isVerified/isFeatured); refusing deletion.',
+        currentIngestionBatchId: currentBatch,
+      });
+      continue;
+    }
+
+    if (currentBatch !== ledger.batchId) {
+      skippedUserOwnedOrModifiedCount += 1;
+      hasBlockingConflict = true;
+      conflicts.push({
+        docId: idStr,
+        operation: 'delete_insert',
+        reasonCode: 'OVERLAPPING_BATCH_CONFLICT',
+        reason: `Document was subsequently modified by batch "${String(currentBatch)}"; roll back overlapping batches in reverse (LIFO) order first.`,
+        currentIngestionBatchId: currentBatch,
+      });
+      continue;
+    }
+
+    const currentDigest = computeTrackedDocumentDigest(current);
+    if (rec.postIngestionDigest && currentDigest !== rec.postIngestionDigest) {
+      skippedUserOwnedOrModifiedCount += 1;
+      hasBlockingConflict = true;
+      conflicts.push({
+        docId: idStr,
+        operation: 'delete_insert',
+        reasonCode: 'MODIFIED_AFTER_BATCH',
+        reason: `Post-ingestion state digest mismatch on document ${idStr}; refusing blind deletion.`,
+        currentIngestionBatchId: currentBatch,
+      });
+      continue;
+    }
+
+    if (options.dryRun) {
+      deletedInsertedCount += 1;
+      continue;
+    }
+
+    const delRes = await restaurantsCol.deleteMany({
+      _id: rec.docId,
+      ingestionBatchId: ledger.batchId,
+      updatedAt: rec.expectedPostUpdatedAt,
+      ownerId: { $exists: false },
+      $or: [{ reviewsCount: 0 }, { reviewsCount: { $exists: false } }],
+    });
+
+    if (delRes.deletedCount === 1) {
+      deletedInsertedCount += 1;
+      newlyRolledBackIds.push(rec.docId);
+    } else {
+      skippedUserOwnedOrModifiedCount += 1;
+      hasBlockingConflict = true;
+      conflicts.push({
+        docId: idStr,
+        operation: 'delete_insert',
+        reasonCode: 'CAS_WRITE_MISMATCH',
+        reason: `Concurrent modification prevented compare-and-set delete of ${idStr}.`,
+        currentIngestionBatchId: currentBatch,
+      });
+    }
+  }
+
+  // Verify and restore batch-updated records using CAS
+  for (const backup of updatedBackups) {
+    const idStr = String(backup.docId);
+    const current = currentMap.get(idStr);
+
+    if (!current) {
+      if (options.allowIncompleteStates) {
+        // Under incomplete batch recovery, an updated backup doc might simply never have existed/been deleted
+      }
+      missingDocumentsCount += 1;
+      conflicts.push({
+        docId: idStr,
+        operation: 'restore_update',
+        reasonCode: 'DOCUMENT_MISSING',
+        reason: `Updated document ${idStr} is missing from ${RESTAURANTS_COLLECTION}; cannot restore.`,
+      });
+      newlyRolledBackIds.push(backup.docId);
+      continue;
+    }
+
+    const currentBatch =
+      typeof current.ingestionBatchId === 'string'
+        ? current.ingestionBatchId
+        : null;
+    const currentReviewsCount =
+      typeof current.reviewsCount === 'number' &&
+      Number.isFinite(current.reviewsCount)
+        ? current.reviewsCount
+        : 0;
+
+    const protectedChanged =
+      !sameOptionalObjectId(current.ownerId, backup.expectedOwnerId) ||
+      currentReviewsCount !== backup.expectedReviewsCount ||
+      Boolean(current.isVerified) !== backup.expectedIsVerified ||
+      Boolean(current.isFeatured) !== backup.expectedIsFeatured;
+
+    if (protectedChanged) {
+      skippedUserOwnedOrModifiedCount += 1;
+      hasBlockingConflict = true;
+      conflicts.push({
+        docId: idStr,
+        operation: 'restore_update',
+        reasonCode: 'USER_OWNED_MODIFIED',
+        reason:
+          'User-owned or system-owned fields (ownerId/reviewsCount/isVerified/isFeatured) changed after ingestion; refusing overwrite.',
+        currentIngestionBatchId: currentBatch,
+      });
+      continue;
+    }
+
+    if (currentBatch !== ledger.batchId) {
+      skippedUserOwnedOrModifiedCount += 1;
+      hasBlockingConflict = true;
+      conflicts.push({
+        docId: idStr,
+        operation: 'restore_update',
+        reasonCode: 'OVERLAPPING_BATCH_CONFLICT',
+        reason: `Document was subsequently modified by batch "${String(currentBatch)}"; roll back overlapping batches in reverse (LIFO) order first.`,
+        currentIngestionBatchId: currentBatch,
+      });
+      continue;
+    }
+
+    const currentDigest = computeTrackedDocumentDigest(current);
+    if (
+      backup.postIngestionDigest &&
+      currentDigest !== backup.postIngestionDigest
+    ) {
+      skippedUserOwnedOrModifiedCount += 1;
+      hasBlockingConflict = true;
+      conflicts.push({
+        docId: idStr,
+        operation: 'restore_update',
+        reasonCode: 'MODIFIED_AFTER_BATCH',
+        reason: `Document ${idStr} was modified after batch "${ledger.batchId}"; refusing overwrite.`,
+        currentIngestionBatchId: currentBatch,
+      });
+      continue;
+    }
+
+    if (options.dryRun) {
+      restoredUpdatedCount += 1;
+      continue;
+    }
+
+    const unsetFields: Record<string, ''> = {};
+    for (const key of BACKUP_TRACKED_KEYS) {
+      if (
+        !(key in backup.previousFields) ||
+        backup.previousFields[key] === undefined
+      ) {
+        unsetFields[key] = '';
+      }
+    }
+    if (!backup.hadBatchIdBefore) {
+      unsetFields.ingestionBatchId = '';
+    }
+
+    const updateDoc: Record<string, unknown> = {};
+    if (Object.keys(backup.previousFields).length > 0) {
+      updateDoc.$set = backup.previousFields;
+    }
+    if (Object.keys(unsetFields).length > 0) {
+      updateDoc.$unset = unsetFields;
+    }
+
+    const casRes = await restaurantsCol.updateOne(
+      {
+        _id: backup.docId,
+        ingestionBatchId: ledger.batchId,
+        updatedAt: backup.expectedPostUpdatedAt,
+      },
+      updateDoc,
+    );
+
+    if (casRes.matchedCount === 1) {
+      restoredUpdatedCount += 1;
+      newlyRolledBackIds.push(backup.docId);
+    } else {
+      skippedUserOwnedOrModifiedCount += 1;
+      hasBlockingConflict = true;
+      conflicts.push({
+        docId: idStr,
+        operation: 'restore_update',
+        reasonCode: 'CAS_WRITE_MISMATCH',
+        reason: `Concurrent modification prevented compare-and-set restore of ${idStr}.`,
+        currentIngestionBatchId: currentBatch,
+      });
+    }
+  }
+
+  return {
+    deletedInsertedCount,
+    restoredUpdatedCount,
+    skippedUserOwnedOrModifiedCount,
+    missingDocumentsCount,
+    conflicts,
+    newlyRolledBackIds,
+    hasBlockingConflict,
+  };
+}
+
 /**
- * Safely rolls back only the documents inserted or updated by `batchId` while
- * refusing to delete records that subsequently acquired a user owner or native reviews.
+ * Safely rolls back ONLY unmodified records belonging to `batchId` using compare-and-set.
+ * Never overwrites post-batch modifications or user-owned changes; enforces LIFO order on overlaps.
  */
 export async function rollbackIngestionBatch(
   db: Db,
@@ -565,13 +1182,16 @@ export async function rollbackIngestionBatch(
     );
   }
 
+  const trimmedId = batchId.trim();
   const ledgerCol = db.collection<IngestionBatchLedgerDocument>(
     INGESTION_BATCHES_COLLECTION,
   );
-  const ledger = await ledgerCol.findOne({ batchId: batchId.trim() });
+  const ledger = await ledgerCol.findOne({
+    $or: [{ _id: trimmedId }, { batchId: trimmedId }],
+  });
   if (!ledger) {
     throw new IngestionValidationError(
-      `Ingestion batch "${batchId}" not found in "${INGESTION_BATCHES_COLLECTION}".`,
+      `Ingestion batch "${trimmedId}" not found in "${INGESTION_BATCHES_COLLECTION}".`,
     );
   }
 
@@ -583,100 +1203,52 @@ export async function rollbackIngestionBatch(
       deletedInsertedCount: 0,
       restoredUpdatedCount: 0,
       skippedUserOwnedOrModifiedCount: 0,
+      missingDocumentsCount: 0,
+      conflicts: [],
     };
   }
 
-  const restaurantsCol = db.collection<RestaurantDocRecord>(
-    RESTAURANTS_COLLECTION,
-  );
+  if (
+    ledger.status === 'pending' ||
+    ledger.status === 'recovery_required' ||
+    ledger.status === 'failed'
+  ) {
+    throw new IngestionValidationError(
+      `Batch "${ledger.batchId}" has status "${ledger.status}". Run recoverIngestionBatch() (--recover=${ledger.batchId}) before rolling back.`,
+    );
+  }
 
-  // Only eligible for delete if created by this batch AND untouched by GastroWise users
-  const eligibleDeleteDocs =
-    ledger.insertedIds.length > 0
-      ? await restaurantsCol
-          .find(
-            {
-              _id: { $in: ledger.insertedIds },
-              ingestionBatchId: ledger.batchId,
-              ownerId: { $exists: false },
-              $or: [{ reviewsCount: 0 }, { reviewsCount: { $exists: false } }],
-            },
-            { projection: { _id: 1 } },
-          )
-          .toArray()
-      : [];
-
-  const eligibleDeleteIds = eligibleDeleteDocs.map((d) => d._id);
-  const skippedUserOwnedOrModifiedCount = Math.max(
-    0,
-    ledger.insertedIds.length - eligibleDeleteIds.length,
-  );
+  const outcome = await executeCompareAndSetRollback(db, ledger, {
+    dryRun,
+    allowIncompleteStates: false,
+  });
 
   if (dryRun) {
     return {
       batchId: ledger.batchId,
       dryRun: true,
-      status: 'dry_run_preview',
-      deletedInsertedCount: eligibleDeleteIds.length,
-      restoredUpdatedCount: ledger.updatedBackups.length,
-      skippedUserOwnedOrModifiedCount,
+      status: outcome.hasBlockingConflict ? 'conflict' : 'dry_run_preview',
+      deletedInsertedCount: outcome.deletedInsertedCount,
+      restoredUpdatedCount: outcome.restoredUpdatedCount,
+      skippedUserOwnedOrModifiedCount: outcome.skippedUserOwnedOrModifiedCount,
+      missingDocumentsCount: outcome.missingDocumentsCount,
+      conflicts: outcome.conflicts,
     };
   }
 
-  let deletedInsertedCount = 0;
-  if (eligibleDeleteIds.length > 0) {
-    const deleteRes = await restaurantsCol.deleteMany({
-      _id: { $in: eligibleDeleteIds },
-      ingestionBatchId: ledger.batchId,
-    });
-    deletedInsertedCount = deleteRes.deletedCount;
-  }
-
-  let restoredUpdatedCount = 0;
-  if (ledger.updatedBackups.length > 0) {
-    const restoreOps: AnyBulkWriteOperation<RestaurantDocRecord>[] =
-      ledger.updatedBackups.map((backup) => {
-        const unsetFields: Record<string, ''> = {};
-        for (const key of BACKUP_TRACKED_KEYS) {
-          if (
-            !(key in backup.previousFields) ||
-            backup.previousFields[key] === undefined
-          ) {
-            unsetFields[key] = '';
-          }
-        }
-        if (!backup.hadBatchIdBefore) {
-          unsetFields.ingestionBatchId = '';
-        }
-
-        const updateDoc: Record<string, unknown> = {};
-        if (Object.keys(backup.previousFields).length > 0) {
-          updateDoc.$set = backup.previousFields;
-        }
-        if (Object.keys(unsetFields).length > 0) {
-          updateDoc.$unset = unsetFields;
-        }
-
-        return {
-          updateOne: {
-            filter: { _id: backup.docId },
-            update: updateDoc,
-          },
-        };
-      });
-
-    const restoreRes = await restaurantsCol.bulkWrite(restoreOps, {
-      ordered: false,
-    });
-    restoredUpdatedCount = restoreRes.matchedCount;
-  }
+  const combinedRolledBack = [
+    ...(ledger.rolledBackDocIds || []),
+    ...outcome.newlyRolledBackIds,
+  ];
+  const nextStatus = outcome.hasBlockingConflict ? 'applied' : 'rolled_back';
 
   await ledgerCol.updateOne(
     { _id: ledger._id },
     {
       $set: {
-        status: 'rolled_back',
-        rolledBackAt: new Date(),
+        status: nextStatus,
+        rolledBackDocIds: combinedRolledBack,
+        ...(nextStatus === 'rolled_back' ? { rolledBackAt: new Date() } : {}),
       },
     },
   );
@@ -684,9 +1256,213 @@ export async function rollbackIngestionBatch(
   return {
     batchId: ledger.batchId,
     dryRun: false,
-    status: 'rolled_back',
-    deletedInsertedCount,
-    restoredUpdatedCount,
-    skippedUserOwnedOrModifiedCount,
+    status: outcome.hasBlockingConflict ? 'conflict' : 'rolled_back',
+    deletedInsertedCount: outcome.deletedInsertedCount,
+    restoredUpdatedCount: outcome.restoredUpdatedCount,
+    skippedUserOwnedOrModifiedCount: outcome.skippedUserOwnedOrModifiedCount,
+    missingDocumentsCount: outcome.missingDocumentsCount,
+    conflicts: outcome.conflicts,
+  };
+}
+
+/**
+ * Deterministically recovers or compensates an interrupted (`pending`, `recovery_required`,
+ * or `failed`) ingestion batch on standalone MongoDB.
+ */
+export async function recoverIngestionBatch(
+  db: Db,
+  batchId: string,
+  options: { action?: RecoveryAction; dryRun?: boolean } = {},
+): Promise<IngestionRecoveryResult> {
+  const dryRun = options.dryRun === true;
+  const action: RecoveryAction = options.action || 'auto';
+  if (!batchId || batchId.trim().length === 0) {
+    throw new IngestionValidationError(
+      'A valid --recover=<batchId> is required.',
+    );
+  }
+
+  const trimmedId = batchId.trim();
+  const ledgerCol = db.collection<IngestionBatchLedgerDocument>(
+    INGESTION_BATCHES_COLLECTION,
+  );
+  const ledger = await ledgerCol.findOne({
+    $or: [{ _id: trimmedId }, { batchId: trimmedId }],
+  });
+  if (!ledger) {
+    throw new IngestionValidationError(
+      `Ingestion batch "${trimmedId}" not found in "${INGESTION_BATCHES_COLLECTION}".`,
+    );
+  }
+
+  if (ledger.status === 'applied' || ledger.status === 'rolled_back') {
+    return {
+      batchId: ledger.batchId,
+      dryRun,
+      previousStatus: ledger.status,
+      finalStatus: ledger.status,
+      actionTaken: 'no_action_needed',
+      landedInsertedCount: 0,
+      landedUpdatedCount: 0,
+      deletedInsertedCount: 0,
+      restoredUpdatedCount: 0,
+      conflicts: [],
+      standaloneLimitationNote: STANDALONE_MONGODB_LIMITATION_NOTE,
+    };
+  }
+
+  const restaurantsCol = db.collection<RestaurantDocRecord>(
+    RESTAURANTS_COLLECTION,
+  );
+  const insertedRecords = normalizeInsertedRecords(ledger);
+  const updatedBackups = ledger.updatedBackups || [];
+  const allTargetIds = [
+    ...insertedRecords.map((r) => r.docId),
+    ...updatedBackups.map((b) => b.docId),
+  ];
+
+  const landedDocs =
+    allTargetIds.length > 0
+      ? ((await restaurantsCol
+          .find(
+            { _id: { $in: allTargetIds }, ingestionBatchId: ledger.batchId },
+            { projection: { _id: 1, updatedAt: 1 } },
+          )
+          .toArray()) as RestaurantDocRecord[])
+      : [];
+  const landedSet = new Set(landedDocs.map((d) => String(d._id)));
+
+  const landedInsertedCount = insertedRecords.filter((r) =>
+    landedSet.has(String(r.docId)),
+  ).length;
+  const landedUpdatedCount = updatedBackups.filter((b) =>
+    landedSet.has(String(b.docId)),
+  ).length;
+
+  const allPlannedLanded =
+    landedInsertedCount === insertedRecords.length &&
+    landedUpdatedCount === updatedBackups.length;
+
+  if (landedInsertedCount === 0 && landedUpdatedCount === 0) {
+    if (!dryRun) {
+      await ledgerCol.updateOne(
+        { _id: ledger._id },
+        {
+          $set: {
+            status: 'failed',
+            failedAt: ledger.failedAt || new Date(),
+          },
+        },
+      );
+    }
+    return {
+      batchId: ledger.batchId,
+      dryRun,
+      previousStatus: ledger.status,
+      finalStatus: dryRun ? ledger.status : 'failed',
+      actionTaken: 'marked_failed_no_writes',
+      landedInsertedCount: 0,
+      landedUpdatedCount: 0,
+      deletedInsertedCount: 0,
+      restoredUpdatedCount: 0,
+      conflicts: [],
+      standaloneLimitationNote: STANDALONE_MONGODB_LIMITATION_NOTE,
+    };
+  }
+
+  if (action === 'complete' || (action === 'auto' && allPlannedLanded)) {
+    if (!allPlannedLanded) {
+      throw new IngestionValidationError(
+        `Cannot complete batch "${ledger.batchId}": only ${landedInsertedCount}/${insertedRecords.length} inserts and ${landedUpdatedCount}/${updatedBackups.length} updates landed. Use action="compensate".`,
+      );
+    }
+    if (!dryRun) {
+      await ledgerCol.updateOne(
+        { _id: ledger._id },
+        {
+          $set: {
+            status: 'applied',
+            appliedAt: new Date(),
+            failureStage: null,
+            error: null,
+            metrics: {
+              ...ledger.metrics,
+              inserted_count: landedInsertedCount,
+              matched_count: landedUpdatedCount,
+              updated_count: landedUpdatedCount,
+            },
+          },
+        },
+      );
+    }
+    return {
+      batchId: ledger.batchId,
+      dryRun,
+      previousStatus: ledger.status,
+      finalStatus: dryRun ? ledger.status : 'applied',
+      actionTaken: 'completed_pending_apply',
+      landedInsertedCount,
+      landedUpdatedCount,
+      deletedInsertedCount: 0,
+      restoredUpdatedCount: 0,
+      conflicts: [],
+      standaloneLimitationNote: STANDALONE_MONGODB_LIMITATION_NOTE,
+    };
+  }
+
+  // Compensate partial writes cleanly by building a scoped ledger covering only landed docs
+  const landedInsertRecords = insertedRecords.filter((r) =>
+    landedSet.has(String(r.docId)),
+  );
+  const landedUpdatedBackups = updatedBackups.filter((b) =>
+    landedSet.has(String(b.docId)),
+  );
+
+  const compOutcome = await executeCompareAndSetRollback(
+    db,
+    {
+      ...ledger,
+      insertedRecords: landedInsertRecords,
+      insertedIds: landedInsertRecords.map((r) => r.docId),
+      updatedBackups: landedUpdatedBackups,
+    },
+    { dryRun, allowIncompleteStates: true },
+  );
+
+  const nextStatus = compOutcome.hasBlockingConflict
+    ? 'recovery_required'
+    : 'rolled_back';
+
+  if (!dryRun) {
+    const combinedRolledBack = [
+      ...(ledger.rolledBackDocIds || []),
+      ...compOutcome.newlyRolledBackIds,
+    ];
+    await ledgerCol.updateOne(
+      { _id: ledger._id },
+      {
+        $set: {
+          status: nextStatus,
+          rolledBackDocIds: combinedRolledBack,
+          ...(nextStatus === 'rolled_back'
+            ? { rolledBackAt: new Date(), failureStage: null, error: null }
+            : {}),
+        },
+      },
+    );
+  }
+
+  return {
+    batchId: ledger.batchId,
+    dryRun,
+    previousStatus: ledger.status,
+    finalStatus: dryRun ? ledger.status : nextStatus,
+    actionTaken: 'compensated_partial_writes',
+    landedInsertedCount,
+    landedUpdatedCount,
+    deletedInsertedCount: compOutcome.deletedInsertedCount,
+    restoredUpdatedCount: compOutcome.restoredUpdatedCount,
+    conflicts: compOutcome.conflicts,
+    standaloneLimitationNote: STANDALONE_MONGODB_LIMITATION_NOTE,
   };
 }

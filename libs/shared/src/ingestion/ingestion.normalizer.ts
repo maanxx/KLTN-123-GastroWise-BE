@@ -474,10 +474,16 @@ export function validateAndNormalizeRestaurantRecord(
     });
   }
 
-  // Subscores & Ratings (separate Foody TotalReview into foodyReviewsCount)
+  // Subscores & Ratings (separate Foody TotalReview into foodyReviewsCount;
+  // do NOT treat native reviewsCount as Foody count without explicit provenance)
   const subscores = extractFoodySubscores(payload);
+  const hasExplicitFoodyReviewsProvenance =
+    payload._reviewsCountIsFoodySource === true ||
+    payload.crawlerSource === 'crawl_shopeefood';
   const foodyReviewsCount = readOptionalFiniteNumber(
-    payload.TotalReview ?? payload.foodyReviewsCount ?? payload.reviewsCount,
+    payload.TotalReview ??
+      payload.foodyReviewsCount ??
+      (hasExplicitFoodyReviewsProvenance ? payload.reviewsCount : undefined),
   );
   const rawRatingInput = readOptionalFiniteNumber(
     payload.AvgRating ?? payload.diemTrungBinh ?? payload.rating,
