@@ -45,7 +45,14 @@
   - Missing coordinates never claim `"Nearby"` and do not satisfy an explicit radius filter.
   - Missing/zero prices never claim `"Within budget"` and do not satisfy an explicit budget filter.
   - Stable tie-breaker: `score DESC`, then `restaurant.id ASC`.
-  - Zero N+1 queries: fetches candidate restaurants (`.limit(200)`) + single batched `menu_items` query (`restaurantId: { $in: candidateObjectIds }`).
+  - **Bounded DB-Side Candidate Retrieval (Zero N+1):**
+    1. When `keyword`, `cuisines`/`categories`, `isVegetarian`, or budget filters are present, Core Service first executes a bounded dish seed query on `menu_items` (`.limit(200)`, selecting `restaurantId` only) so restaurants matching via dish names/tags/vegetarian/budget are included even if ranked outside the global top-200 restaurants.
+    2. Core Service pushes `status: 'open'`, optional `2dsphere` `$geoWithin` (`$centerSphere`), `keyword` regex, `cuisines`/`categories` regex, and dish-seeded `_id: { $in: [...] }` conditions directly into MongoDB `restaurants.find(...)` BEFORE applying deterministic sorting (`{ isFeatured: -1, diemTrungBinh: -1, _id: 1 }`) and the `MAX_RECOMMENDATION_CANDIDATES = 200` cap.
+    3. A single batched `menu_items` `$in` query hydrates available dishes for the final candidates.
+  - **Strict AI Score Validation (`extractValidatedAiScores`):**
+    - Accepts finite numbers in `[0, 1]` directly and normalizes finite numbers in `(1, 100]` by dividing by `100`.
+    - Strictly rejects negative values, values `> 100`, `NaN`, `Infinity`, strings, `null`, and non-numeric values without clamping invalid values to `1.0`.
+    - Strictly discards any ID not present in Core's authoritative candidate ID set.
 
 ### Response Format
 ```json

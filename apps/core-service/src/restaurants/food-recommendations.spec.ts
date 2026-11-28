@@ -193,8 +193,8 @@ describe('M10.9 Food Search & Recommendation Integration', () => {
     expect(res.data[0].reasons.join(' ')).toContain('Within budget');
     expect(res.data[0].reasons.join(' ')).toContain('Nearby');
 
-    // Single batched $in query for dishes (no N+1)
-    expect(menuItemModel.find).toHaveBeenCalledTimes(1);
+    // Constant O(1) bounded dish queries (1 bounded seed query + 1 batched $in hydration; zero N+1)
+    expect(menuItemModel.find).toHaveBeenCalledTimes(2);
 
     // Must never leak internal DB fields or internal AI credentials
     const serialized = JSON.stringify(res);
@@ -295,5 +295,148 @@ describe('M10.9 Food Search & Recommendation Integration', () => {
       expect(joinedReasons).not.toContain('Within budget');
       expect(joinedReasons).not.toContain('Rated');
     }
+  });
+
+  describe('M10.9 review fixes: DB-side candidate retrieval (>200 records) & strict AI score validation', () => {
+    it('retrieves a matching restaurant ranked beyond global top-200 by applying keyword & cuisine filters in MongoDB query', async () => {
+      // Simulate 250 restaurants in DB: top 200 are high-rated "Cơm" venues, #235 is lower-rated "Bún Bò Huế"
+      const targetId = '674000000000000000000235';
+      const all250Restaurants = Array.from({ length: 250 }, (_, idx) => {
+        if (idx === 234) {
+          return {
+            _id: targetId,
+            tenQuan: 'Bún Bò Huế O Xuân',
+            diaChi: '12 Nguyễn Du, Quận 1, TP. HCM',
+            diemTrungBinh: 3.8,
+            ratingScale: '5_point',
+            giaCa: '55.000đ - 75.000đ',
+            tags: 'Bún bò, Huế, Món Việt',
+            status: 'open',
+          };
+        }
+        return {
+          _id: `67400000000000000000${String(idx).padStart(4, '0')}`,
+          tenQuan: `Quán Cơm Top ${idx}`,
+          diaChi: 'Quận 1, TP. HCM',
+          diemTrungBinh: 4.9,
+          ratingScale: '5_point',
+          giaCa: '50.000đ',
+          tags: 'Cơm tấm',
+          status: 'open',
+        };
+      });
+
+      const restLimitSpy = jest.fn();
+      // Mock restaurantModel.find to actually evaluate the DB-side $and/$or regex filter before applying .limit(200)
+      restaurantModel.find.mockImplementation(
+        (filter: Record<string, unknown>) => {
+          const serializedFilter = JSON.stringify(filter);
+          // Verify keyword & cuisine filters are pushed down to MongoDB query before limit
+          expect(serializedFilter).toContain('Bún Bò Huế');
+          expect(serializedFilter).toContain('Huế');
+
+          const matched = all250Restaurants.filter(
+            (r) => r.tenQuan.includes('Bún Bò Huế') && r.tags.includes('Huế'),
+          );
+          const chain = createChainMock(matched);
+          chain.limit = jest.fn((n: number) => {
+            restLimitSpy(n);
+            return chain;
+          });
+          return chain;
+        },
+      );
+
+      const dishLimitSpy = jest.fn();
+      menuItemModel.find.mockImplementation(() => {
+        const chain = createChainMock([
+          {
+            _id: new Types.ObjectId().toHexString(),
+            restaurantId: targetId,
+            name: 'Bún Bò Huế Đặc Biệt',
+            price: 65000,
+            tags: ['Bún bò', 'Huế'],
+            isAvailable: true,
+          },
+        ]);
+        chain.limit = jest.fn((n: number) => {
+          dishLimitSpy(n);
+          return chain;
+        });
+        return chain;
+      });
+
+      const res = await controller.getFoodRecommendations({
+        keyword: 'Bún Bò Huế',
+        cuisines: 'Huế',
+        limit: 10,
+      });
+
+      expect(res.data).toHaveLength(1);
+      expect(res.data[0].restaurant.id).toBe(targetId);
+      expect(res.data[0].restaurant.tenQuan).toBe('Bún Bò Huế O Xuân');
+      // Verify bounded resource limits are enforced on both DB queries
+      expect(restLimitSpy).toHaveBeenCalledWith(200);
+      expect(dishLimitSpy).toHaveBeenCalledWith(200);
+    });
+
+    it('strictly validates AI scores: accepts [0, 1] and normalizes (1, 100], rejects negative, >100, NaN, Infinity, strings, null, and fabricated IDs', () => {
+      const allowedIds = new Set([
+        'id-0',
+        'id-half',
+        'id-1',
+        'id-50',
+        'id-95',
+        'id-100',
+        'id-neg',
+        'id-101',
+        'id-999',
+        'id-nan',
+        'id-inf',
+        'id-str',
+        'id-null',
+      ]);
+
+      const validated = extractValidatedAiScores(
+        {
+          scores: [
+            { id: 'id-0', S_taste: 0 },
+            { id: 'id-half', S_taste: 0.5 },
+            { id: 'id-1', S_taste: 1 },
+            { id: 'id-50', S_taste: 50 },
+            { id: 'id-95', S_taste: 95 },
+            { id: 'id-100', S_taste: 100 },
+            { id: 'id-neg', S_taste: -1 },
+            { id: 'id-101', S_taste: 101 },
+            { id: 'id-999', S_taste: 999 },
+            { id: 'id-nan', S_taste: Number.NaN },
+            { id: 'id-inf', S_taste: Number.POSITIVE_INFINITY },
+            { id: 'id-str', S_taste: '0.9' },
+            { id: 'id-null', S_taste: null },
+            { id: 'fabricated-id', S_taste: 0.9 },
+          ],
+        },
+        allowedIds,
+      );
+
+      // Valid scores in [0, 1] and (1, 100]
+      expect(validated.get('id-0')).toBe(0);
+      expect(validated.get('id-half')).toBe(0.5);
+      expect(validated.get('id-1')).toBe(1);
+      expect(validated.get('id-50')).toBe(0.5);
+      expect(validated.get('id-95')).toBe(0.95);
+      expect(validated.get('id-100')).toBe(1);
+
+      // Invalid scores must be strictly rejected (never clamped to 1)
+      expect(validated.has('id-neg')).toBe(false);
+      expect(validated.has('id-101')).toBe(false);
+      expect(validated.has('id-999')).toBe(false);
+      expect(validated.has('id-nan')).toBe(false);
+      expect(validated.has('id-inf')).toBe(false);
+      expect(validated.has('id-str')).toBe(false);
+      expect(validated.has('id-null')).toBe(false);
+      expect(validated.has('fabricated-id')).toBe(false);
+      expect(validated.size).toBe(6);
+    });
   });
 });

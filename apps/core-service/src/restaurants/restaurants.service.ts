@@ -60,6 +60,8 @@ const MAX_PAGE_LIMIT = 100;
 const MAX_PAGE_NUMBER = 1000;
 const MAX_MANUAL_SCAN_LIMIT = 500;
 const MAX_MENU_LEGACY_LIMIT = 200;
+const MAX_RECOMMENDATION_CANDIDATES = 200;
+const MAX_RECOMMENDATION_DISH_SEED_LIMIT = 200;
 const RESTAURANT_PUBLIC_PROJECTION =
   '-ingestionBatchId -ingestionRevision -ingestionPostDigest -normalizedNameAddressKey -ownerId';
 const DISH_PUBLIC_PROJECTION =
@@ -1843,15 +1845,165 @@ export class RestaurantsService {
     );
     const isVegetarianOnly = query.isVegetarian === 'true';
 
-    // 1. Fetch bounded open candidate restaurants from Core MongoDB (with public projection)
-    const restCursor = this.restaurantModel.find({ status: 'open' });
+    const keywordTrimmed = query.keyword?.trim() || '';
+    const hasBudgetFilter =
+      query.minBudget !== undefined || query.maxBudget !== undefined;
+
+    // 1. Optional DB-side dish seed lookup so restaurants matching via dish name/tags/vegetarian/budget
+    //    are retrieved directly from MongoDB even when outside the top-200 globally rated restaurants.
+    let dishSeedRestaurantIds: unknown[] = [];
+    const needsDishSeed =
+      Boolean(keywordTrimmed) ||
+      preferences.length > 0 ||
+      isVegetarianOnly ||
+      hasBudgetFilter;
+
+    if (needsDishSeed) {
+      const dishSeedClauses: Array<Record<string, unknown>> = [
+        { isAvailable: { $ne: false } },
+      ];
+      if (isVegetarianOnly) {
+        dishSeedClauses.push({ isVegetarian: true });
+      }
+      if (hasBudgetFilter) {
+        const priceRange: Record<string, number> = { $gt: 0 };
+        if (query.minBudget !== undefined) {
+          priceRange.$gte = Number(query.minBudget);
+        }
+        if (query.maxBudget !== undefined) {
+          priceRange.$lte = Number(query.maxBudget);
+        }
+        dishSeedClauses.push({ price: priceRange });
+      }
+      if (keywordTrimmed) {
+        const safeKw = escapeRegex(keywordTrimmed);
+        dishSeedClauses.push({
+          $or: [
+            { name: { $regex: safeKw, $options: 'i' } },
+            { description: { $regex: safeKw, $options: 'i' } },
+            { tags: { $regex: safeKw, $options: 'i' } },
+          ],
+        });
+      }
+      if (preferences.length > 0) {
+        const prefRegex = new RegExp(
+          preferences.map((p) => escapeRegex(p)).join('|'),
+          'i',
+        );
+        dishSeedClauses.push({
+          $or: [
+            { tags: { $regex: prefRegex } },
+            { name: { $regex: prefRegex } },
+            { description: { $regex: prefRegex } },
+          ],
+        });
+      }
+
+      const dishSeedFilter: Record<string, unknown> =
+        dishSeedClauses.length === 1
+          ? dishSeedClauses[0]
+          : { $and: dishSeedClauses };
+
+      const seedCursor = this.menuItemModel.find(dishSeedFilter);
+      const projectedSeedCursor =
+        typeof seedCursor.select === 'function'
+          ? seedCursor.select('restaurantId')
+          : seedCursor;
+      const seedDocs = await projectedSeedCursor
+        .sort({ isFeatured: -1, price: 1, _id: 1 })
+        .limit(MAX_RECOMMENDATION_DISH_SEED_LIMIT)
+        .lean()
+        .exec();
+
+      const seenSeedIds = new Set<string>();
+      for (const sd of seedDocs) {
+        if (sd?.restaurantId) {
+          const idKey = String(sd.restaurantId);
+          if (!seenSeedIds.has(idKey)) {
+            seenSeedIds.add(idKey);
+            dishSeedRestaurantIds.push(sd.restaurantId);
+          }
+        }
+      }
+
+      // Vegetarian-only requires at least one available vegetarian dish in Core MongoDB
+      if (isVegetarianOnly && dishSeedRestaurantIds.length === 0) {
+        return {
+          data: [],
+          meta: {
+            total: 0,
+            limit: limitNum,
+            strategy: 'deterministic' as const,
+            weights: DEFAULT_FOOD_RECOMMENDATION_WEIGHTS,
+          },
+        };
+      }
+    }
+
+    // 2. Build DB-level restaurant candidate query BEFORE applying the bounded candidate limit
+    const restaurantAndClauses: Array<Record<string, unknown>> = [
+      { status: 'open' },
+    ];
+
+    if (userPoint) {
+      restaurantAndClauses.push({
+        location: {
+          $geoWithin: {
+            $centerSphere: [[userPoint.lon, userPoint.lat], radiusKm / 6378.1],
+          },
+        },
+      });
+    }
+
+    if (isVegetarianOnly) {
+      restaurantAndClauses.push({ _id: { $in: dishSeedRestaurantIds } });
+    }
+
+    if (keywordTrimmed) {
+      const safeKw = escapeRegex(keywordTrimmed);
+      restaurantAndClauses.push({
+        $or: [
+          { tenQuan: { $regex: safeKw, $options: 'i' } },
+          { name: { $regex: safeKw, $options: 'i' } },
+          { tags: { $regex: safeKw, $options: 'i' } },
+          { diaChi: { $regex: safeKw, $options: 'i' } },
+          ...(dishSeedRestaurantIds.length > 0
+            ? [{ _id: { $in: dishSeedRestaurantIds } }]
+            : []),
+        ],
+      });
+    }
+
+    if (preferences.length > 0) {
+      const prefRegex = new RegExp(
+        preferences.map((p) => escapeRegex(p)).join('|'),
+        'i',
+      );
+      restaurantAndClauses.push({
+        $or: [
+          { tags: { $regex: prefRegex } },
+          { tenQuan: { $regex: prefRegex } },
+          ...(dishSeedRestaurantIds.length > 0
+            ? [{ _id: { $in: dishSeedRestaurantIds } }]
+            : []),
+        ],
+      });
+    }
+
+    const restaurantCandidateFilter: Record<string, unknown> =
+      restaurantAndClauses.length === 1
+        ? restaurantAndClauses[0]
+        : { $and: restaurantAndClauses };
+
+    // 3. Fetch bounded matching open candidate restaurants from Core MongoDB (with public projection)
+    const restCursor = this.restaurantModel.find(restaurantCandidateFilter);
     const projectedRestCursor =
       typeof restCursor.select === 'function'
         ? restCursor.select(RESTAURANT_PUBLIC_PROJECTION)
         : restCursor;
     const rawRestaurants = await projectedRestCursor
-      .sort({ isFeatured: -1, diemTrungBinh: -1 })
-      .limit(200)
+      .sort({ isFeatured: -1, diemTrungBinh: -1, _id: 1 })
+      .limit(MAX_RECOMMENDATION_CANDIDATES)
       .lean()
       .exec();
 
@@ -1867,7 +2019,7 @@ export class RestaurantsService {
       };
     }
 
-    // 2. Single batched query for all available dishes belonging to candidate restaurants (zero N+1)
+    // 4. Single batched query for all available dishes belonging to candidate restaurants (zero N+1)
     const candidateObjectIds = rawRestaurants
       .map((r: any) => r._id)
       .filter((id: unknown) => Boolean(id));

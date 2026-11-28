@@ -102,7 +102,10 @@ export function extractPreferenceTerms(
 
 /**
  * Validates raw AI relevance scores strictly against Core's authoritative candidate ID set.
- * Never allows AI to introduce fabricated restaurant IDs or out-of-range scores.
+ * - Accepts finite numbers in [0, 1] as-is.
+ * - Accepts finite numbers in (1, 100] and normalizes to (0.01, 1] via / 100.
+ * - Strictly rejects negative values, values > 100, NaN, Infinity, strings, null, and non-numeric types.
+ * - Never clamps invalid out-of-range values to maximum score and never admits fabricated IDs.
  */
 export function extractValidatedAiScores(
   rawPayload: unknown,
@@ -128,18 +131,15 @@ export function extractValidatedAiScores(
       continue;
     }
 
-    const rawScore =
-      typeof rec.score === 'number'
-        ? rec.score
-        : typeof rec.S_taste === 'number'
-          ? rec.S_taste
-          : null;
-    if (rawScore === null || !Number.isFinite(rawScore) || rawScore < 0) {
+    const rawCandidate = rec.score !== undefined ? rec.score : rec.S_taste;
+    if (typeof rawCandidate !== 'number' || !Number.isFinite(rawCandidate)) {
+      continue;
+    }
+    if (rawCandidate < 0 || rawCandidate > 100) {
       continue;
     }
 
-    // Clamp to [0, 1] (supports both 0..1 and 0..100 normalized outputs safely)
-    const normalized = rawScore > 1 ? Math.min(1, rawScore / 100) : rawScore;
+    const normalized = rawCandidate > 1 ? rawCandidate / 100 : rawCandidate;
     scores.set(id, normalized);
   }
 
