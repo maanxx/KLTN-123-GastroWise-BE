@@ -656,4 +656,75 @@ describe('Planning Service Authenticated Itinerary Integration (M10.12)', () => 
     expect(badContractRes.status).toBe(400);
     expect(itineraryModel._store.size).toBe(0);
   });
+
+  it('denies non-admin access across all 7 paths when itinerary owner user_id is missing, while allowing admin RBAC', async () => {
+    const ownerlessId = new Types.ObjectId().toString();
+    itineraryModel._store.set(ownerlessId, {
+      _id: ownerlessId,
+      user_id: '',
+      status: 'generated',
+      start_time: '11:00',
+      budget: 250000,
+      routing_mode: 'motorbike',
+      start_location: { type: 'Point', coordinates: [106.7009, 10.7769] },
+      stops: [
+        {
+          stop_id: 'orphan-stop-1',
+          restaurant_id: DETERMINISTIC_CANDIDATES[0].restaurant_id,
+          order_index: 1,
+          restaurant_name: DETERMINISTIC_CANDIDATES[0].name,
+          restaurant_lat: DETERMINISTIC_CANDIDATES[0].lat,
+          restaurant_lng: DETERMINISTIC_CANDIDATES[0].lng,
+          restaurant_address: DETERMINISTIC_CANDIDATES[0].address,
+          estimated_cost: 75000,
+        },
+      ],
+    });
+
+    // Non-admin must receive 403 on all 7 endpoints (fail-closed)
+    expect(
+      (await dispatchHttp(expressApp, 'GET', `/api/v1/itineraries/${ownerlessId}`, { token: userAToken })).status,
+    ).toBe(403);
+    expect(
+      (await dispatchHttp(expressApp, 'PATCH', `/api/v1/itineraries/${ownerlessId}`, { token: userAToken, body: { status: 'confirmed' } })).status,
+    ).toBe(403);
+    expect(
+      (await dispatchHttp(expressApp, 'PATCH', `/api/v1/itineraries/${ownerlessId}/reorder`, { token: userAToken, body: { stop_ids: ['orphan-stop-1'] } })).status,
+    ).toBe(403);
+    expect(
+      (await dispatchHttp(expressApp, 'POST', `/api/v1/itineraries/${ownerlessId}/recalculate`, { token: userAToken, body: { budget: 300000 } })).status,
+    ).toBe(403);
+    expect(
+      (await dispatchHttp(expressApp, 'POST', `/api/v1/itineraries/${ownerlessId}/stops`, { token: userAToken, body: { restaurant_id: DETERMINISTIC_CANDIDATES[1].restaurant_id } })).status,
+    ).toBe(403);
+    expect(
+      (await dispatchHttp(expressApp, 'DELETE', `/api/v1/itineraries/${ownerlessId}/stops/orphan-stop-1`, { token: userAToken })).status,
+    ).toBe(403);
+    expect(
+      (await dispatchHttp(expressApp, 'DELETE', `/api/v1/itineraries/${ownerlessId}`, { token: userAToken })).status,
+    ).toBe(403);
+
+    // Token with blank sub must be denied (401/403) and never bypass ownership
+    const blankSubToken = await jwtService.signAsync({
+      sub: '   ',
+      email: 'blank@local.gastrowise.test',
+      role: 'user',
+    });
+    const blankSubRes = await dispatchHttp(
+      expressApp,
+      'GET',
+      `/api/v1/itineraries/${ownerlessId}`,
+      { token: blankSubToken },
+    );
+    expect([401, 403]).toContain(blankSubRes.status);
+
+    // Admin RBAC remains explicitly permitted
+    expect(
+      (await dispatchHttp(expressApp, 'GET', `/api/v1/itineraries/${ownerlessId}`, { token: adminToken })).status,
+    ).toBe(200);
+    expect(
+      (await dispatchHttp(expressApp, 'DELETE', `/api/v1/itineraries/${ownerlessId}`, { token: adminToken })).status,
+    ).toBe(200);
+    expect(itineraryModel._store.size).toBe(0);
+  });
 });

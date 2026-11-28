@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
-import { UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import {
   ItinerariesService,
   calculateHaversineDistanceKm,
@@ -573,6 +573,192 @@ describe('ItinerariesService (Planning Microservice ACL & Heuristics)', () => {
           }),
         ]),
       );
+    });
+  });
+
+  describe('M10.12.1 P0: Fail-closed itinerary ownership authorization across all paths', () => {
+    const ownerId = '6740000000000000000000a1';
+    const otherUserId = '6740000000000000000000b2';
+    const adminId = '6740000000000000000000ff';
+
+    const buildItineraryDoc = (id: string, userIdValue: any) => {
+      const doc: any = {
+        _id: id,
+        user_id: userIdValue,
+        start_time: '11:00',
+        routing_mode: 'motorbike',
+        budget: 250000,
+        status: 'generated',
+        start_location: { type: 'Point', coordinates: [106.7009, 10.7769] },
+        stops: [
+          {
+            stop_id: 'stop-1',
+            restaurant_id: 'rest-1',
+            order_index: 1,
+            restaurant_name: 'Phở Hòa Pasteur',
+            restaurant_lat: 10.7852,
+            restaurant_lng: 106.6879,
+            restaurant_address: '260C Pasteur, Q3',
+            estimated_cost: 75000,
+          },
+          {
+            stop_id: 'stop-2',
+            restaurant_id: 'rest-2',
+            order_index: 2,
+            restaurant_name: 'Cà Phê Sữa Đá Sài Gòn',
+            restaurant_lat: 10.785,
+            restaurant_lng: 106.695,
+            restaurant_address: '10 Lê Lợi, Q1',
+            estimated_cost: 45000,
+          },
+        ],
+      };
+      doc.save = jest.fn().mockResolvedValue(doc);
+      return doc;
+    };
+
+    const allPaths = [
+      {
+        name: 'getItineraryById (read)',
+        invoke: (id: string, actorId?: any, actorRole?: any) =>
+          service.getItineraryById(id, actorId, actorRole),
+      },
+      {
+        name: 'updateStatus (update)',
+        invoke: (id: string, actorId?: any, actorRole?: any) =>
+          service.updateStatus(id, 'confirmed', actorId, actorRole),
+      },
+      {
+        name: 'reorderStops (reorder)',
+        invoke: (id: string, actorId?: any, actorRole?: any) =>
+          service.reorderStops(id, ['stop-2', 'stop-1'], actorId, actorRole),
+      },
+      {
+        name: 'recalculateItinerary (recalculate)',
+        invoke: (id: string, actorId?: any, actorRole?: any) =>
+          service.recalculateItinerary(
+            id,
+            { budget: 350000, routing_mode: 'car' },
+            actorId,
+            actorRole,
+          ),
+      },
+      {
+        name: 'addStop (add-stop)',
+        invoke: (id: string, actorId?: any, actorRole?: any) =>
+          service.addStop(id, { restaurant_id: 'rest-1' }, actorId, actorRole),
+      },
+      {
+        name: 'removeStop (remove-stop)',
+        invoke: (id: string, actorId?: any, actorRole?: any) =>
+          service.removeStop(id, 'stop-2', actorId, actorRole),
+      },
+      {
+        name: 'deleteItinerary (delete)',
+        invoke: (id: string, actorId?: any, actorRole?: any) =>
+          service.deleteItinerary(id, actorId, actorRole),
+      },
+    ];
+
+    it('1. allows the exact itinerary owner across all 7 paths', async () => {
+      for (const op of allPaths) {
+        const id = new Types.ObjectId().toString();
+        const doc = buildItineraryDoc(id, ownerId);
+        mockItineraryModel.findById.mockReturnValueOnce({
+          exec: jest.fn().mockResolvedValue(doc),
+        });
+        mockItineraryModel.findByIdAndUpdate.mockReturnValueOnce({
+          exec: jest.fn().mockResolvedValue({ ...doc, status: 'confirmed' }),
+        });
+        mockItineraryModel.findByIdAndDelete.mockReturnValueOnce({
+          exec: jest.fn().mockResolvedValue(doc),
+        });
+
+        await expect(op.invoke(id, ownerId, 'user')).resolves.toBeDefined();
+      }
+    });
+
+    it('2. denies another non-admin user with ForbiddenException (403) across all 7 paths', async () => {
+      for (const op of allPaths) {
+        const id = new Types.ObjectId().toString();
+        const doc = buildItineraryDoc(id, ownerId);
+        mockItineraryModel.findById.mockReturnValueOnce({
+          exec: jest.fn().mockResolvedValue(doc),
+        });
+
+        await expect(op.invoke(id, otherUserId, 'user')).rejects.toThrow(
+          ForbiddenException,
+        );
+        expect(doc.save).not.toHaveBeenCalled();
+      }
+      expect(mockItineraryModel.findByIdAndUpdate).not.toHaveBeenCalled();
+      expect(mockItineraryModel.findByIdAndDelete).not.toHaveBeenCalled();
+    });
+
+    it('3. fails closed when actorId is missing, empty, or whitespace across all 7 paths', async () => {
+      for (const missingActor of [undefined, '', '   ']) {
+        for (const op of allPaths) {
+          const id = new Types.ObjectId().toString();
+          const doc = buildItineraryDoc(id, ownerId);
+          mockItineraryModel.findById.mockReturnValueOnce({
+            exec: jest.fn().mockResolvedValue(doc),
+          });
+
+          await expect(op.invoke(id, missingActor, 'user')).rejects.toThrow(
+            ForbiddenException,
+          );
+          expect(doc.save).not.toHaveBeenCalled();
+        }
+      }
+      await expect(service.getItinerariesByUser('')).rejects.toThrow(
+        ForbiddenException,
+      );
+      await expect(
+        service.generateItinerary('   ', {
+          prompt: 'Phở',
+          start_time: '11:00',
+          end_time: '14:00',
+          lat: 10.77,
+          lng: 106.7,
+        }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('4. fails closed when itinerary owner user_id is missing, null, or blank for non-admin across all 7 paths', async () => {
+      for (const missingOwner of [undefined, null, '', '   ']) {
+        for (const op of allPaths) {
+          const id = new Types.ObjectId().toString();
+          const doc = buildItineraryDoc(id, missingOwner);
+          mockItineraryModel.findById.mockReturnValueOnce({
+            exec: jest.fn().mockResolvedValue(doc),
+          });
+
+          await expect(op.invoke(id, ownerId, 'user')).rejects.toThrow(
+            ForbiddenException,
+          );
+          expect(doc.save).not.toHaveBeenCalled();
+        }
+      }
+    });
+
+    it('5. preserves explicit admin RBAC access across all 7 paths (including non-owned and legacy unowned records)', async () => {
+      for (const recordOwner of [ownerId, undefined]) {
+        for (const op of allPaths) {
+          const id = new Types.ObjectId().toString();
+          const doc = buildItineraryDoc(id, recordOwner);
+          mockItineraryModel.findById.mockReturnValueOnce({
+            exec: jest.fn().mockResolvedValue(doc),
+          });
+          mockItineraryModel.findByIdAndUpdate.mockReturnValueOnce({
+            exec: jest.fn().mockResolvedValue({ ...doc, status: 'confirmed' }),
+          });
+          mockItineraryModel.findByIdAndDelete.mockReturnValueOnce({
+            exec: jest.fn().mockResolvedValue(doc),
+          });
+
+          await expect(op.invoke(id, adminId, 'admin')).resolves.toBeDefined();
+        }
+      }
     });
   });
 });

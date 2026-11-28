@@ -236,6 +236,12 @@ export class ItinerariesService {
     userId: string,
     dto: GenerateItineraryDto,
   ): Promise<Itinerary> {
+    const normalizedUserId = typeof userId === 'string' ? userId.trim() : '';
+    if (!normalizedUserId) {
+      throw new ForbiddenException(
+        'Access Denied: Missing authenticated actor identity.',
+      );
+    }
     const prompt = (dto.prompt || '').trim();
     const startPoint = parseValidCoordinatePair(dto.lat, dto.lng);
     if (!startPoint) {
@@ -484,7 +490,7 @@ export class ItinerariesService {
     const title = `Lộ trình ${selectedTag ? selectedTag.toLowerCase() : 'ẩm thực'} Sài Gòn`;
 
     const newItinerary = new this.itineraryModel({
-      user_id: userId,
+      user_id: normalizedUserId,
       prompt: dto.prompt,
       title: title,
       start_time: dto.start_time || '11:00',
@@ -507,9 +513,58 @@ export class ItinerariesService {
     return await newItinerary.save();
   }
 
+  /**
+   * Fail-closed ownership authorization guard for all itinerary operations.
+   * - Admin role (verified by JwtAuthGuard / RolesGuard) is explicitly allowed.
+   * - Non-admin access requires BOTH a non-empty actorId and a non-empty itinerary owner ID,
+   *   and succeeds only on an exact match. Missing actorId or ownerId is always denied.
+   */
+  private assertItineraryAccess(
+    itinerary: { user_id?: unknown } | null | undefined,
+    actorId?: string,
+    actorRole?: string,
+  ): void {
+    const normalizedRole =
+      typeof actorRole === 'string' ? actorRole.trim().toLowerCase() : '';
+    if (normalizedRole === 'admin') {
+      return;
+    }
+
+    const normalizedActorId =
+      typeof actorId === 'string' ? actorId.trim() : '';
+    if (!normalizedActorId) {
+      throw new ForbiddenException(
+        'Access Denied: Missing authenticated actor identity.',
+      );
+    }
+
+    const rawOwnerId = itinerary?.user_id;
+    const normalizedOwnerId =
+      rawOwnerId !== undefined && rawOwnerId !== null
+        ? String(rawOwnerId).trim()
+        : '';
+    if (!normalizedOwnerId) {
+      throw new ForbiddenException(
+        'Access Denied: Itinerary ownership cannot be verified.',
+      );
+    }
+
+    if (normalizedOwnerId !== normalizedActorId) {
+      throw new ForbiddenException(
+        'Access Denied: You do not own this itinerary.',
+      );
+    }
+  }
+
   async getItinerariesByUser(userId: string): Promise<Itinerary[]> {
+    const normalizedUserId = typeof userId === 'string' ? userId.trim() : '';
+    if (!normalizedUserId) {
+      throw new ForbiddenException(
+        'Access Denied: Missing authenticated actor identity.',
+      );
+    }
     return this.itineraryModel
-      .find({ user_id: userId })
+      .find({ user_id: normalizedUserId })
       .sort({ created_at: -1 })
       .exec();
   }
@@ -532,14 +587,7 @@ export class ItinerariesService {
     if (!itinerary) {
       throw new NotFoundException('Không tìm thấy lộ trình');
     }
-    if (actorRole !== 'admin') {
-      const ownerId = itinerary.user_id?.toString();
-      if (ownerId && actorId && ownerId !== actorId) {
-        throw new ForbiddenException(
-          'Access Denied: You do not own this itinerary.',
-        );
-      }
-    }
+    this.assertItineraryAccess(itinerary, actorId, actorRole);
     return itinerary;
   }
 
@@ -558,14 +606,7 @@ export class ItinerariesService {
       throw new NotFoundException('Không tìm thấy lộ trình để sắp xếp lại.');
     }
 
-    if (actorRole !== 'admin') {
-      const ownerId = itinerary.user_id?.toString();
-      if (ownerId && actorId && ownerId !== actorId) {
-        throw new ForbiddenException(
-          'Access Denied: You do not own this itinerary.',
-        );
-      }
-    }
+    this.assertItineraryAccess(itinerary, actorId, actorRole);
 
     const existingStopsMap = new Map<string, any>();
     for (const s of itinerary.stops) {
@@ -629,14 +670,7 @@ export class ItinerariesService {
       throw new NotFoundException('Không tìm thấy lộ trình để thêm điểm dừng.');
     }
 
-    if (actorRole !== 'admin') {
-      const ownerId = itinerary.user_id?.toString();
-      if (ownerId && actorId && ownerId !== actorId) {
-        throw new ForbiddenException(
-          'Access Denied: You do not own this itinerary.',
-        );
-      }
-    }
+    this.assertItineraryAccess(itinerary, actorId, actorRole);
 
     // Retrieve restaurant details via CoreApiClient ACL (Zero direct DB query)
     const restaurant = await this.coreApiClient.getRestaurantById(
@@ -733,14 +767,7 @@ export class ItinerariesService {
       throw new NotFoundException('Không tìm thấy lộ trình để xóa điểm dừng.');
     }
 
-    if (actorRole !== 'admin') {
-      const ownerId = itinerary.user_id?.toString();
-      if (ownerId && actorId && ownerId !== actorId) {
-        throw new ForbiddenException(
-          'Access Denied: You do not own this itinerary.',
-        );
-      }
-    }
+    this.assertItineraryAccess(itinerary, actorId, actorRole);
 
     const filteredStops = itinerary.stops.filter((s) => s.stop_id !== stopId);
     if (filteredStops.length === itinerary.stops.length) {
@@ -794,14 +821,7 @@ export class ItinerariesService {
       throw new NotFoundException('Không tìm thấy lộ trình để tính toán lại.');
     }
 
-    if (actorRole !== 'admin') {
-      const ownerId = itinerary.user_id?.toString();
-      if (ownerId && actorId && ownerId !== actorId) {
-        throw new ForbiddenException(
-          'Access Denied: You do not own this itinerary.',
-        );
-      }
-    }
+    this.assertItineraryAccess(itinerary, actorId, actorRole);
 
     if (dto.budget !== undefined) itinerary.budget = dto.budget;
     if (dto.start_time) itinerary.start_time = dto.start_time;
@@ -870,14 +890,7 @@ export class ItinerariesService {
       );
     }
 
-    if (actorRole !== 'admin') {
-      const ownerId = itinerary.user_id?.toString();
-      if (ownerId && actorId && ownerId !== actorId) {
-        throw new ForbiddenException(
-          'Access Denied: You do not own this itinerary.',
-        );
-      }
-    }
+    this.assertItineraryAccess(itinerary, actorId, actorRole);
 
     const auditUpdate: any = { status: newStatus };
     const now = new Date();
@@ -951,14 +964,7 @@ export class ItinerariesService {
       throw new NotFoundException('Không tìm thấy lộ trình để xóa.');
     }
 
-    if (actorRole !== 'admin') {
-      const ownerId = itinerary.user_id?.toString();
-      if (ownerId && actorId && ownerId !== actorId) {
-        throw new ForbiddenException(
-          'Access Denied: You do not own this itinerary.',
-        );
-      }
-    }
+    this.assertItineraryAccess(itinerary, actorId, actorRole);
 
     return this.itineraryModel.findByIdAndDelete(id).exec();
   }

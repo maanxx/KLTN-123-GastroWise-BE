@@ -3,7 +3,10 @@
  *
  * Safety invariants:
  * - Strictly refuses any non-local HTTP target (only 127.0.0.1 / localhost / ::1).
- * - Strictly refuses execution if MongoDB Atlas / remote URIs exist in process.env.
+ * - Strictly parses and validates every MongoDB URI / host environment variable used by
+ *   this repository and Docker Compose against an explicit local/Docker allowlist.
+ * - Rejects remote mongodb:// hosts, all mongodb+srv:// (Atlas) URIs, malformed URIs,
+ *   and missing required URIs — without ever printing credentials or raw URIs in errors/logs.
  * - Uses isolated ephemeral test users (`e2e-m1012-*@local.gastrowise.test`) and
  *   test-only JWT signing helpers; never touches production or real user accounts.
  * - Cleans up only test-owned records created during the run.
@@ -19,9 +22,185 @@ export const APPROVED_LOCAL_HOSTS = new Set([
   '[::1]',
 ]);
 
+export const APPROVED_LOCAL_MONGO_HOSTS = new Set([
+  'localhost',
+  '127.0.0.1',
+  '::1',
+  'mongo-test',
+  'gastrowise-mongo-test',
+]);
+
+export const KNOWN_MONGO_URI_ENV_KEYS = Object.freeze([
+  'MONGODB_URI',
+  'MONGODB_URI_CORE',
+  'MONGODB_URI_PLANNING',
+  'CORE_MONGODB_URI',
+  'PLANNING_MONGODB_URI',
+  'BACKUP_MONGO_URI',
+]);
+
+export const KNOWN_MONGO_HOST_ENV_KEYS = Object.freeze(['MONGO_HOST']);
+
 export const DEFAULT_E2E_BASE_URL = 'http://127.0.0.1:8080';
 
-export function assertSafeLocalE2eEnvironment(baseUrl = DEFAULT_E2E_BASE_URL) {
+function normalizeHostToken(rawHost) {
+  const trimmed = String(rawHost).trim().toLowerCase();
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+/**
+ * Validates a discrete MongoDB hostname variable (e.g., MONGO_HOST) against the
+ * explicit local/Docker allowlist without printing raw values.
+ */
+export function assertSafeLocalMongoHost(rawHost, envKey = 'MONGO_HOST') {
+  if (typeof rawHost !== 'string' || rawHost.trim().length === 0) {
+    throw new Error(
+      `Refusing E2E run: missing or empty MongoDB host in ${envKey}.`,
+    );
+  }
+
+  const trimmed = rawHost.trim();
+  if (/[\s/@:?#,]/.test(trimmed)) {
+    throw new Error(
+      `Refusing E2E run: malformed MongoDB host in ${envKey}.`,
+    );
+  }
+
+  const normalized = normalizeHostToken(trimmed);
+  if (!APPROVED_LOCAL_MONGO_HOSTS.has(normalized)) {
+    throw new Error(
+      `Refusing E2E run: non-local MongoDB host detected in ${envKey}. Only approved local or Docker test hosts are permitted.`,
+    );
+  }
+
+  return normalized;
+}
+
+/**
+ * Safely parses and validates a MongoDB connection URI without exposing credentials
+ * or full connection strings in thrown errors or logs.
+ *
+ * Rules:
+ * - Rejects missing/empty/malformed URIs.
+ * - Rejects all `mongodb+srv://` URIs (Atlas / DNS SRV).
+ * - Requires `mongodb://` scheme and validates EVERY host in comma-separated seedlists.
+ * - Permits only hosts in APPROVED_LOCAL_MONGO_HOSTS.
+ */
+export function parseAndAssertSafeLocalMongoUri(
+  rawUri,
+  envKey = 'MONGODB_URI',
+) {
+  if (typeof rawUri !== 'string' || rawUri.trim().length === 0) {
+    throw new Error(
+      `Refusing E2E run: missing or empty MongoDB URI in ${envKey}.`,
+    );
+  }
+
+  const trimmed = rawUri.trim();
+  if (/[\s\u0000-\u001f\u007f]/.test(trimmed)) {
+    throw new Error(
+      `Refusing E2E run: malformed MongoDB URI in ${envKey} (contains invalid whitespace or control characters).`,
+    );
+  }
+
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith('mongodb+srv://')) {
+    throw new Error(
+      `Refusing E2E run: mongodb+srv:// (Atlas/SRV) URI is forbidden in ${envKey}.`,
+    );
+  }
+
+  if (!lower.startsWith('mongodb://')) {
+    throw new Error(
+      `Refusing E2E run: malformed or unsupported MongoDB URI scheme in ${envKey}.`,
+    );
+  }
+
+  const remainder = trimmed.slice('mongodb://'.length);
+  const delimiterIdx = remainder.search(/[/?#]/);
+  const authority =
+    delimiterIdx === -1 ? remainder : remainder.slice(0, delimiterIdx);
+
+  if (!authority) {
+    throw new Error(
+      `Refusing E2E run: malformed MongoDB URI in ${envKey} (missing authority/host).`,
+    );
+  }
+
+  // Strip optional userinfo (use last '@' in case an unencoded '@' appeared in password)
+  const lastAtIdx = authority.lastIndexOf('@');
+  const hostListPart =
+    lastAtIdx === -1 ? authority : authority.slice(lastAtIdx + 1);
+
+  if (!hostListPart) {
+    throw new Error(
+      `Refusing E2E run: malformed MongoDB URI in ${envKey} (missing host after credentials).`,
+    );
+  }
+
+  const rawEntries = hostListPart.split(',');
+  const validatedHosts = [];
+
+  for (const rawEntry of rawEntries) {
+    if (!rawEntry || rawEntry.endsWith(':')) {
+      throw new Error(
+        `Refusing E2E run: malformed MongoDB host entry in ${envKey}.`,
+      );
+    }
+
+    let parsedHostUrl;
+    try {
+      parsedHostUrl = new URL(`http://${rawEntry}`);
+    } catch {
+      throw new Error(
+        `Refusing E2E run: malformed MongoDB host or port in ${envKey}.`,
+      );
+    }
+
+    if (
+      parsedHostUrl.username ||
+      parsedHostUrl.password ||
+      parsedHostUrl.pathname !== '/' ||
+      parsedHostUrl.search ||
+      parsedHostUrl.hash ||
+      !parsedHostUrl.hostname
+    ) {
+      throw new Error(
+        `Refusing E2E run: malformed MongoDB host authority in ${envKey}.`,
+      );
+    }
+
+    const normalizedHost = normalizeHostToken(parsedHostUrl.hostname);
+    if (!APPROVED_LOCAL_MONGO_HOSTS.has(normalizedHost)) {
+      throw new Error(
+        `Refusing E2E run: non-local MongoDB host detected in ${envKey}. Only approved local or Docker test hosts are permitted.`,
+      );
+    }
+
+    validatedHosts.push(normalizedHost);
+  }
+
+  return {
+    envKey,
+    hosts: validatedHosts,
+  };
+}
+
+/**
+ * Validates the local E2E HTTP target AND every MongoDB URI / host environment variable
+ * present in `env`.
+ *
+ * When `requireMongoUri` is true, at least one recognized MongoDB URI env var must be set
+ * and pass local-only validation.
+ */
+export function assertSafeLocalE2eEnvironment(
+  baseUrl = DEFAULT_E2E_BASE_URL,
+  env = process.env,
+  { requireMongoUri = false } = {},
+) {
   let parsed;
   try {
     parsed = new URL(baseUrl);
@@ -35,22 +214,43 @@ export function assertSafeLocalE2eEnvironment(baseUrl = DEFAULT_E2E_BASE_URL) {
     );
   }
 
-  for (const key of [
-    'MONGODB_URI',
-    'MONGODB_URI_CORE',
-    'MONGODB_URI_PLANNING',
-    'CORE_MONGODB_URI',
-    'PLANNING_MONGODB_URI',
-  ]) {
-    const val = process.env[key];
-    if (
-      typeof val === 'string' &&
-      (val.includes('mongodb+srv://') || val.toLowerCase().includes('mongodb.net'))
-    ) {
-      throw new Error(
-        `Refusing E2E run while Atlas/remote URI is present in ${key}. Use isolated local Docker env only.`,
-      );
+  const uriKeysToInspect = new Set(KNOWN_MONGO_URI_ENV_KEYS);
+  for (const key of Object.keys(env || {})) {
+    if (/MONGO.*URI/i.test(key)) {
+      uriKeysToInspect.add(key);
     }
+  }
+
+  let validatedUriCount = 0;
+  for (const key of uriKeysToInspect) {
+    const val = env?.[key];
+    if (val === undefined || val === null) {
+      continue;
+    }
+    if (typeof val === 'string' && val.trim().length === 0) {
+      // Empty string is explicitly used in docker-compose.yml (e.g. CORE_MONGODB_URI=)
+      // to clear inherited host Atlas URIs; treat as unset unless requireMongoUri demands one.
+      continue;
+    }
+    parseAndAssertSafeLocalMongoUri(val, key);
+    validatedUriCount += 1;
+  }
+
+  if (requireMongoUri && validatedUriCount === 0) {
+    throw new Error(
+      'Refusing E2E run: a local MongoDB URI environment variable is required but none was provided.',
+    );
+  }
+
+  for (const hostKey of KNOWN_MONGO_HOST_ENV_KEYS) {
+    const hostVal = env?.[hostKey];
+    if (hostVal === undefined || hostVal === null) {
+      continue;
+    }
+    if (typeof hostVal === 'string' && hostVal.trim().length === 0) {
+      continue;
+    }
+    assertSafeLocalMongoHost(hostVal, hostKey);
   }
 }
 
