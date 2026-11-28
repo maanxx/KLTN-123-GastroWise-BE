@@ -3,6 +3,13 @@ import type { GeoJsonPoint } from '../utils/geo.utils';
 import type { RatingScaleKind } from '../utils/restaurant-normalizer.util';
 
 export const EXTERNAL_SOURCE_FOODY = 'foody_shopeefood' as const;
+export const SUPPORTED_INGESTION_SOURCES = [
+  EXTERNAL_SOURCE_FOODY,
+  'shopeefood',
+  'foody',
+  'partner_csv',
+  'gastrowise',
+] as const;
 export const RAW_STAGING_COLLECTION = 'restaurants_raw_staging' as const;
 export const INGESTION_BATCHES_COLLECTION = 'ingestion_batches' as const;
 export const RESTAURANTS_COLLECTION = 'restaurants' as const;
@@ -23,7 +30,7 @@ export type IngestionBatchStatus =
   | 'rolled_back'
   | 'recovery_required';
 
-export type ValidationSeverity = 'error' | 'warning';
+export type ValidationSeverity = 'error' | 'warning' | 'info';
 
 export interface ParsedRawRecord {
   recordIndex: number;
@@ -48,6 +55,18 @@ export interface IngestionValidationIssue {
   reason: string;
   severity: ValidationSeverity;
   sourceId?: string;
+  originalValue?: unknown;
+}
+
+export interface PreservedRawRestaurantFields {
+  name?: string;
+  address?: string;
+  phone?: string;
+  url?: string;
+  avatarUrl?: string;
+  rating?: unknown;
+  reviewCount?: unknown;
+  sourceMetadata?: Record<string, unknown>;
 }
 
 export interface NormalizedRestaurantCandidate {
@@ -75,11 +94,13 @@ export interface NormalizedRestaurantCandidate {
   gioMoCua: string;
   tags: string;
   avatarUrl: string;
+  images?: string[];
   urlGoc: string;
   slug: string;
   contactPhone: string;
   status: 'open' | 'closed' | 'pending';
   ingestionBatchId: string;
+  rawPreserved?: PreservedRawRestaurantFields;
 }
 
 export interface IngestionQualityMetrics {
@@ -147,6 +168,51 @@ export interface IngestionBatchLedgerDocument {
   rolledBackDocIds?: ObjectId[];
 }
 
+export type DataQualityStatus = 'PASSED' | 'PASSED_WITH_WARNINGS' | 'FAILED';
+
+export interface DuplicateCandidateEntry {
+  recordIndex: number;
+  externalSource: string;
+  externalSourceId: string;
+  tenQuan: string;
+  matchType: 'intra_batch' | 'existing_db_candidate';
+  matchedDocId?: string;
+}
+
+export interface RejectedRecordSample {
+  recordIndex: number;
+  sourceId?: string;
+  errors: IngestionValidationIssue[];
+  rawPreview: Record<string, unknown>;
+}
+
+export interface ErrorCodeGroupSummary {
+  errorCode: string;
+  severity: ValidationSeverity;
+  count: number;
+}
+
+export interface DataQualityReport {
+  totalInputRecords: number;
+  validRecords: number;
+  rejectedRecords: number;
+  warningRecords: number;
+  infoRecords: number;
+  duplicateCandidates: {
+    intraBatchCount: number;
+    existingDbCandidateCount: number;
+    confirmedDuplicatesCount: number;
+    totalCandidateCount: number;
+    note: string;
+    samples: DuplicateCandidateEntry[];
+  };
+  missingFieldCounts: Record<string, number>;
+  invalidFieldCounts: Record<string, number>;
+  issuesByErrorCode: ErrorCodeGroupSummary[];
+  rejectedSample: RejectedRecordSample[];
+  overallQualityStatus: DataQualityStatus;
+}
+
 export interface IngestionBatchSummary {
   batchId: string;
   mode: IngestionMode;
@@ -161,6 +227,7 @@ export interface IngestionBatchSummary {
   metrics: IngestionQualityMetrics;
   validationErrors: IngestionValidationIssue[];
   warnings: IngestionValidationIssue[];
+  dataQualityReport?: DataQualityReport;
 }
 
 export type RollbackConflictReasonCode =

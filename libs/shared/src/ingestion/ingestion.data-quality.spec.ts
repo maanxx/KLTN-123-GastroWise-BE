@@ -1,0 +1,331 @@
+import {
+  evaluateRestaurantDataQuality,
+  EXTERNAL_SOURCE_FOODY,
+  IngestionValidationError,
+  INGESTION_BATCHES_COLLECTION,
+  MAX_REJECTED_SAMPLE_RECORDS,
+  RAW_STAGING_COLLECTION,
+  RESTAURANTS_COLLECTION,
+  runRestaurantIngestionPipeline,
+} from './index';
+import type { Db } from 'mongodb';
+import { ObjectId } from 'mongodb';
+
+describe('M10.3 Restaurant Data Quality & Ingestion Readiness', () => {
+  it('normalizes valid ShopeeFood records deterministically while preserving raw source fields', () => {
+    const res = evaluateRestaurantDataQuality({
+      records: [
+        {
+          RestaurantID: 1000070216,
+          Name: '  Phở   Thìn   Lò Đúc  ',
+          Address: '  13  Lò Đúc, Hai Bà Trưng, Hà Nội ',
+          CityID: 218,
+          Latitude: 21.0112,
+          Longtitude: 105.8551,
+          AvgRating: 8.6,
+          TotalReview: 245,
+          PriceMin: 55000,
+          PriceMax: 85000,
+          Cuisines: [{ Name: 'Phở' }, { Name: 'Món Bắc' }, { Name: 'phở' }],
+          Phone: '+84 912-345-678',
+          MicrositeUrl: '/ha-noi/pho-thin-lo-duc',
+          ResUrlRewrite: 'pho-thin-lo-duc',
+          PictureModel: {
+            ImageUrl: 'https://images.foody.vn/res/g1/pho-thin.jpg',
+          },
+          IsActive: true,
+        },
+      ],
+    });
+
+    expect(res.report.overallQualityStatus).toBe('PASSED');
+    expect(res.report.validRecords).toBe(1);
+    expect(res.report.rejectedRecords).toBe(0);
+    expect(res.report.warningRecords).toBe(0);
+    expect(res.report.infoRecords).toBe(1);
+
+    const cand = res.validatedCandidates[0];
+    expect(cand.externalSource).toBe(EXTERNAL_SOURCE_FOODY);
+    expect(cand.externalSourceId).toBe('1000070216');
+    expect(cand.tenQuan).toBe('Phở Thìn Lò Đúc');
+    expect(cand.diaChi).toBe('13 Lò Đúc, Hai Bà Trưng, Hà Nội');
+    expect(cand.cityId).toBe('hanoi');
+    expect(cand.contactPhone).toBe('0912345678');
+    expect(cand.diemTrungBinh).toBe(4.3);
+    expect(cand.rawRating).toBe(8.6);
+    expect(cand.ratingScale).toBe('10_point');
+    expect(cand.foodyReviewsCount).toBe(245);
+    expect(cand.giaCa).toBe('55.000đ - 85.000đ');
+    expect(cand.tags).toBe('Phở, Món Bắc');
+    expect(cand.urlGoc).toBe('https://www.foody.vn/ha-noi/pho-thin-lo-duc');
+    expect(cand.images).toEqual([
+      'https://images.foody.vn/res/g1/pho-thin.jpg',
+    ]);
+    expect(cand.rawPreserved).toMatchObject({
+      name: 'Phở   Thìn   Lò Đúc',
+      address: '13  Lò Đúc, Hai Bà Trưng, Hà Nội',
+      phone: '+84 912-345-678',
+      rating: 8.6,
+      reviewCount: 245,
+    });
+  });
+
+  it('rejects records with missing required fields, invalid ratings, invalid review counts, malformed URLs, and unsupported sources', () => {
+    const res = evaluateRestaurantDataQuality({
+      records: [
+        {
+          // Missing RestaurantID and Name
+          Address: '123 Lê Lợi, Q1',
+        },
+        {
+          RestaurantID: 'bad-rating-1',
+          Name: 'Quán Rating Lỗi',
+          AvgRating: 12.5,
+          TotalReview: -5,
+          MicrositeUrl: 'javascript:alert(1)',
+        },
+        {
+          RestaurantID: 'bad-rating-2',
+          Name: 'Quán Rating Chuỗi',
+          AvgRating: 'not-a-number',
+        },
+        {
+          RestaurantID: 'bad-source-1',
+          Name: 'Quán Nguồn Lạ',
+          externalSource: 'unknown_crawler_xyz',
+        },
+      ],
+    });
+
+    expect(res.report.overallQualityStatus).toBe('FAILED');
+    expect(res.report.totalInputRecords).toBe(4);
+    expect(res.report.validRecords).toBe(0);
+    expect(res.report.rejectedRecords).toBe(4);
+    expect(res.validatedCandidates).toHaveLength(0);
+
+    const codes = res.errors.map((e) => e.errorCode);
+    expect(codes).toEqual(
+      expect.arrayContaining([
+        'MISSING_EXTERNAL_ID',
+        'MISSING_NAME',
+        'INVALID_RATING',
+        'INVALID_REVIEW_COUNT',
+        'MALFORMED_URL',
+        'UNSUPPORTED_SOURCE_FORMAT',
+      ]),
+    );
+  });
+
+  it('handles invalid coordinates, incomplete addresses, malformed avatar URLs, and null/empty values without fabricating defaults', () => {
+    const res = evaluateRestaurantDataQuality({
+      records: [
+        {
+          RestaurantID: 'warn-1',
+          Name: 'Quán Thiếu Tọa Độ',
+          Address: 'Q1',
+          Latitude: 0,
+          Longtitude: 0,
+          AvgRating: null,
+          PriceMin: 0,
+          PriceMax: '',
+          Phone: 'abc-xyz',
+          avatarUrl: 'not-a-valid-image-url',
+        },
+      ],
+    });
+
+    expect(res.report.overallQualityStatus).toBe('PASSED_WITH_WARNINGS');
+    expect(res.report.validRecords).toBe(1);
+    expect(res.report.rejectedRecords).toBe(0);
+    expect(res.report.warningRecords).toBe(1);
+
+    const cand = res.validatedCandidates[0];
+    expect(cand.location).toBeNull();
+    expect(cand.coordsValid).toBe(false);
+    expect(cand.diemTrungBinh).toBeUndefined();
+    expect(cand.giaCa).toBe('');
+    expect(cand.contactPhone).toBe('');
+    expect(cand.avatarUrl).toBe('');
+
+    const warningCodes = res.warnings.map((w) => w.errorCode);
+    expect(warningCodes).toEqual(
+      expect.arrayContaining([
+        'INCOMPLETE_ADDRESS',
+        'INVALID_OR_MISSING_COORDINATES',
+        'MISSING_RATING',
+        'MISSING_OR_ZERO_PRICE',
+        'MISSING_TAGS',
+        'MALFORMED_IMAGE_URL',
+        'INVALID_PHONE_NUMBER',
+      ]),
+    );
+  });
+
+  it('detects intra-batch duplicate candidates without marking confirmed duplicates or deleting records', () => {
+    const res = evaluateRestaurantDataQuality({
+      records: [
+        {
+          RestaurantID: 'dup-100',
+          Name: 'Cơm Tấm Ba Ghiền',
+          Address: '84 Đặng Văn Ngữ, Phú Nhuận',
+          Latitude: 10.793,
+          Longtitude: 106.671,
+          AvgRating: 8.8,
+        },
+        {
+          RestaurantID: 'dup-100',
+          Name: 'Cơm Tấm Ba Ghiền',
+          Address: '84 Đặng Văn Ngữ, Phú Nhuận',
+          Latitude: 10.793,
+          Longtitude: 106.671,
+          AvgRating: 8.8,
+        },
+      ],
+    });
+
+    expect(res.report.validRecords).toBe(1);
+    expect(res.report.duplicateCandidates.intraBatchCount).toBe(1);
+    expect(res.report.duplicateCandidates.confirmedDuplicatesCount).toBe(0);
+    expect(res.report.duplicateCandidates.totalCandidateCount).toBe(1);
+    expect(res.report.overallQualityStatus).toBe('PASSED_WITH_WARNINGS');
+  });
+
+  it('produces accurate reports and bounds rejected samples for large mixed datasets', () => {
+    const records: Array<Record<string, unknown>> = [
+      {
+        RestaurantID: 'mix-valid-1',
+        Name: 'Bánh Cuốn Tây Hồ',
+        Address: '127 Đinh Tiên Hoàng, Q1',
+        Latitude: 10.791,
+        Longtitude: 106.697,
+        AvgRating: 8.2,
+        PriceMin: 35000,
+        PriceMax: 60000,
+        Cuisines: [{ Name: 'Bánh cuốn' }],
+      },
+    ];
+    for (let i = 0; i < MAX_REJECTED_SAMPLE_RECORDS + 10; i += 1) {
+      records.push({
+        RestaurantID: `mix-bad-${i}`,
+        // Missing Name
+        AvgRating: 'invalid',
+        apiKey: 'should-not-leak',
+      });
+    }
+
+    const res = evaluateRestaurantDataQuality({ records });
+    expect(res.report.totalInputRecords).toBe(MAX_REJECTED_SAMPLE_RECORDS + 11);
+    expect(res.report.validRecords).toBe(1);
+    expect(res.report.rejectedRecords).toBe(MAX_REJECTED_SAMPLE_RECORDS + 10);
+    expect(res.report.rejectedSample).toHaveLength(MAX_REJECTED_SAMPLE_RECORDS);
+    expect(res.report.rejectedSample[0].rawPreview.apiKey).toBeUndefined();
+    expect(res.report.overallQualityStatus).toBe('FAILED');
+    expect(res.report.missingFieldCounts.Name).toBe(
+      MAX_REJECTED_SAMPLE_RECORDS + 10,
+    );
+    expect(res.report.invalidFieldCounts.AvgRating).toBe(
+      MAX_REJECTED_SAMPLE_RECORDS + 10,
+    );
+  });
+
+  it('rejects invalid records before final restaurants writes and keeps dry-run safe in the ingestion pipeline', async () => {
+    const insertedRestaurants: Array<Record<string, unknown>> = [];
+    const insertedStaging: Array<Record<string, unknown>> = [];
+    const insertedLedgers: Array<Record<string, unknown>> = [];
+
+    const makeCol = (target: Array<Record<string, unknown>>) => ({
+      find: () => ({
+        limit: () => ({
+          toArray: () => Promise.resolve([]),
+        }),
+        toArray: () => Promise.resolve([]),
+      }),
+      findOne: () => Promise.resolve(null),
+      insertOne: (doc: Record<string, unknown>) => {
+        target.push(doc);
+        return Promise.resolve({ insertedId: doc._id ?? new ObjectId() });
+      },
+      updateOne: () =>
+        Promise.resolve({
+          matchedCount: 1,
+          modifiedCount: 1,
+          upsertedCount: 0,
+        }),
+      bulkWrite: (ops: Array<Record<string, unknown>>) => {
+        for (const op of ops) {
+          if (op.insertOne) {
+            target.push(
+              (op.insertOne as { document: Record<string, unknown> }).document,
+            );
+          }
+        }
+        return Promise.resolve({
+          insertedCount: ops.length,
+          matchedCount: 0,
+          modifiedCount: 0,
+          upsertedCount: 0,
+        });
+      },
+    });
+
+    const db = {
+      databaseName: 'gastro_core_test',
+      collection: (name: string) => {
+        if (name === RESTAURANTS_COLLECTION)
+          return makeCol(insertedRestaurants);
+        if (name === RAW_STAGING_COLLECTION) return makeCol(insertedStaging);
+        if (name === INGESTION_BATCHES_COLLECTION)
+          return makeCol(insertedLedgers);
+        return makeCol([]);
+      },
+    } as unknown as Db;
+
+    const mixedRaw = JSON.stringify([
+      {
+        RestaurantID: 'pipe-valid-1',
+        Name: 'Bún Chả Hương Liên',
+        Address: '24 Lê Văn Hưu, Hai Bà Trưng',
+        Latitude: 21.018,
+        Longtitude: 105.853,
+        AvgRating: 9.0,
+        PriceMin: 50000,
+        PriceMax: 80000,
+        Cuisines: [{ Name: 'Bún chả' }],
+      },
+      {
+        RestaurantID: 'pipe-invalid-1',
+        Name: 'Quán Lỗi Rating',
+        AvgRating: 99,
+      },
+    ]);
+
+    // Dry-run default performs zero DB writes and returns DataQualityReport
+    const drySummary = await runRestaurantIngestionPipeline(db, {
+      rawContent: mixedRaw,
+      batchId: 'm10-3-dry-run-batch',
+    });
+    expect(drySummary.mode).toBe('dry-run');
+    expect(drySummary.plannedInserts).toBe(1);
+    expect(drySummary.metrics.rejected_count).toBe(1);
+    expect(drySummary.dataQualityReport?.overallQualityStatus).toBe('FAILED');
+    expect(insertedRestaurants).toHaveLength(0);
+    expect(insertedLedgers).toHaveLength(0);
+
+    // Apply mode writes only the 1 valid record to `restaurants`, never the rejected record
+    const applySummary = await runRestaurantIngestionPipeline(db, {
+      rawContent: mixedRaw,
+      mode: 'apply',
+      batchId: 'm10-3-apply-batch',
+    });
+    expect(applySummary.metrics.inserted_count).toBe(1);
+    expect(applySummary.metrics.rejected_count).toBe(1);
+    expect(insertedRestaurants).toHaveLength(1);
+    expect(insertedRestaurants[0].externalSourceId).toBe('pipe-valid-1');
+  });
+
+  it('throws IngestionValidationError when neither rawContent nor records is supplied', () => {
+    expect(() => evaluateRestaurantDataQuality({})).toThrow(
+      IngestionValidationError,
+    );
+  });
+});

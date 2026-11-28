@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import { ObjectId } from 'mongodb';
 import type { AnyBulkWriteOperation, Collection, Db } from 'mongodb';
 import {
+  DuplicateCandidateEntry,
   INGESTION_BATCHES_COLLECTION,
   IngestionBatchLedgerDocument,
   IngestionBatchSummary,
@@ -16,8 +17,13 @@ import {
   IngestionValidationIssue,
   LegacyNormalizedKeyBackfillResult,
   NormalizedRestaurantCandidate,
+  RejectedRecordSample,
   RESTAURANTS_COLLECTION,
 } from './ingestion.types';
+import {
+  buildDataQualityReport,
+  MAX_REJECTED_SAMPLE_RECORDS,
+} from './ingestion.data-quality';
 import {
   buildRawStagingDocuments,
   computeBatchChecksumSha256,
@@ -618,6 +624,9 @@ export async function runRestaurantIngestionPipeline(
 
   const validationErrors: IngestionValidationIssue[] = [];
   const warnings: IngestionValidationIssue[] = [];
+  const infos: IngestionValidationIssue[] = [];
+  const rejectedSample: RejectedRecordSample[] = [];
+  const duplicateCandidateEntries: DuplicateCandidateEntry[] = [];
   const validOutcomes: Array<{
     outcome: RecordNormalizationOutcome;
     candidate: NormalizedRestaurantCandidate;
@@ -647,6 +656,18 @@ export async function runRestaurantIngestionPipeline(
       metrics.rejected_count += 1;
       validationErrors.push(...outcome.errors);
       warnings.push(...outcome.warnings);
+      infos.push(...outcome.infos);
+      if (rejectedSample.length < MAX_REJECTED_SAMPLE_RECORDS) {
+        rejectedSample.push({
+          recordIndex: parsed.recordIndex,
+          sourceId: outcome.errors[0]?.sourceId,
+          errors: outcome.errors,
+          rawPreview: {
+            RestaurantID: parsed.payload.RestaurantID,
+            Name: parsed.payload.Name ?? parsed.payload.tenQuan,
+          },
+        });
+      }
       continue;
     }
 
@@ -677,6 +698,13 @@ export async function runRestaurantIngestionPipeline(
 
     if (isDup) {
       metrics.duplicate_count += 1;
+      duplicateCandidateEntries.push({
+        recordIndex: cand.recordIndex,
+        externalSource: cand.externalSource,
+        externalSourceId: cand.externalSourceId,
+        tenQuan: cand.tenQuan,
+        matchType: 'intra_batch',
+      });
       warnings.push({
         recordIndex: cand.recordIndex,
         field: 'RestaurantID/slug/name+address',
@@ -694,6 +722,7 @@ export async function runRestaurantIngestionPipeline(
     if (nameAddrKey) seenNameAddr.add(nameAddrKey);
 
     warnings.push(...outcome.warnings);
+    infos.push(...outcome.infos);
     if (outcome.invalidOrMissingCoords) {
       metrics.invalid_or_missing_coords_count += 1;
     }
@@ -784,6 +813,14 @@ export async function runRestaurantIngestionPipeline(
 
     if (existing) {
       plannedUpdates += 1;
+      duplicateCandidateEntries.push({
+        recordIndex: cand.recordIndex,
+        externalSource: cand.externalSource,
+        externalSourceId: cand.externalSourceId,
+        tenQuan: cand.tenQuan,
+        matchType: 'existing_db_candidate',
+        matchedDocId: String(existing._id),
+      });
       const { updateSet, nextRevision, postDigest } = buildSafeUpdateSetPayload(
         cand,
         existing,
@@ -820,6 +857,17 @@ export async function runRestaurantIngestionPipeline(
     }
   }
 
+  const dataQualityReport = buildDataQualityReport({
+    totalInputRecords: parsedRecords.length,
+    validRecords: deduplicatedCandidates.length,
+    rejectedRecords: metrics.rejected_count,
+    errors: validationErrors,
+    warnings,
+    infos,
+    duplicateCandidates: duplicateCandidateEntries,
+    rejectedSample,
+  });
+
   if (dryRun) {
     return {
       batchId,
@@ -835,6 +883,7 @@ export async function runRestaurantIngestionPipeline(
       metrics,
       validationErrors,
       warnings,
+      dataQualityReport,
     };
   }
 
@@ -956,6 +1005,7 @@ export async function runRestaurantIngestionPipeline(
     metrics,
     validationErrors,
     warnings,
+    dataQualityReport,
   };
 }
 

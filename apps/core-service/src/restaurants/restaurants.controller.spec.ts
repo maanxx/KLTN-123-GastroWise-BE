@@ -17,6 +17,10 @@ describe('RestaurantsController', () => {
             create: jest.fn(),
             update: jest.fn(),
             remove: jest.fn(),
+            validateDataQuality: jest.fn().mockReturnValue({
+              dryRun: true,
+              validationStatus: 'PASSED',
+            }),
           },
         },
       ],
@@ -27,5 +31,11 @@ describe('RestaurantsController', () => {
 
   it('should be defined', () => {
     expect(controller).toBeDefined();
+  });
+
+  it('delegates data-quality validation requests to RestaurantsService', () => {
+    const payload = { records: [{ RestaurantID: '1', Name: 'Test' }] };
+    const result = controller.validateDataQuality(payload);
+    expect(result).toEqual({ dryRun: true, validationStatus: 'PASSED' });
   });
 });
