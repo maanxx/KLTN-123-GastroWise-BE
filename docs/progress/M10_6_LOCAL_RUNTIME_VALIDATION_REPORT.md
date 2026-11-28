@@ -91,8 +91,60 @@ All containers reported `0` restarts over 3+ hours of uptime with clean startup 
 
 ---
 
-## 7. Remaining Limitations
+## 7. M10.6.1 — Docker Security, Gateway & Post-PR #18 Integration Hardening
 
-- The currently running `gastrowise-core-service:test` container image was built from `main` prior to merging PR #18 (M10.5 `/dishes` endpoints); rebuilding `core-service` after PR #18 merges is required to validate M10.5 `/dishes` routes inside Docker.
-- `Access-Control-Expose-Headers` in `nginx/nginx.conf` currently exposes `Content-Length,Content-Range,X-Correlation-Id` only; cross-origin browser clients reading M10.5.2 legacy menu headers (`X-Result-Truncated`, `X-Total-Count`, `Link`, `Warning`) will need those headers added after PR #18 merges.
-- End-to-end authenticated JWT itinerary generation (`POST /api/v1/itineraries/generate`) was not exercised in this read-only validation pass to avoid mutating the existing local test volume.
+### 7.1 Docker Credential Hardening (`docker-compose.yml`, `.env.example`, `.gitignore`)
+- Removed hardcoded credential fallbacks from `docker-compose.yml` and enforced Docker Compose fail-fast `${VAR:?...}` interpolation for `MONGODB_ROOT_USERNAME`, `MONGODB_ROOT_PASSWORD`, `CORE_DB_USER`, `CORE_DB_PASSWORD`, `PLANNING_DB_USER`, `PLANNING_DB_PASSWORD`, `AI_DB_USER`, `AI_DB_PASSWORD`, `JWT_SECRET`, `INTERNAL_SERVICE_KEY`, `INTERNAL_AI_KEY`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET`.
+- Explicitly cleared `CORE_MONGODB_URI=`, `MONGODB_URI_CORE=`, `PLANNING_MONGODB_URI=`, `MONGODB_URI_PLANNING=`, and `MONGODB_URI=` inside Compose service definitions so host `.env` Atlas URIs can never bleed into isolated local Docker containers.
+- Updated `.env.example` with placeholder-only local Docker test variables and added `.env.docker.local` / `.env.*.local` to `.gitignore`.
+- Verified fail-fast behavior: `docker compose --env-file /dev/null config -q` exited with code `1` (`required variable PLANNING_DB_USER is missing a value: PLANNING_DB_USER is required in .env.docker.local`).
+
+### 7.2 AI Repository Prerequisite (`../KLTN-123-GastroWise-AI`)
+- **Required Workspace Layout:** Sibling directory alongside the backend repository:
+  ```text
+  <workspace-root>/
+  ├── KLTN-123-GastroWise-BE/   # docker-compose.yml (build context for core & planning)
+  └── KLTN-123-GastroWise-AI/   # build context for ai-service (../KLTN-123-GastroWise-AI)
+  ```
+- **Observed AI Repository Branch / Commit:** `feature/m10-ai-data-readiness` (`3159c15`, `[feat]: thien implement ai mongo data readiness and live cross-service validation`).
+- **Build Prerequisites:** Docker Desktop / Engine with Compose v2+, `KLTN-123-GastroWise-AI/Dockerfile` (`python:3.12-slim`) and `requirements.txt` present in `../KLTN-123-GastroWise-AI`.
+- **Exact Local Startup Procedure (never use `down -v`):**
+  ```bash
+  cd KLTN-123-GastroWise-BE
+  cp .env.example .env.docker.local
+  # Edit .env.docker.local with local-only credentials (never commit; never use Atlas URIs)
+  docker compose --env-file .env.docker.local config -q
+  docker compose --env-file .env.docker.local build
+  docker compose --env-file .env.docker.local up -d
+  docker compose --env-file .env.docker.local ps
+  ```
+
+### 7.3 Nginx Gateway Hardening (`nginx/nginx.conf`)
+- Added `proxy_hide_header X-Correlation-Id;` so Nginx propagates `$corr_id` to upstreams while emitting **exactly 1** `X-Correlation-Id` response header (verified: `X-Correlation-Id header count: 1`, value `m1061-corr-check`).
+- Added `X-Result-Truncated`, `X-Total-Count`, `X-Result-Limit`, `X-Legacy-Endpoint`, `Deprecation`, `Link`, and `Warning` to `Access-Control-Expose-Headers` while preserving existing CORS origin whitelist and preflight behavior.
+
+### 7.4 Post-PR #18 Rebuild & Live Verification Results
+
+| Check | Exit Code / HTTP | Observed Result |
+|---|---:|---|
+| `docker compose --env-file /dev/null config -q` | `1` (expected fail-fast) | Rejected missing required credential (`PLANNING_DB_USER is required in .env.docker.local`) |
+| `git check-ignore -v .env.docker.local` | `0` | Matched `.gitignore:44:.env.*.local` |
+| `docker compose --env-file .env.docker.local config -q` | `0` | `COMPOSE_CONFIG_OK` |
+| `docker compose --env-file .env.docker.local build core-service planning-service` | `0` | Rebuilt `core-service` and `planning-service` with merged PR #18 (`18a2020`) |
+| `docker compose --env-file .env.docker.local up -d core-service planning-service nginx-gateway` + `nginx -s reload` | `0` | All 5 containers `running` + `healthy`, `restarts=0`, existing `mongo_test_data` preserved |
+| `GET /api/v1/restaurants?page=1&limit=5` (`Origin: http://localhost:3000`, `X-Correlation-Id: m1061-corr-check`) | `HTTP 200` | Single `X-Correlation-Id: m1061-corr-check`; `Access-Control-Expose-Headers` includes `X-Result-Truncated,X-Total-Count,Link,Warning`; body includes M10.5.1 `"isBoundedResult":false` |
+| `GET /api/v1/dishes?page=1&limit=5` | `HTTP 200` | `{"data":[],"total":0,"page":1,"limit":5,"totalPages":0}` |
+| `GET /api/v1/restaurants/674000000000000000000099/dishes` | `HTTP 404` | `Restaurant with ID or slug "674000000000000000000099" not found` |
+| `GET /api/v1/restaurants/bad!id/dishes` | `HTTP 400` | `Invalid restaurant ID or slug "bad!id".` |
+| `GET /api/v1/restaurants/menu/all` | `HTTP 200` | Returns M10.5.2 headers (`X-Legacy-Endpoint: true`, `Deprecation: true`, `Link: </api/v1/dishes>; rel="successor-version"`, `X-Total-Count: 0`, `X-Result-Limit: 200`, `X-Result-Truncated: false`) |
+| Core & Planning `/health/ready` | `HTTP 200` | Both `status: "READY"`, `dbPingOk: true` |
+| MongoDB cross-DB isolation (`gastro_core_svc` → `gastro_planning_test`) | `0` | `ISOLATED_OK: Unauthorized` |
+| Planning → Core internal auth (`/api/v1/internal/restaurants/candidates?limit=1`) | `401` / `401` / `200` | Missing key → `401`, invalid key → `401`, valid `INTERNAL_SERVICE_KEY` → `200` |
+
+---
+
+## 8. Remaining Limitations
+
+- **Empty Local `gastro_core_test` Dataset:** `gastro_core_test.restaurants` currently contains `0` documents in the preserved local volume, so `GET /api/v1/restaurants/{id}/dishes` was verified for `HTTP 400` (invalid ID) and `HTTP 404` (missing restaurant) rather than a populated `HTTP 200` dish list. Seeding `gastro_core_test` via M10.4 local ingestion is needed for populated `HTTP 200` smoke verification.
+- **Duplicate `Access-Control-Allow-Origin` Header on Proxied Responses:** Both Core Service (`enableCors`) and Nginx emit `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials` on `Origin: http://localhost:3000`; left unchanged to preserve existing CORS behavior, recommended for cleanup (`proxy_hide_header Access-Control-Allow-Origin;` in Nginx) in a follow-up task.
+- **Authenticated JWT Itinerary Flow:** End-to-end `POST /api/v1/itineraries/generate` was not run to avoid mutating the preserved local test database.

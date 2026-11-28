@@ -1,6 +1,10 @@
 # ==============================================================================
 # GASTROWISE MICROSERVICES ARCHITECTURE DOCKER COMPOSE TOPOLOGY
-# Milestone 2.2: Isolated Runtime & Networking Validation
+# Isolated Local Runtime & Integration Validation (M10.6.1 Hardened)
+#
+# Usage:
+#   cp .env.example .env.docker.local   # fill in local-only test credentials
+#   docker compose --env-file .env.docker.local up -d
 # ==============================================================================
 
 networks:
@@ -22,18 +26,17 @@ services:
     expose:
       - "27017"
     environment:
-      # Local isolated Docker test defaults ONLY; override via environment variables.
-      # Never reuse Docker test credentials in staging/production.
-      - MONGO_INITDB_ROOT_USERNAME=${MONGODB_ROOT_USERNAME:-gastro_root_staging}
-      - MONGO_INITDB_ROOT_PASSWORD=${MONGODB_ROOT_PASSWORD:-gastro_root_test_pass_change_me}
+      # Explicit local test credentials required (fail-fast; never reuse production/Atlas secrets)
+      - MONGO_INITDB_ROOT_USERNAME=${MONGODB_ROOT_USERNAME:?MONGODB_ROOT_USERNAME is required in .env.docker.local}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGODB_ROOT_PASSWORD:?MONGODB_ROOT_PASSWORD is required in .env.docker.local}
       - CORE_DB_NAME=${CORE_DB_NAME_STAGING:-gastro_core_test}
       - PLANNING_DB_NAME=${PLANNING_DB_NAME_STAGING:-gastro_planning_test}
-      - CORE_DB_USER=${CORE_DB_USER:-gastro_core_svc}
-      - CORE_DB_PASSWORD=${CORE_DB_PASSWORD:-gastro_core_test_pass_change_me}
-      - PLANNING_DB_USER=${PLANNING_DB_USER:-gastro_planning_svc}
-      - PLANNING_DB_PASSWORD=${PLANNING_DB_PASSWORD:-gastro_planning_test_pass_change_me}
-      - AI_DB_USER=${AI_DB_USER:-gastro_ai_reader}
-      - AI_DB_PASSWORD=${AI_DB_PASSWORD:-gastro_ai_test_pass_change_me}
+      - CORE_DB_USER=${CORE_DB_USER:?CORE_DB_USER is required in .env.docker.local}
+      - CORE_DB_PASSWORD=${CORE_DB_PASSWORD:?CORE_DB_PASSWORD is required in .env.docker.local}
+      - PLANNING_DB_USER=${PLANNING_DB_USER:?PLANNING_DB_USER is required in .env.docker.local}
+      - PLANNING_DB_PASSWORD=${PLANNING_DB_PASSWORD:?PLANNING_DB_PASSWORD is required in .env.docker.local}
+      - AI_DB_USER=${AI_DB_USER:?AI_DB_USER is required in .env.docker.local}
+      - AI_DB_PASSWORD=${AI_DB_PASSWORD:?AI_DB_PASSWORD is required in .env.docker.local}
     volumes:
       - mongo_test_data:/data/db
       - ./docker/mongo/01-init-users.js:/docker-entrypoint-initdb.d/01-init-users.js:ro
@@ -41,7 +44,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "mongosh --quiet -u \"$$MONGO_INITDB_ROOT_USERNAME\" -p \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval \"if (!db.getSiblingDB(process.env.CORE_DB_NAME || 'gastro_core_test').getUser(process.env.CORE_DB_USER || 'gastro_core_svc')) { quit(1); } db.adminCommand('ping')\"",
+          "mongosh --quiet -u \"$$MONGO_INITDB_ROOT_USERNAME\" -p \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval \"if (!db.getSiblingDB(process.env.CORE_DB_NAME || 'gastro_core_test').getUser(process.env.CORE_DB_USER)) { quit(1); } db.adminCommand('ping')\"",
         ]
       interval: 5s
       timeout: 5s
@@ -90,19 +93,20 @@ services:
       - PORT=3001
       - CORE_SERVICE_PORT=3001
       - NODE_ENV=production
-      - CORE_MONGODB_URI=${CORE_MONGODB_URI:-}
-      - MONGODB_URI_CORE=${MONGODB_URI_CORE:-}
+      # Explicitly pin to isolated local mongo-test (never inherit host Atlas URIs)
+      - CORE_MONGODB_URI=
+      - MONGODB_URI_CORE=
       - CORE_DB_NAME=${CORE_DB_NAME_STAGING:-gastro_core_test}
-      - CORE_DB_USER=${CORE_DB_USER:-gastro_core_svc}
-      - CORE_DB_PASSWORD=${CORE_DB_PASSWORD:-gastro_core_test_pass_change_me}
+      - CORE_DB_USER=${CORE_DB_USER:?CORE_DB_USER is required in .env.docker.local}
+      - CORE_DB_PASSWORD=${CORE_DB_PASSWORD:?CORE_DB_PASSWORD is required in .env.docker.local}
       - MONGO_HOST=mongo-test
       - MONGO_PORT=27017
       - MONGO_AUTH_SOURCE=${CORE_DB_NAME_STAGING:-gastro_core_test}
-      - JWT_SECRET=${JWT_SECRET:-test_jwt_secret_32_characters_long_for_m22}
-      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:-test_internal_service_key_32_characters}
-      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:-test_internal_ai_key_32_characters}
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-test-client-id.apps.googleusercontent.com}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-test-client-secret}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required in .env.docker.local}
+      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:?INTERNAL_SERVICE_KEY is required in .env.docker.local}
+      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:?INTERNAL_AI_KEY is required in .env.docker.local}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:?GOOGLE_CLIENT_ID is required in .env.docker.local}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:?GOOGLE_CLIENT_SECRET is required in .env.docker.local}
       - AI_SERVICE_URL=http://ai-service:5000
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/health/ready || exit 1"]
@@ -131,17 +135,18 @@ services:
       - PORT=3003
       - PLANNING_SERVICE_PORT=3003
       - NODE_ENV=production
-      - PLANNING_MONGODB_URI=${PLANNING_MONGODB_URI:-}
-      - MONGODB_URI_PLANNING=${MONGODB_URI_PLANNING:-}
+      # Explicitly pin to isolated local mongo-test (never inherit host Atlas URIs)
+      - PLANNING_MONGODB_URI=
+      - MONGODB_URI_PLANNING=
       - PLANNING_DB_NAME=${PLANNING_DB_NAME_STAGING:-gastro_planning_test}
-      - PLANNING_DB_USER=${PLANNING_DB_USER:-gastro_planning_svc}
-      - PLANNING_DB_PASSWORD=${PLANNING_DB_PASSWORD:-gastro_planning_test_pass_change_me}
+      - PLANNING_DB_USER=${PLANNING_DB_USER:?PLANNING_DB_USER is required in .env.docker.local}
+      - PLANNING_DB_PASSWORD=${PLANNING_DB_PASSWORD:?PLANNING_DB_PASSWORD is required in .env.docker.local}
       - MONGO_HOST=mongo-test
       - MONGO_PORT=27017
       - MONGO_AUTH_SOURCE=${PLANNING_DB_NAME_STAGING:-gastro_planning_test}
-      - JWT_SECRET=${JWT_SECRET:-test_jwt_secret_32_characters_long_for_m22}
-      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:-test_internal_service_key_32_characters}
-      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:-test_internal_ai_key_32_characters}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required in .env.docker.local}
+      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:?INTERNAL_SERVICE_KEY is required in .env.docker.local}
+      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:?INTERNAL_AI_KEY is required in .env.docker.local}
       - CORE_SERVICE_URL=http://core-service:3001
       - AI_SERVICE_URL=http://ai-service:5000
     healthcheck:
@@ -160,6 +165,7 @@ services:
 
   # -------------------------------------------------------------
   # AI SERVICE (FastAPI Machine Learning & Optimization Engine)
+  # Prerequisite: sibling repo ../KLTN-123-GastroWise-AI
   # -------------------------------------------------------------
   ai-service:
     image: gastrowise-ai-service:test
@@ -171,12 +177,13 @@ services:
       - "5000"
     environment:
       - PORT=5000
-      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:-test_internal_ai_key_32_characters}
-      - MONGODB_URI=${AI_MONGODB_URI:-${MONGODB_URI_AI:-}}
+      - INTERNAL_AI_KEY=${INTERNAL_AI_KEY:?INTERNAL_AI_KEY is required in .env.docker.local}
+      # Explicitly pin to isolated local mongo-test (never inherit host Atlas URIs)
+      - MONGODB_URI=
       - MONGODB_DB_NAME=${AI_MONGODB_DB_NAME:-gastro_core_test}
       - MONGODB_COLLECTION_NAME=${MONGODB_COLLECTION_NAME:-restaurants}
-      - AI_DB_USER=${AI_DB_USER:-gastro_ai_reader}
-      - AI_DB_PASSWORD=${AI_DB_PASSWORD:-gastro_ai_test_pass_change_me}
+      - AI_DB_USER=${AI_DB_USER:?AI_DB_USER is required in .env.docker.local}
+      - AI_DB_PASSWORD=${AI_DB_PASSWORD:?AI_DB_PASSWORD is required in .env.docker.local}
       - MONGO_HOST=mongo-test
       - MONGO_PORT=27017
       - MONGO_AUTH_SOURCE=${AI_MONGODB_DB_NAME:-gastro_core_test}
