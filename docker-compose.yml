@@ -153,7 +153,7 @@ services:
       mongo-test:
         condition: service_healthy
       core-service:
-        condition: service_started
+        condition: service_healthy
     networks:
       - gastrowise_network
     restart: unless-stopped
