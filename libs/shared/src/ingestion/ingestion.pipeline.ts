@@ -25,6 +25,10 @@ import {
   MAX_REJECTED_SAMPLE_RECORDS,
 } from './ingestion.data-quality';
 import {
+  redactSensitiveDiagnosticString,
+  sanitizeRawPreview,
+} from './ingestion.sanitizer';
+import {
   buildRawStagingDocuments,
   computeBatchChecksumSha256,
   createIngestionBatchId,
@@ -597,8 +601,9 @@ export async function runRestaurantIngestionPipeline(
   const rawSource = options.source?.trim() || 'foody_shopeefood';
   const source = rawSource.toLowerCase();
   if (!isSupportedIngestionSource(source)) {
+    const safeSource = redactSensitiveDiagnosticString(rawSource, 64);
     throw new IngestionValidationError(
-      `Unsupported batch source "${rawSource}".`,
+      `Unsupported batch source "${safeSource}".`,
     );
   }
   const checksumSha256 = computeBatchChecksumSha256(options.rawContent);
@@ -673,10 +678,10 @@ export async function runRestaurantIngestionPipeline(
           recordIndex: parsed.recordIndex,
           sourceId: outcome.errors[0]?.sourceId,
           errors: outcome.errors,
-          rawPreview: {
+          rawPreview: sanitizeRawPreview({
             RestaurantID: parsed.payload.RestaurantID,
             Name: parsed.payload.Name ?? parsed.payload.tenQuan,
-          },
+          }),
         });
       }
       continue;

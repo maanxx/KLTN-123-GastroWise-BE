@@ -19,20 +19,17 @@ import {
 } from './ingestion.staging';
 import {
   isSupportedIngestionSource,
-  redactUrlCredentials,
   validateAndNormalizeRestaurantRecord,
 } from './ingestion.normalizer';
+import {
+  redactSensitiveDiagnosticString,
+  sanitizeRawPreview,
+} from './ingestion.sanitizer';
 
 export const MAX_REJECTED_SAMPLE_RECORDS = 50 as const;
 export const MAX_DUPLICATE_CANDIDATE_SAMPLES = 50 as const;
 export const MAX_RAW_CONTENT_BYTES = 2 * 1024 * 1024;
 export const MAX_DATA_QUALITY_RECORDS = 5000 as const;
-const MAX_SANITIZE_DEPTH = 4;
-const MAX_SANITIZE_OBJECT_KEYS = 20;
-const MAX_SANITIZE_ARRAY_ITEMS = 20;
-const MAX_SANITIZE_STRING_LENGTH = 500;
-const SENSITIVE_KEY_PATTERN =
-  /password|passphrase|secret|token|api[-_]?key|auth(?:orization)?|cookie|credential|private[-_]?key|session/i;
 
 export interface EvaluateDataQualityOptions {
   rawContent?: string;
@@ -88,91 +85,6 @@ function normalizeUrlToken(value: unknown): string {
     return '';
   }
   return value.trim().replace(/\/+$/, '').toLowerCase();
-}
-
-function sanitizeSanitizedString(value: string): string {
-  const redacted = redactUrlCredentials(value);
-  if (redacted.length > MAX_SANITIZE_STRING_LENGTH) {
-    return `${redacted.slice(0, MAX_SANITIZE_STRING_LENGTH)}...[truncated]`;
-  }
-  return redacted;
-}
-
-function sanitizePreviewValue(
-  value: unknown,
-  depth: number,
-  seen: WeakSet<object>,
-): unknown {
-  if (value === null || value === undefined || typeof value === 'boolean') {
-    return value;
-  }
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : '[NonFiniteNumber]';
-  }
-  if (typeof value === 'string') {
-    return sanitizeSanitizedString(value);
-  }
-  if (typeof value === 'bigint') {
-    return value.toString();
-  }
-  if (typeof value !== 'object') {
-    return '[UnsupportedValue]';
-  }
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime())
-      ? '[InvalidDate]'
-      : value.toISOString();
-  }
-
-  if (seen.has(value)) {
-    return '[Circular]';
-  }
-
-  if (depth >= MAX_SANITIZE_DEPTH) {
-    return Array.isArray(value) ? '[MaxDepthArray]' : '[MaxDepthObject]';
-  }
-
-  seen.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const limit = Math.min(value.length, MAX_SANITIZE_ARRAY_ITEMS);
-      const out: unknown[] = [];
-      for (let i = 0; i < limit; i += 1) {
-        out.push(sanitizePreviewValue(value[i], depth + 1, seen));
-      }
-      if (value.length > limit) {
-        out.push(`[+${value.length - limit} more items]`);
-      }
-      return out;
-    }
-
-    const safe: Record<string, unknown> = {};
-    let count = 0;
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (SENSITIVE_KEY_PATTERN.test(k)) {
-        continue;
-      }
-      if (count >= MAX_SANITIZE_OBJECT_KEYS) {
-        break;
-      }
-      safe[k] = sanitizePreviewValue(v, depth + 1, seen);
-      count += 1;
-    }
-    return safe;
-  } finally {
-    seen.delete(value);
-  }
-}
-
-export function sanitizeRawPreview(
-  payload: Record<string, unknown>,
-): Record<string, unknown> {
-  const sanitized = sanitizePreviewValue(payload, 0, new WeakSet<object>());
-  return typeof sanitized === 'object' &&
-    sanitized !== null &&
-    !Array.isArray(sanitized)
-    ? (sanitized as Record<string, unknown>)
-    : {};
 }
 
 export function buildDataQualityReport(params: {
@@ -280,8 +192,9 @@ export function evaluateRestaurantDataQuality(
   const rawSource = options.source?.trim() || EXTERNAL_SOURCE_FOODY;
   const source = rawSource.toLowerCase();
   if (!isSupportedIngestionSource(source)) {
+    const safeSource = redactSensitiveDiagnosticString(rawSource, 64);
     throw new IngestionValidationError(
-      `Unsupported batch source "${rawSource}". Supported sources: ${SUPPORTED_INGESTION_SOURCES.join(', ')}.`,
+      `Unsupported batch source "${safeSource}". Supported sources: ${SUPPORTED_INGESTION_SOURCES.join(', ')}.`,
     );
   }
 
@@ -329,7 +242,14 @@ export function evaluateRestaurantDataQuality(
         !Array.isArray(payload)
           ? payload
           : { _invalidPayload: payload };
-      hash.update(JSON.stringify(normalizedPayload), 'utf8');
+      try {
+        hash.update(JSON.stringify(normalizedPayload), 'utf8');
+      } catch {
+        hash.update(
+          JSON.stringify(sanitizeRawPreview(normalizedPayload)),
+          'utf8',
+        );
+      }
       return {
         recordIndex: idx,
         payload: normalizedPayload,

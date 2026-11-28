@@ -1,4 +1,5 @@
 export * from './ingestion.types';
+export * from './ingestion.sanitizer';
 export * from './ingestion.connection';
 export * from './ingestion.staging';
 export * from './ingestion.normalizer';

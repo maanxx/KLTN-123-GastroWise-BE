@@ -11,6 +11,10 @@ import {
   ParsedRawRecord,
   SUPPORTED_INGESTION_SOURCES,
 } from './ingestion.types';
+import {
+  redactSensitiveDiagnosticString,
+  sanitizeDiagnosticValue,
+} from './ingestion.sanitizer';
 
 export interface RecordNormalizationOutcome {
   candidate: NormalizedRestaurantCandidate | null;
@@ -41,9 +45,7 @@ export function isFoodyFamilySource(source: string): boolean {
 }
 
 export function redactUrlCredentials(rawUrl: string): string {
-  return rawUrl
-    .replace(/(https?:\/\/)([^/@\s]+@)/gi, '$1***@')
-    .replace(/([?&](?:token|key|secret|password|auth)=)[^&\s]+/gi, '$1***');
+  return redactSensitiveDiagnosticString(rawUrl);
 }
 
 function normalizeDisplayText(raw: string): string {
@@ -489,10 +491,7 @@ export function validateAndNormalizeRestaurantRecord(
       recordIndex,
       field: 'record',
       errorCode: 'MALFORMED_RECORD',
-      reason:
-        typeof payload._parseError === 'string'
-          ? `Malformed JSON record: ${payload._parseError}`
-          : 'Record must be a valid JSON object.',
+      reason: 'Record must be a valid JSON object.',
       severity: 'error',
     });
     return {
@@ -521,14 +520,15 @@ export function validateAndNormalizeRestaurantRecord(
     ? normalizedSource
     : resolvedRawSource;
   if (!isSupportedIngestionSource(normalizedSource)) {
+    const safeSource = redactSensitiveDiagnosticString(resolvedRawSource, 64);
     errors.push({
       recordIndex,
       field: 'externalSource',
       errorCode: 'UNSUPPORTED_SOURCE_FORMAT',
-      reason: `Unsupported externalSource "${resolvedRawSource}". Supported sources: ${SUPPORTED_INGESTION_SOURCES.join(', ')}.`,
+      reason: `Unsupported externalSource "${safeSource}". Supported sources: ${SUPPORTED_INGESTION_SOURCES.join(', ')}.`,
       severity: 'error',
       sourceId: externalSourceId || undefined,
-      originalValue: resolvedRawSource,
+      originalValue: sanitizeDiagnosticValue(resolvedRawSource),
     });
   }
 
@@ -590,7 +590,7 @@ export function validateAndNormalizeRestaurantRecord(
         'Review count must be a non-negative finite number when provided.',
       severity: 'error',
       sourceId: externalSourceId || undefined,
-      originalValue: rawReviewInputValue,
+      originalValue: sanitizeDiagnosticValue(rawReviewInputValue),
     });
   }
 
@@ -615,7 +615,7 @@ export function validateAndNormalizeRestaurantRecord(
           : 'Rating must be a finite number within [0, 10].',
       severity: 'error',
       sourceId: externalSourceId || undefined,
-      originalValue: rawRatingInputValue,
+      originalValue: sanitizeDiagnosticValue(rawRatingInputValue),
     });
   }
 
@@ -631,7 +631,7 @@ export function validateAndNormalizeRestaurantRecord(
         'Source URL must be a valid HTTP/HTTPS URL or relative Foody path.',
       severity: 'error',
       sourceId: externalSourceId || undefined,
-      originalValue: redactUrlCredentials(rawMicrosite),
+      originalValue: sanitizeDiagnosticValue(rawMicrosite),
     });
   } else if (derivedFromSlug) {
     infos.push({
@@ -641,7 +641,7 @@ export function validateAndNormalizeRestaurantRecord(
       reason: 'Derived canonical source URL from ResUrlRewrite/slug.',
       severity: 'info',
       sourceId: externalSourceId || undefined,
-      originalValue: slug,
+      originalValue: sanitizeDiagnosticValue(slug),
     });
   }
 
@@ -680,7 +680,7 @@ export function validateAndNormalizeRestaurantRecord(
       reason: 'Address appears incomplete; manual review recommended.',
       severity: 'warning',
       sourceId: externalSourceId,
-      originalValue: rawAddress,
+      originalValue: sanitizeDiagnosticValue(rawAddress),
     });
   }
 
@@ -828,7 +828,7 @@ export function validateAndNormalizeRestaurantRecord(
       reason: 'Avatar image URL is not a valid HTTP/HTTPS URL; omitted safely.',
       severity: 'warning',
       sourceId: externalSourceId,
-      originalValue: rawAvatar,
+      originalValue: sanitizeDiagnosticValue(rawAvatar),
     });
   }
   const images = extractImages(payload, avatarUrl);
@@ -844,7 +844,7 @@ export function validateAndNormalizeRestaurantRecord(
       reason: 'Phone number format is invalid; omitted safely.',
       severity: 'warning',
       sourceId: externalSourceId,
-      originalValue: rawPhone,
+      originalValue: sanitizeDiagnosticValue(rawPhone),
     });
   }
 
@@ -897,15 +897,23 @@ export function validateAndNormalizeRestaurantRecord(
     status,
     ingestionBatchId: batchId,
     rawPreserved: {
-      name: rawName || undefined,
-      address: rawAddress || undefined,
-      phone: rawPhone || undefined,
-      url: rawMicrosite || undefined,
-      avatarUrl: rawAvatar || undefined,
-      rating: rawRatingInputValue,
-      reviewCount: rawReviewInputValue,
+      name: rawName ? redactSensitiveDiagnosticString(rawName) : undefined,
+      address: rawAddress
+        ? redactSensitiveDiagnosticString(rawAddress)
+        : undefined,
+      phone: rawPhone ? redactSensitiveDiagnosticString(rawPhone) : undefined,
+      url: rawMicrosite
+        ? redactSensitiveDiagnosticString(rawMicrosite)
+        : undefined,
+      avatarUrl: rawAvatar
+        ? redactSensitiveDiagnosticString(rawAvatar)
+        : undefined,
+      rating: sanitizeDiagnosticValue(rawRatingInputValue),
+      reviewCount: sanitizeDiagnosticValue(rawReviewInputValue),
       sourceMetadata:
-        Object.keys(sourceMetadata).length > 0 ? sourceMetadata : undefined,
+        Object.keys(sourceMetadata).length > 0
+          ? (sanitizeDiagnosticValue(sourceMetadata) as Record<string, unknown>)
+          : undefined,
     },
   };
 

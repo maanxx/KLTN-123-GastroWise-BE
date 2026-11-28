@@ -576,5 +576,80 @@ describe('M10.3 Restaurant Data Quality & Ingestion Readiness', () => {
         MAX_REJECTED_SAMPLE_RECORDS,
       );
     });
+
+    it('sanitizes malicious secrets, nested objects, arrays, and circular values across all diagnostic originalValue and reason fields (M10.3.2.1)', () => {
+      const circularRating: Record<string, unknown> = {
+        password: 'rating-password-leak',
+        nested: {
+          token: 'rating-token-leak',
+          safeHint: 'bad-rating-obj',
+        },
+      };
+      circularRating.self = circularRating;
+
+      const res = evaluateRestaurantDataQuality({
+        records: [
+          {
+            RestaurantID: 'mal-1',
+            Name: 'Quán Malicious Diagnostics',
+            AvgRating: circularRating,
+            TotalReview: [
+              {
+                apiKey: 'rev-apikey-leak',
+                authorization: 'Bearer rev-bearer-leak',
+                safeTag: 'bad-review-item',
+              },
+            ],
+            MicrositeUrl:
+              'https://admin:urlpass@bad host/path?cookie=ck123&apiKey=ak999',
+            externalSource:
+              'https://u:srcpass@evil.local/feed?secret=srcsec-leak',
+          },
+          {
+            RestaurantID: 'mal-2',
+            Name: 'Quán Malicious Warnings',
+            Address: 'Q1',
+            Latitude: 10.77,
+            Longtitude: 106.7,
+            AvgRating: 8.2,
+            Phone: 'Bearer phone-jwt-leak password=phone-pass-leak',
+            avatarUrl:
+              'ftp://imguser:imgpass-leak@cdn.local/pic.jpg?privateKey=pk-leak',
+          },
+        ],
+      });
+
+      const fullJson = JSON.stringify(res);
+      for (const secret of [
+        'rating-password-leak',
+        'rating-token-leak',
+        'rev-apikey-leak',
+        'rev-bearer-leak',
+        'urlpass',
+        'ck123',
+        'ak999',
+        'srcpass',
+        'srcsec-leak',
+        'phone-jwt-leak',
+        'phone-pass-leak',
+        'imgpass-leak',
+        'pk-leak',
+      ]) {
+        expect(fullJson).not.toContain(secret);
+      }
+
+      // Safe diagnostic hints are preserved
+      expect(fullJson).toContain('bad-rating-obj');
+      expect(fullJson).toContain('[Circular]');
+      expect(fullJson).toContain('bad-review-item');
+
+      // Malformed JSONL line with secret must not echo raw payload in reason
+      const malformedRes = evaluateRestaurantDataQuality({
+        rawContent: '{ "password": "raw-jsonl-secret-leak", broken',
+        format: 'jsonl',
+      });
+      const malformedJson = JSON.stringify(malformedRes);
+      expect(malformedJson).not.toContain('raw-jsonl-secret-leak');
+    });
   });
 });

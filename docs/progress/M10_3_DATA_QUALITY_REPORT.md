@@ -28,7 +28,8 @@
 |---|---|
 | `libs/shared/src/ingestion/ingestion.types.ts` | Added `'info'` severity, `originalValue`, `SUPPORTED_INGESTION_SOURCES`, `PreservedRawRestaurantFields`, `images`, `DataQualityStatus`, `DuplicateCandidateEntry`, `RejectedRecordSample`, `ErrorCodeGroupSummary`, `DataQualityReport`, and optional `dataQualityReport` on `IngestionBatchSummary`. |
 | `libs/shared/src/ingestion/ingestion.normalizer.ts` | Added `normalizeDisplayText()`, `normalizePhoneNumber()`, `extractImages()`, explicit validation for `UNSUPPORTED_SOURCE_FORMAT`, `INVALID_RATING`, `INVALID_REVIEW_COUNT`, `MALFORMED_URL`, `MALFORMED_IMAGE_URL`, `INCOMPLETE_ADDRESS`, `INVALID_PHONE_NUMBER`, `'info'` diagnostics (`RATING_NORMALIZED_10_TO_5`, `SOURCE_URL_DERIVED_FROM_SLUG`), and `rawPreserved` snapshot. |
-| `libs/shared/src/ingestion/ingestion.data-quality.ts` | Added `evaluateRestaurantDataQuality()` (in-memory, zero DB writes) and `buildDataQualityReport()` shared with `runRestaurantIngestionPipeline()`. |
+| `libs/shared/src/ingestion/ingestion.sanitizer.ts` | Added shared recursive diagnostic/preview sanitizer (`sanitizeDiagnosticValue()`, `sanitizeRawPreview()`, `redactSensitiveDiagnosticString()`) that redacts credentials/tokens/cookies/secrets across objects, arrays, URLs, JSON strings, circular refs, and deep trees, and strips internal raw-line keys (`_malformedJsonLine`, `_parseError`, `_invalidPayload`). |
+| `libs/shared/src/ingestion/ingestion.data-quality.ts` | Added `evaluateRestaurantDataQuality()` (in-memory, zero DB writes) with mutual exclusion (`rawContent` XOR `records`), 2 MB raw / 5,000 record caps, clamped `maxRejectedSample` (`<= 50`), circular-safe incremental SHA-256 hashing, source provenance propagation, and `buildDataQualityReport()` shared with `runRestaurantIngestionPipeline()`. |
 | `libs/shared/src/ingestion/ingestion.pipeline.ts` | Populated `dataQualityReport` on both `dry-run` and `apply` `IngestionBatchSummary` outputs, tracking `intra_batch` and `existing_db_candidate` entries separately from `confirmedDuplicatesCount: 0`. |
 | `libs/shared/src/ingestion/index.ts` | Exported `./ingestion.data-quality`. |
 | `apps/core-service/src/restaurants/dto/validate-restaurant-data-quality.dto.ts` | Added DTO for `POST /restaurants/data-quality/validate`. |
@@ -144,17 +145,17 @@
 
 ## 7. Local Verification Results vs. GitHub Actions CI
 
-All checks below ran **locally** after the final code edits (in-memory database mocks used in unit/pipeline specs; no Atlas or production connections):
+All checks below ran **locally** after the final M10.3.2.1 security closure edits (in-memory DB mocks used in unit/pipeline specs; global `ValidationPipe({ whitelist: true, transform: true })` verified in `apps/core-service/src/main.ts:20`; no Atlas or production connections):
 
 | Command | Exit Code | Observed Result |
 |---|---:|---|
 | `npx eslint "libs/shared/src/ingestion/*.ts" apps/core-service/src/restaurants/dto/validate-restaurant-data-quality.dto.ts apps/core-service/src/restaurants/restaurants.controller.spec.ts` | `0` | `0` errors, `0` warnings across all ingestion & new API DTO/spec files. |
-| `npm run build:all` | `0` | Built `core-service` and `planning-service` cleanly. |
 | `npx tsc -p tsconfig.build.json --noEmit` | `0` | `0` TypeScript errors. |
-| `npm run test:microservices` | `0` | **34 passed / 34 suites, 237 passed / 237 tests, 0 failed, 0 skipped.** |
+| `npm run build:all` | `0` | Built `core-service` and `planning-service` cleanly. |
+| `npm run test:microservices` | `0` | **34 passed / 34 suites, 248 passed / 248 tests, 0 failed, 0 skipped.** |
 | `git diff --check` | `0` | Zero whitespace errors or conflict markers. |
 
-- **GitHub Actions CI:** Pending remote workflow execution upon pushing `feat/m10-3-restaurant-data-quality` and opening the PR; not observed locally.
+- **GitHub Actions CI:** Pending remote workflow execution on GitHub for PR #16; not observed locally.
 
 ---
 
