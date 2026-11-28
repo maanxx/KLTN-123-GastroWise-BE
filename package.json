@@ -30,7 +30,8 @@
     "migrate:status": "ts-node -r tsconfig-paths/register scripts/migrations/cli.ts status",
     "migrate:up": "ts-node -r tsconfig-paths/register scripts/migrations/cli.ts up",
     "migrate:down": "ts-node -r tsconfig-paths/register scripts/migrations/cli.ts down",
-    "ingest:restaurants": "ts-node -r tsconfig-paths/register scripts/ingestion/ingest.ts"
+    "ingest:restaurants": "ts-node -r tsconfig-paths/register scripts/ingestion/ingest.ts",
+    "ingest:food-dataset": "ts-node -r tsconfig-paths/register scripts/ingestion/ingest-food-dataset.ts"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

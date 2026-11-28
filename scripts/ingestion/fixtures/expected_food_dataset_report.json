@@ -1,0 +1,38 @@
+{
+  "description": "Expected summary counters when importing scripts/ingestion/fixtures/sample_shopeefood_food_dataset.json into an empty local gastro_core_test database.",
+  "firstApplyRun": {
+    "totalRecordsReceived": 15,
+    "validRecords": 9,
+    "rejectedRecords": 4,
+    "insertedRecords": 9,
+    "updatedRecords": 0,
+    "skippedDuplicates": 2,
+    "restaurants": {
+      "totalReceived": 5,
+      "valid": 3,
+      "rejected": 1,
+      "inserted": 3,
+      "updated": 0,
+      "skippedDuplicates": 1
+    },
+    "dishes": {
+      "totalReceived": 10,
+      "valid": 6,
+      "rejected": 3,
+      "inserted": 6,
+      "updated": 0,
+      "skippedDuplicates": 1
+    },
+    "validationErrorsByField": {
+      "restaurant.Name": 1,
+      "dish.price": 1,
+      "dish.name": 1,
+      "dish.restaurantExternalId": 1
+    }
+  },
+  "secondApplyRunIdempotent": {
+    "insertedRecords": 0,
+    "updatedRecords": 0,
+    "dishesSkippedDuplicates": 7
+  }
+}
