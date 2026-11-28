@@ -22,6 +22,8 @@ import { CreateMenuItemDto } from './dto/create-menu-item.dto';
 import { UpdateMenuItemDto } from './dto/update-menu-item.dto';
 import { ChatRestaurantDto } from './dto/chat-restaurant.dto';
 import { ValidateRestaurantDataQualityDto } from './dto/validate-restaurant-data-quality.dto';
+import { QueryRestaurantsDto } from './dto/query-restaurants.dto';
+import { QueryDishesDto } from './dto/query-dishes.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -80,31 +82,28 @@ export class RestaurantsController {
   }
 
   @Get()
-  findAll(
-    @Query('page') page: number,
-    @Query('limit') limit: number,
-    @Query('sortBy') sortBy: string,
-    @Query('order') order: string,
-    @Query('rating') rating: string,
-    @Query('openNow') openNow: string,
-    @Query('userLat') userLat: string,
-    @Query('userLon') userLon: string,
-    @Query('search') search: string,
-    @Query('city') city: string,
-    @Query('tags') tags: string,
-  ) {
+  findAll(@Query() query: QueryRestaurantsDto) {
     return this.restaurantsService.findAll(
-      page,
-      limit,
-      sortBy,
-      order,
-      rating,
-      openNow,
-      userLat,
-      userLon,
-      search,
-      city,
-      tags,
+      query.page,
+      query.limit,
+      query.sortBy,
+      query.order,
+      query.rating,
+      query.openNow,
+      query.userLat,
+      query.userLon,
+      query.search,
+      query.city,
+      query.tags,
+      {
+        district: query.district,
+        area: query.area,
+        cuisine: query.cuisine,
+        minPrice: query.minPrice,
+        maxPrice: query.maxPrice,
+        minRating: query.minRating,
+        status: query.status,
+      },
     );
   }
 
@@ -119,6 +118,18 @@ export class RestaurantsController {
   @Get(':id/menu')
   getMenu(@Param('id') id: string) {
     return this.restaurantsService.getMenu(id);
+  }
+
+  /**
+   * [M10.5] List dishes belonging to a restaurant with pagination, search, price & tag filters
+   * GET /api/v1/restaurants/:id/dishes
+   */
+  @Get(':id/dishes')
+  getRestaurantDishes(
+    @Param('id') id: string,
+    @Query() query: QueryDishesDto,
+  ) {
+    return this.restaurantsService.findDishesByRestaurant(id, query);
   }
 
   /**

@@ -1,0 +1,109 @@
+openapi: 3.0.3
+info:
+  title: GastroWise Core Service — Restaurant & Dish Read APIs (M10.5)
+  version: 1.0.0
+  description: >
+    Validated, paginated Restaurant and Dish (MenuItem) read APIs owned by Core Service
+    (`gastro_core`). Preserves Web, Admin, and Mobile compatibility.
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local API Gateway (Nginx)
+  - url: http://localhost:3001/api/v1
+    description: Core Service Direct
+paths:
+  /restaurants:
+    get:
+      summary: List, search, filter, and sort restaurants with pagination
+      tags: [Restaurants]
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 32 } }
+        - { name: search, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: city, in: query, schema: { type: string, example: hcmc } }
+        - { name: district, in: query, schema: { type: string, example: "Quận 1" } }
+        - { name: area, in: query, schema: { type: string } }
+        - { name: cuisine, in: query, schema: { type: string, example: "Phở" } }
+        - { name: tags, in: query, schema: { type: string } }
+        - { name: minPrice, in: query, schema: { type: number, minimum: 0 } }
+        - { name: maxPrice, in: query, schema: { type: number, minimum: 0 } }
+        - { name: minRating, in: query, schema: { type: number, minimum: 0, maximum: 5 } }
+        - { name: rating, in: query, schema: { type: string, enum: [all, gte4_5, gte4, gte3_5, gte3, lt6] } }
+        - { name: status, in: query, schema: { type: string, enum: [open, closed, pending, all] } }
+        - { name: openNow, in: query, schema: { type: string, enum: ["true", "false"] } }
+        - { name: sortBy, in: query, schema: { type: string, enum: [diemTrungBinh, rating, price, diemGiaCa, diemKhongGian, diemViTri, diemChatLuong, diemPhucVu, distance, default] } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: desc } }
+      responses:
+        "200":
+          description: Paginated list of normalized restaurants with coordinates
+        "400":
+          description: Invalid query parameters (e.g. limit > 100 or minPrice > maxPrice)
+  /restaurants/{id}:
+    get:
+      summary: Get restaurant detail by ObjectId or slug
+      tags: [Restaurants]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Normalized restaurant detail with coordinates
+        "400":
+          description: Invalid restaurant ID or slug format
+        "404":
+          description: Restaurant not found
+  /restaurants/{id}/dishes:
+    get:
+      summary: List dishes belonging to a restaurant with pagination and filters
+      tags: [Dishes]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: search, in: query, schema: { type: string } }
+        - { name: minPrice, in: query, schema: { type: number, minimum: 0 } }
+        - { name: maxPrice, in: query, schema: { type: number, minimum: 0 } }
+        - { name: category, in: query, schema: { type: string, description: "Matches MenuItem.tags" } }
+        - { name: tag, in: query, schema: { type: string } }
+        - { name: isAvailable, in: query, schema: { type: string, enum: ["true", "false"] } }
+        - { name: isVegetarian, in: query, schema: { type: string, enum: ["true", "false"] } }
+        - { name: sortBy, in: query, schema: { type: string, enum: [price, isFeatured, createdAt, name] } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc] } }
+      responses:
+        "200":
+          description: Paginated dishes for the restaurant
+        "400":
+          description: Invalid restaurant ID or query parameters
+        "404":
+          description: Restaurant not found
+  /dishes:
+    get:
+      summary: Search and list dishes across restaurants with pagination and filters
+      tags: [Dishes]
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: search, in: query, schema: { type: string } }
+        - { name: restaurantId, in: query, schema: { type: string } }
+        - { name: minPrice, in: query, schema: { type: number, minimum: 0 } }
+        - { name: maxPrice, in: query, schema: { type: number, minimum: 0 } }
+        - { name: category, in: query, schema: { type: string, description: "Matches MenuItem.tags" } }
+        - { name: isAvailable, in: query, schema: { type: string, enum: ["true", "false"] } }
+        - { name: sortBy, in: query, schema: { type: string, enum: [price, isFeatured, createdAt, name] } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc] } }
+      responses:
+        "200":
+          description: Paginated dish list
+        "400":
+          description: Invalid query parameters or restaurantId
+  /dishes/{id}:
+    get:
+      summary: Get dish detail by ObjectId
+      tags: [Dishes]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Dish detail
+        "400":
+          description: Invalid dish ObjectId
+        "404":
+          description: Dish not found
