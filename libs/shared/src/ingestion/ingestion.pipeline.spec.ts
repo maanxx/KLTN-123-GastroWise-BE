@@ -28,6 +28,30 @@ function valuesEqual(a: unknown, b: unknown): boolean {
   if (a instanceof ObjectId || b instanceof ObjectId) {
     return String(a) === String(b);
   }
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return (
+      a.length === b.length && a.every((item, idx) => valuesEqual(item, b[idx]))
+    );
+  }
+  if (
+    a !== null &&
+    b !== null &&
+    typeof a === 'object' &&
+    typeof b === 'object' &&
+    !(a instanceof Date) &&
+    !(b instanceof Date) &&
+    !(a instanceof ObjectId) &&
+    !(b instanceof ObjectId)
+  ) {
+    const recA = a as Record<string, unknown>;
+    const recB = b as Record<string, unknown>;
+    const keysA = Object.keys(recA);
+    const keysB = Object.keys(recB);
+    return (
+      keysA.length === keysB.length &&
+      keysA.every((k) => k in recB && valuesEqual(recA[k], recB[k]))
+    );
+  }
   return a === b;
 }
 
@@ -36,6 +60,14 @@ function matchesFilter(
   filter: Record<string, unknown>,
 ): boolean {
   for (const [key, cond] of Object.entries(filter)) {
+    if (key === '$and' && Array.isArray(cond)) {
+      const allMatch = cond.every((sub) =>
+        matchesFilter(doc, sub as Record<string, unknown>),
+      );
+      if (!allMatch) return false;
+      continue;
+    }
+
     if (key === '$or' && Array.isArray(cond)) {
       const anyMatch = cond.some((sub) =>
         matchesFilter(doc, sub as Record<string, unknown>),
@@ -116,11 +148,15 @@ function applyUpdate(doc: StoredDoc, update: Record<string, unknown>): boolean {
 
 class InMemoryMongoCollection {
   public readonly findFilters: Array<Record<string, unknown>> = [];
+  public readonly findLimits: Array<number | undefined> = [];
+  public readonly deleteOneFilters: Array<Record<string, unknown>> = [];
+  public readonly updateOneFilters: Array<Record<string, unknown>> = [];
   public beforeInsertOne?: (doc: Record<string, unknown>) => void;
   public beforeUpdateOne?: (
     filter: Record<string, unknown>,
     update: Record<string, unknown>,
   ) => void;
+  public beforeDeleteOne?: (filter: Record<string, unknown>) => void;
   public beforeBulkWrite?: (ops: Array<Record<string, unknown>>) => void;
 
   constructor(public readonly docs: StoredDoc[] = []) {}
@@ -128,9 +164,19 @@ class InMemoryMongoCollection {
   find(filter: Record<string, unknown> = {}) {
     this.findFilters.push({ ...filter });
     const matched = this.docs.filter((d) => matchesFilter(d, filter));
-    return {
-      toArray: () => Promise.resolve(matched.map((d) => ({ ...d }))),
+    let cap: number | undefined;
+    const cursor = {
+      limit: (n: number) => {
+        cap = n;
+        return cursor;
+      },
+      toArray: () => {
+        this.findLimits.push(cap);
+        const sliced = cap !== undefined ? matched.slice(0, cap) : matched;
+        return Promise.resolve(sliced.map((d) => ({ ...d })));
+      },
     };
+    return cursor;
   }
 
   findOne(filter: Record<string, unknown> = {}): Promise<StoredDoc | null> {
@@ -161,6 +207,7 @@ class InMemoryMongoCollection {
     update: Record<string, unknown>,
     options: { upsert?: boolean } = {},
   ) {
+    this.updateOneFilters.push({ ...filter });
     if (this.beforeUpdateOne) {
       this.beforeUpdateOne(filter, update);
     }
@@ -198,6 +245,19 @@ class InMemoryMongoCollection {
       modifiedCount: 0,
       upsertedCount: 0,
     });
+  }
+
+  deleteOne(filter: Record<string, unknown>) {
+    this.deleteOneFilters.push({ ...filter });
+    if (this.beforeDeleteOne) {
+      this.beforeDeleteOne(filter);
+    }
+    const idx = this.docs.findIndex((d) => matchesFilter(d, filter));
+    if (idx !== -1) {
+      this.docs.splice(idx, 1);
+      return Promise.resolve({ deletedCount: 1 });
+    }
+    return Promise.resolve({ deletedCount: 0 });
   }
 
   deleteMany(filter: Record<string, unknown>) {
@@ -883,6 +943,250 @@ describe('M10.2.1 Ingestion Safety Hardening & Recovery', () => {
       expect(rec.previousStatus).toBe('pending');
       expect(rec.finalStatus).toBe('applied');
       expect(rec.actionTaken).toBe('completed_pending_apply');
+    });
+  });
+
+  describe('PR #15 Review Fixes: deleteOne CAS safety, indexed dedup queries & concurrency guarantees', () => {
+    it('enforces explicit protected-field CAS conditions via deleteOne and blocks deletion if protected fields mutate mid-rollback', async () => {
+      const protectedCases: Array<{
+        label: string;
+        mutate: (doc: StoredDoc) => void;
+      }> = [
+        {
+          label: 'isVerified flipped true',
+          mutate: (d) => {
+            d.isVerified = true;
+          },
+        },
+        {
+          label: 'isFeatured flipped true',
+          mutate: (d) => {
+            d.isFeatured = true;
+          },
+        },
+        {
+          label: 'ownerId assigned',
+          mutate: (d) => {
+            d.ownerId = new ObjectId();
+          },
+        },
+        {
+          label: 'reviewsCount incremented',
+          mutate: (d) => {
+            d.reviewsCount = 1;
+          },
+        },
+        {
+          label: 'tracked field tenQuan modified concurrently',
+          mutate: (d) => {
+            d.tenQuan = 'Concurrent Change';
+          },
+        },
+      ];
+
+      for (const testCase of protectedCases) {
+        const { db, collections } = createInMemoryDb();
+        await runRestaurantIngestionPipeline(db, {
+          rawContent: JSON.stringify([
+            {
+              RestaurantID: 9001,
+              Name: `Quán CAS Delete (${testCase.label})`,
+              Address: '10 Nguyễn Huệ',
+              Latitude: 10.774,
+              Longtitude: 106.703,
+              AvgRating: 8.4,
+            },
+          ]),
+          batchId: 'batch_del_cas',
+          mode: 'apply',
+        });
+
+        collections[RESTAURANTS_COLLECTION].beforeDeleteOne = () => {
+          const target = collections[RESTAURANTS_COLLECTION].docs[0];
+          if (target) {
+            testCase.mutate(target);
+          }
+        };
+
+        const rb = await rollbackIngestionBatch(db, 'batch_del_cas', {
+          dryRun: false,
+        });
+        collections[RESTAURANTS_COLLECTION].beforeDeleteOne = undefined;
+
+        expect(rb.status).toBe('conflict');
+        expect(rb.deletedInsertedCount).toBe(0);
+        expect(rb.conflicts).toHaveLength(1);
+        expect(rb.conflicts[0].reasonCode).toBe('CAS_WRITE_MISMATCH');
+        expect(collections[RESTAURANTS_COLLECTION].docs).toHaveLength(1);
+
+        // Verify deleteOne CAS filter included explicit protected & version fields
+        const usedFilter =
+          collections[RESTAURANTS_COLLECTION].deleteOneFilters[0];
+        expect(usedFilter).toBeDefined();
+        expect(usedFilter.ingestionBatchId).toBe('batch_del_cas');
+        expect(usedFilter.ingestionRevision).toBe(1);
+        expect(typeof usedFilter.ingestionPostDigest).toBe('string');
+        expect(usedFilter.updatedAt).toBeInstanceOf(Date);
+        expect(usedFilter.$and).toEqual(
+          expect.arrayContaining([
+            { ownerId: { $exists: false } },
+            {
+              $or: [{ reviewsCount: 0 }, { reviewsCount: { $exists: false } }],
+            },
+            {
+              $or: [{ isVerified: false }, { isVerified: { $exists: false } }],
+            },
+            {
+              $or: [{ isFeatured: false }, { isFeatured: { $exists: false } }],
+            },
+          ]),
+        );
+      }
+    });
+
+    it('blocks updateOne rollback via field/revision CAS if a concurrent writer modifies a tracked catalog field between digest check and final write', async () => {
+      const preId = new ObjectId();
+      const { db, collections } = createInMemoryDb([
+        {
+          _id: preId,
+          externalSource: EXTERNAL_SOURCE_FOODY,
+          externalSourceId: '9002',
+          tenQuan: 'Bánh Cuốn Tây Sơn',
+          diaChi: '127 Phạm Văn Hai',
+          giaCa: '35.000đ',
+          reviewsCount: 0,
+          isVerified: false,
+          isFeatured: false,
+          createdAt: new Date('2025-01-01T00:00:00Z'),
+        },
+      ]);
+
+      await runRestaurantIngestionPipeline(db, {
+        rawContent: JSON.stringify([
+          {
+            RestaurantID: 9002,
+            Name: 'Bánh Cuốn Tây Sơn',
+            Address: '127 Phạm Văn Hai',
+            Latitude: 10.799,
+            Longtitude: 106.665,
+            AvgRating: 8.6,
+            PriceMin: 40000,
+            PriceMax: 65000,
+          },
+        ]),
+        batchId: 'batch_upd_race',
+        mode: 'apply',
+      });
+
+      // Simulate a concurrent non-CAS writer mutating giaCa WITHOUT changing updatedAt or ingestionRevision
+      collections[RESTAURANTS_COLLECTION].beforeUpdateOne = () => {
+        const doc = collections[RESTAURANTS_COLLECTION].docs[0];
+        if (doc) {
+          doc.giaCa = '99.000đ';
+        }
+      };
+
+      const rb = await rollbackIngestionBatch(db, 'batch_upd_race', {
+        dryRun: false,
+      });
+      collections[RESTAURANTS_COLLECTION].beforeUpdateOne = undefined;
+
+      expect(rb.status).toBe('conflict');
+      expect(rb.restoredUpdatedCount).toBe(0);
+      expect(rb.conflicts[0].reasonCode).toBe('CAS_WRITE_MISMATCH');
+      // Concurrent mutation must NOT be overwritten
+      expect(collections[RESTAURANTS_COLLECTION].docs[0].giaCa).toBe('99.000đ');
+      const casFilter =
+        collections[RESTAURANTS_COLLECTION].updateOneFilters.at(-1);
+      expect(casFilter?.ingestionRevision).toBe(1);
+      expect(typeof casFilter?.ingestionPostDigest).toBe('string');
+      expect(casFilter?.giaCa).toBe('40.000đ - 65.000đ');
+    });
+
+    it('uses index-aligned deduplication predicates (compound source+id, slug, url, name+address) with result limit and avoids broad name regex', async () => {
+      const matchingLegacyId = new ObjectId();
+      const sameNameDiffAddrId = new ObjectId();
+      const { db, collections } = createInMemoryDb([
+        {
+          _id: matchingLegacyId,
+          tenQuan: 'Phở Phú Vương',
+          diaChi: '120 Nguyễn Thái Bình, Q1',
+          giaCa: '50.000đ',
+          reviewsCount: 0,
+        },
+        {
+          _id: sameNameDiffAddrId,
+          tenQuan: 'Phở Phú Vương',
+          diaChi: '339 Lê Văn Sỹ, Tân Bình',
+          giaCa: '50.000đ',
+          reviewsCount: 0,
+        },
+      ]);
+
+      const res = await runRestaurantIngestionPipeline(db, {
+        rawContent: JSON.stringify([
+          {
+            RestaurantID: 9010,
+            Name: 'Phở Phú Vương',
+            Address: '120 Nguyễn Thái Bình, Q1',
+            Latitude: 10.769,
+            Longtitude: 106.697,
+            AvgRating: 8.5,
+            ResUrlRewrite: 'pho-phu-vuong-q1',
+            MicrositeUrl: '/ho-chi-minh/pho-phu-vuong-q1',
+          },
+        ]),
+        batchId: 'batch_indexed_dedup',
+        mode: 'apply',
+      });
+
+      expect(res.metrics.updated_count).toBe(1);
+      expect(res.metrics.inserted_count).toBe(0);
+
+      // Same-name different-address doc must stay untouched
+      const untouched = collections[RESTAURANTS_COLLECTION].docs.find(
+        (d) => String(d._id) === sameNameDiffAddrId.toString(),
+      );
+      expect(untouched?.ingestionBatchId).toBeUndefined();
+
+      // Inspect executed query filters and limits
+      const dedupFilter = collections[RESTAURANTS_COLLECTION].findFilters[0];
+      const clauses = dedupFilter.$or as Array<Record<string, unknown>>;
+      expect(Array.isArray(clauses)).toBe(true);
+      expect(clauses).toEqual(
+        expect.arrayContaining([
+          {
+            externalSource: EXTERNAL_SOURCE_FOODY,
+            externalSourceId: '9010',
+          },
+          { slug: { $in: ['pho-phu-vuong-q1'] } },
+          {
+            urlGoc: {
+              $in: [
+                'https://www.foody.vn/ho-chi-minh/pho-phu-vuong-q1',
+                'https://www.foody.vn/ho-chi-minh/pho-phu-vuong-q1/',
+              ],
+            },
+          },
+          {
+            normalizedNameAddressKey: {
+              $in: ['phở phú vương::120 nguyễn thái bình, q1'],
+            },
+          },
+          {
+            tenQuan: 'Phở Phú Vương',
+            diaChi: '120 Nguyễn Thái Bình, Q1',
+          },
+        ]),
+      );
+
+      // Must NOT contain broad $regex or standalone tenQuan filter without diaChi
+      expect(JSON.stringify(clauses)).not.toContain('$regex');
+      expect(clauses.some((c) => 'tenQuan' in c && !('diaChi' in c))).toBe(
+        false,
+      );
+      // Bounded cursor limit enforced per chunk
+      expect(collections[RESTAURANTS_COLLECTION].findLimits[0]).toBe(4);
     });
   });
 });

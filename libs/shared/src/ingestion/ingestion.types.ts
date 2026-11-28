@@ -97,14 +97,18 @@ export interface IngestionInsertedRecordBackup {
   docId: ObjectId;
   postIngestionDigest: string;
   expectedPostUpdatedAt: Date;
+  expectedPostRevision: number;
 }
 
 export interface IngestionUpdatedBackup {
   docId: ObjectId;
   hadBatchIdBefore: boolean;
+  hadRevisionBefore: boolean;
+  hadPostDigestBefore: boolean;
   previousFields: Record<string, unknown>;
   postIngestionDigest: string;
   expectedPostUpdatedAt: Date;
+  expectedPostRevision: number;
   expectedOwnerId: ObjectId | string | null;
   expectedReviewsCount: number;
   expectedIsVerified: boolean;

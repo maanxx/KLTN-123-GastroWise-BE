@@ -67,7 +67,7 @@ export class Restaurant {
   @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'User' })
   ownerId?: mongoose.Types.ObjectId;
 
-  @Prop({ index: true })
+  @Prop({ required: false })
   slug?: string;
 
   @Prop() description?: string;
@@ -111,6 +111,15 @@ export class Restaurant {
 
   @Prop({ required: false })
   ingestionBatchId?: string;
+
+  @Prop({ required: false })
+  ingestionRevision?: number;
+
+  @Prop({ required: false })
+  ingestionPostDigest?: string;
+
+  @Prop({ required: false })
+  normalizedNameAddressKey?: string;
 }
 
 export const RestaurantSchema = SchemaFactory.createForClass(Restaurant);
@@ -135,6 +144,8 @@ RestaurantSchema.index(
     },
   },
 );
+RestaurantSchema.index({ slug: 1 }, { sparse: true });
 RestaurantSchema.index({ urlGoc: 1 }, { sparse: true });
+RestaurantSchema.index({ normalizedNameAddressKey: 1 }, { sparse: true });
 RestaurantSchema.index({ tenQuan: 1, diaChi: 1 });
 RestaurantSchema.index({ ingestionBatchId: 1 }, { sparse: true });

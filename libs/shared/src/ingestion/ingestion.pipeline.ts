@@ -64,10 +64,6 @@ function normalizeUrlKey(value: unknown): string {
   return value.trim().replace(/\/+$/, '').toLowerCase();
 }
 
-function escapeRegexLiteral(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 const BACKUP_TRACKED_KEYS = [
   'externalSource',
   'externalSourceId',
@@ -95,6 +91,7 @@ const BACKUP_TRACKED_KEYS = [
   'slug',
   'contactPhone',
   'status',
+  'normalizedNameAddressKey',
   'updatedAt',
 ] as const;
 
@@ -107,6 +104,21 @@ const DIGEST_STATE_KEYS = [
   'isFeatured',
   'createdAt',
 ] as const;
+
+function readFiniteRevision(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : 0;
+}
+
+export function computeNameAddressKey(
+  tenQuan: unknown,
+  diaChi: unknown,
+): string {
+  const nKey = normalizeMatchKey(tenQuan);
+  const aKey = normalizeMatchKey(diaChi);
+  return nKey && aKey ? `${nKey}::${aKey}` : '';
+}
 
 function canonicalizeValue(value: unknown): unknown {
   if (value === undefined) {
@@ -181,6 +193,8 @@ function extractBackupFields(
   existingDoc: RestaurantDocRecord,
   postUpdateSet: Record<string, unknown>,
   now: Date,
+  nextRevision: number,
+  postDigest: string,
 ): IngestionUpdatedBackup {
   const previousFields: Record<string, unknown> = {};
   for (const key of BACKUP_TRACKED_KEYS) {
@@ -195,10 +209,19 @@ function extractBackupFields(
     previousFields.ingestionBatchId = existingDoc.ingestionBatchId;
   }
 
-  const simulatedPostDoc: Record<string, unknown> = {
-    ...existingDoc,
-    ...postUpdateSet,
-  };
+  const hadRevisionBefore =
+    'ingestionRevision' in existingDoc &&
+    existingDoc.ingestionRevision !== undefined;
+  if (hadRevisionBefore) {
+    previousFields.ingestionRevision = existingDoc.ingestionRevision;
+  }
+
+  const hadPostDigestBefore =
+    'ingestionPostDigest' in existingDoc &&
+    existingDoc.ingestionPostDigest !== undefined;
+  if (hadPostDigestBefore) {
+    previousFields.ingestionPostDigest = existingDoc.ingestionPostDigest;
+  }
 
   const expectedOwnerId =
     existingDoc.ownerId instanceof ObjectId ||
@@ -209,9 +232,12 @@ function extractBackupFields(
   return {
     docId: existingDoc._id,
     hadBatchIdBefore,
+    hadRevisionBefore,
+    hadPostDigestBefore,
     previousFields,
-    postIngestionDigest: computeTrackedDocumentDigest(simulatedPostDoc),
+    postIngestionDigest: postDigest,
     expectedPostUpdatedAt: now,
+    expectedPostRevision: nextRevision,
     expectedOwnerId,
     expectedReviewsCount:
       typeof existingDoc.reviewsCount === 'number' &&
@@ -248,9 +274,18 @@ function buildInsertRestaurantDoc(
     isVerified: false,
     isFeatured: false,
     ingestionBatchId: candidate.ingestionBatchId,
+    ingestionRevision: 1,
     createdAt: now,
     updatedAt: now,
   };
+
+  const nameAddrKey = computeNameAddressKey(
+    candidate.tenQuan,
+    candidate.diaChi,
+  );
+  if (nameAddrKey) {
+    doc.normalizedNameAddressKey = nameAddrKey;
+  }
 
   if (candidate.cityId !== undefined) doc.cityId = candidate.cityId;
   if (candidate.lat !== undefined) doc.lat = candidate.lat;
@@ -272,6 +307,7 @@ function buildInsertRestaurantDoc(
     doc.foodyReviewsCount = candidate.foodyReviewsCount;
   }
 
+  doc.ingestionPostDigest = computeTrackedDocumentDigest(doc);
   return doc;
 }
 
@@ -279,24 +315,35 @@ function buildSafeUpdateSetPayload(
   candidate: NormalizedRestaurantCandidate,
   existingDoc: RestaurantDocRecord,
   now: Date,
-): Record<string, unknown> {
+): {
+  updateSet: Record<string, unknown>;
+  nextRevision: number;
+  postDigest: string;
+} {
   const nativeReviewsCount =
     typeof existingDoc.reviewsCount === 'number' &&
     Number.isFinite(existingDoc.reviewsCount)
       ? existingDoc.reviewsCount
       : 0;
   const preserveUserRating = nativeReviewsCount > 0;
+  const nextRevision = readFiniteRevision(existingDoc.ingestionRevision) + 1;
 
   const updateSet: Record<string, unknown> = {
     externalSource: candidate.externalSource,
     externalSourceId: candidate.externalSourceId,
     tenQuan: candidate.tenQuan,
     ingestionBatchId: candidate.ingestionBatchId,
+    ingestionRevision: nextRevision,
     updatedAt: now,
   };
 
   if (candidate.diaChi) {
     updateSet.diaChi = candidate.diaChi;
+  }
+  const mergedAddress = candidate.diaChi || existingDoc.diaChi;
+  const nameAddrKey = computeNameAddressKey(candidate.tenQuan, mergedAddress);
+  if (nameAddrKey) {
+    updateSet.normalizedNameAddressKey = nameAddrKey;
   }
   if (candidate.cityId) {
     updateSet.cityId = candidate.cityId;
@@ -347,8 +394,15 @@ function buildSafeUpdateSetPayload(
   if (candidate.slug) updateSet.slug = candidate.slug;
   if (candidate.contactPhone) updateSet.contactPhone = candidate.contactPhone;
 
+  const simulatedPostDoc: Record<string, unknown> = {
+    ...existingDoc,
+    ...updateSet,
+  };
+  const postDigest = computeTrackedDocumentDigest(simulatedPostDoc);
+  updateSet.ingestionPostDigest = postDigest;
+
   // Never overwrite ownerId, native reviewsCount, isVerified, isFeatured, or createdAt.
-  return updateSet;
+  return { updateSet, nextRevision, postDigest };
 }
 
 const TARGETED_LOOKUP_PROJECTION = {
@@ -384,15 +438,21 @@ const TARGETED_LOOKUP_PROJECTION = {
   isVerified: 1,
   isFeatured: 1,
   ingestionBatchId: 1,
+  ingestionRevision: 1,
+  ingestionPostDigest: 1,
+  normalizedNameAddressKey: 1,
   createdAt: 1,
   updatedAt: 1,
 } as const;
 
 const LOOKUP_CHUNK_SIZE = 50;
+const MAX_RESULTS_PER_CHUNK_FACTOR = 4;
 
 /**
- * Fetches only potentially matching restaurant documents using bounded targeted queries
- * (never executes an unbounded full-collection `find({})` scan).
+ * Fetches potentially matching restaurant documents using index-aligned exact equality
+ * predicates (compound `(externalSource, externalSourceId)`, `slug`, `urlGoc`,
+ * `normalizedNameAddressKey`, and compound exact `(tenQuan, diaChi)`), avoiding
+ * broad regex scans and bounding per-chunk result cardinality.
  */
 async function fetchTargetedMatchingRestaurants(
   restaurantsCol: Collection<RestaurantDocRecord>,
@@ -406,41 +466,86 @@ async function fetchTargetedMatchingRestaurants(
 
   for (let i = 0; i < candidates.length; i += LOOKUP_CHUNK_SIZE) {
     const chunk = candidates.slice(i, i + LOOKUP_CHUNK_SIZE);
-    const extIds = Array.from(
-      new Set(chunk.map((c) => c.externalSourceId).filter(Boolean)),
-    );
+    const orClauses: Array<Record<string, unknown>> = [];
+
+    // 1. Compound (externalSource, externalSourceId) exact pairs (uses compound unique index)
+    const seenTier1 = new Set<string>();
+    for (const cand of chunk) {
+      const pairKey = `${cand.externalSource}::${cand.externalSourceId}`;
+      if (!seenTier1.has(pairKey)) {
+        seenTier1.add(pairKey);
+        orClauses.push({
+          externalSource: cand.externalSource,
+          externalSourceId: cand.externalSourceId,
+        });
+      }
+    }
+
+    // 2. Canonical slug lookup (uses sparse slug index)
     const slugs = Array.from(
       new Set(chunk.map((c) => normalizeMatchKey(c.slug)).filter(Boolean)),
     );
-    const urls = Array.from(
-      new Set(chunk.map((c) => c.urlGoc.trim()).filter(Boolean)),
-    );
-    const names = Array.from(
-      new Set(chunk.map((c) => c.tenQuan.trim()).filter(Boolean)),
-    );
-
-    const orClauses: Array<Record<string, unknown>> = [];
-    if (extIds.length > 0) {
-      orClauses.push({ externalSourceId: { $in: extIds } });
-    }
     if (slugs.length > 0) {
       orClauses.push({ slug: { $in: slugs } });
     }
-    if (urls.length > 0) {
-      orClauses.push({ urlGoc: { $in: urls } });
+
+    // 3. Canonical URL lookup (uses sparse urlGoc index)
+    const urlVariants = Array.from(
+      new Set(
+        chunk.flatMap((c) => {
+          const base = c.urlGoc.trim().replace(/\/+$/, '');
+          return base ? [base, `${base}/`] : [];
+        }),
+      ),
+    );
+    if (urlVariants.length > 0) {
+      orClauses.push({ urlGoc: { $in: urlVariants } });
     }
-    if (names.length > 0) {
-      const pattern = `^(?:${names.map(escapeRegexLiteral).join('|')})$`;
-      orClauses.push({ tenQuan: { $regex: pattern, $options: 'i' } });
+
+    // 4. Normalized name+address key + legacy exact compound (tenQuan, diaChi) pairs
+    const nameAddrKeys = Array.from(
+      new Set(
+        chunk
+          .map((c) => computeNameAddressKey(c.tenQuan, c.diaChi))
+          .filter(Boolean),
+      ),
+    );
+    if (nameAddrKeys.length > 0) {
+      orClauses.push({ normalizedNameAddressKey: { $in: nameAddrKeys } });
+    }
+
+    const seenExactNameAddr = new Set<string>();
+    for (const cand of chunk) {
+      if (cand.tenQuan && cand.diaChi) {
+        const key = `${cand.tenQuan}::${cand.diaChi}`;
+        if (!seenExactNameAddr.has(key)) {
+          seenExactNameAddr.add(key);
+          orClauses.push({ tenQuan: cand.tenQuan, diaChi: cand.diaChi });
+        }
+      }
     }
 
     if (orClauses.length === 0) {
       continue;
     }
 
-    const docs = (await restaurantsCol
-      .find({ $or: orClauses }, { projection: TARGETED_LOOKUP_PROJECTION })
-      .toArray()) as RestaurantDocRecord[];
+    const chunkLimit = chunk.length * MAX_RESULTS_PER_CHUNK_FACTOR;
+    const cursor = restaurantsCol.find(
+      { $or: orClauses },
+      { projection: TARGETED_LOOKUP_PROJECTION },
+    );
+    const boundedCursor =
+      typeof (cursor as { limit?: (n: number) => unknown }).limit === 'function'
+        ? (
+            cursor as {
+              limit: (n: number) => {
+                toArray: () => Promise<RestaurantDocRecord[]>;
+              };
+            }
+          ).limit(chunkLimit)
+        : cursor;
+
+    const docs = await boundedCursor.toArray();
 
     for (const doc of docs) {
       byDocId.set(String(doc._id), doc);
@@ -665,8 +770,14 @@ export async function runRestaurantIngestionPipeline(
 
     if (existing) {
       plannedUpdates += 1;
-      const updateSet = buildSafeUpdateSetPayload(cand, existing, now);
-      updatedBackups.push(extractBackupFields(existing, updateSet, now));
+      const { updateSet, nextRevision, postDigest } = buildSafeUpdateSetPayload(
+        cand,
+        existing,
+        now,
+      );
+      updatedBackups.push(
+        extractBackupFields(existing, updateSet, now, nextRevision, postDigest),
+      );
       bulkOps.push({
         updateOne: {
           filter: { _id: existing._id },
@@ -680,8 +791,12 @@ export async function runRestaurantIngestionPipeline(
       insertedIds.push(newDoc._id);
       insertedRecords.push({
         docId: newDoc._id,
-        postIngestionDigest: computeTrackedDocumentDigest(newDoc),
+        postIngestionDigest:
+          typeof newDoc.ingestionPostDigest === 'string'
+            ? newDoc.ingestionPostDigest
+            : computeTrackedDocumentDigest(newDoc),
         expectedPostUpdatedAt: now,
+        expectedPostRevision: 1,
       });
       bulkOps.push({
         insertOne: {
@@ -870,7 +985,94 @@ function normalizeInsertedRecords(
     docId,
     postIngestionDigest: '',
     expectedPostUpdatedAt: ledger.appliedAt || ledger.startedAt,
+    expectedPostRevision: 1,
   }));
+}
+
+/**
+ * Builds an atomic MongoDB Compare-And-Set filter matching exact post-ingestion
+ * protected fields, revision/digest tokens, and every tracked catalog field from the
+ * verified snapshot so concurrent writes between pre-check and final mutation fail cleanly.
+ */
+function buildAtomicCasFilter(
+  verifiedDoc: RestaurantDocRecord,
+  options: {
+    batchId: string;
+    expectedUpdatedAt: Date;
+    expectedRevision: number;
+    expectedPostDigest: string;
+    expectedOwnerId: ObjectId | string | null;
+    expectedReviewsCount: number;
+    expectedIsVerified: boolean;
+    expectedIsFeatured: boolean;
+  },
+): Record<string, unknown> {
+  const andConditions: Array<Record<string, unknown>> = [];
+
+  if (options.expectedOwnerId === null) {
+    andConditions.push({ ownerId: { $exists: false } });
+  } else {
+    andConditions.push({ ownerId: options.expectedOwnerId });
+  }
+
+  if (options.expectedReviewsCount === 0) {
+    andConditions.push({
+      $or: [{ reviewsCount: 0 }, { reviewsCount: { $exists: false } }],
+    });
+  } else {
+    andConditions.push({ reviewsCount: options.expectedReviewsCount });
+  }
+
+  if (!options.expectedIsVerified) {
+    andConditions.push({
+      $or: [{ isVerified: false }, { isVerified: { $exists: false } }],
+    });
+  } else {
+    andConditions.push({ isVerified: true });
+  }
+
+  if (!options.expectedIsFeatured) {
+    andConditions.push({
+      $or: [{ isFeatured: false }, { isFeatured: { $exists: false } }],
+    });
+  } else {
+    andConditions.push({ isFeatured: true });
+  }
+
+  const filter: Record<string, unknown> = {
+    _id: verifiedDoc._id,
+    ingestionBatchId: options.batchId,
+    updatedAt: options.expectedUpdatedAt,
+    $and: andConditions,
+  };
+
+  if (
+    verifiedDoc.ingestionRevision !== undefined ||
+    options.expectedRevision > 0
+  ) {
+    filter.ingestionRevision = options.expectedRevision;
+  }
+
+  if (
+    typeof verifiedDoc.ingestionPostDigest === 'string' &&
+    options.expectedPostDigest
+  ) {
+    filter.ingestionPostDigest = options.expectedPostDigest;
+  }
+
+  for (const key of BACKUP_TRACKED_KEYS) {
+    if (key === 'updatedAt') {
+      continue;
+    }
+    const val = verifiedDoc[key];
+    if (val !== undefined) {
+      filter[key] = val;
+    } else {
+      filter[key] = { $exists: false };
+    }
+  }
+
+  return filter;
 }
 
 async function executeCompareAndSetRollback(
@@ -982,14 +1184,22 @@ async function executeCompareAndSetRollback(
     }
 
     const currentDigest = computeTrackedDocumentDigest(current);
-    if (rec.postIngestionDigest && currentDigest !== rec.postIngestionDigest) {
+    if (
+      (rec.postIngestionDigest && currentDigest !== rec.postIngestionDigest) ||
+      (typeof current.ingestionPostDigest === 'string' &&
+        rec.postIngestionDigest &&
+        current.ingestionPostDigest !== rec.postIngestionDigest) ||
+      (typeof current.ingestionRevision === 'number' &&
+        rec.expectedPostRevision > 0 &&
+        current.ingestionRevision !== rec.expectedPostRevision)
+    ) {
       skippedUserOwnedOrModifiedCount += 1;
       hasBlockingConflict = true;
       conflicts.push({
         docId: idStr,
         operation: 'delete_insert',
         reasonCode: 'MODIFIED_AFTER_BATCH',
-        reason: `Post-ingestion state digest mismatch on document ${idStr}; refusing blind deletion.`,
+        reason: `Post-ingestion state digest/revision mismatch on document ${idStr}; refusing blind deletion.`,
         currentIngestionBatchId: currentBatch,
       });
       continue;
@@ -1000,13 +1210,18 @@ async function executeCompareAndSetRollback(
       continue;
     }
 
-    const delRes = await restaurantsCol.deleteMany({
-      _id: rec.docId,
-      ingestionBatchId: ledger.batchId,
-      updatedAt: rec.expectedPostUpdatedAt,
-      ownerId: { $exists: false },
-      $or: [{ reviewsCount: 0 }, { reviewsCount: { $exists: false } }],
+    const casDeleteFilter = buildAtomicCasFilter(current, {
+      batchId: ledger.batchId,
+      expectedUpdatedAt: rec.expectedPostUpdatedAt,
+      expectedRevision: rec.expectedPostRevision ?? 1,
+      expectedPostDigest: rec.postIngestionDigest,
+      expectedOwnerId: null,
+      expectedReviewsCount: 0,
+      expectedIsVerified: false,
+      expectedIsFeatured: false,
     });
+
+    const delRes = await restaurantsCol.deleteOne(casDeleteFilter);
 
     if (delRes.deletedCount === 1) {
       deletedInsertedCount += 1;
@@ -1089,8 +1304,14 @@ async function executeCompareAndSetRollback(
 
     const currentDigest = computeTrackedDocumentDigest(current);
     if (
-      backup.postIngestionDigest &&
-      currentDigest !== backup.postIngestionDigest
+      (backup.postIngestionDigest &&
+        currentDigest !== backup.postIngestionDigest) ||
+      (typeof current.ingestionPostDigest === 'string' &&
+        backup.postIngestionDigest &&
+        current.ingestionPostDigest !== backup.postIngestionDigest) ||
+      (typeof current.ingestionRevision === 'number' &&
+        backup.expectedPostRevision > 0 &&
+        current.ingestionRevision !== backup.expectedPostRevision)
     ) {
       skippedUserOwnedOrModifiedCount += 1;
       hasBlockingConflict = true;
@@ -1121,6 +1342,12 @@ async function executeCompareAndSetRollback(
     if (!backup.hadBatchIdBefore) {
       unsetFields.ingestionBatchId = '';
     }
+    if (!backup.hadRevisionBefore) {
+      unsetFields.ingestionRevision = '';
+    }
+    if (!backup.hadPostDigestBefore) {
+      unsetFields.ingestionPostDigest = '';
+    }
 
     const updateDoc: Record<string, unknown> = {};
     if (Object.keys(backup.previousFields).length > 0) {
@@ -1130,14 +1357,18 @@ async function executeCompareAndSetRollback(
       updateDoc.$unset = unsetFields;
     }
 
-    const casRes = await restaurantsCol.updateOne(
-      {
-        _id: backup.docId,
-        ingestionBatchId: ledger.batchId,
-        updatedAt: backup.expectedPostUpdatedAt,
-      },
-      updateDoc,
-    );
+    const casUpdateFilter = buildAtomicCasFilter(current, {
+      batchId: ledger.batchId,
+      expectedUpdatedAt: backup.expectedPostUpdatedAt,
+      expectedRevision: backup.expectedPostRevision ?? 1,
+      expectedPostDigest: backup.postIngestionDigest,
+      expectedOwnerId: backup.expectedOwnerId,
+      expectedReviewsCount: backup.expectedReviewsCount,
+      expectedIsVerified: backup.expectedIsVerified,
+      expectedIsFeatured: backup.expectedIsFeatured,
+    });
+
+    const casRes = await restaurantsCol.updateOne(casUpdateFilter, updateDoc);
 
     if (casRes.matchedCount === 1) {
       restoredUpdatedCount += 1;
