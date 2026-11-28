@@ -6,10 +6,13 @@ import type {
   ExternalSourceDuplicateGroup,
   IngestionIndexPreflightReport,
 } from './ingestion.types';
+import { MENU_ITEMS_COLLECTION } from './dish-ingestion.normalizer';
 import type { Db } from 'mongodb';
 
 export const UNIQUE_EXTERNAL_SOURCE_INDEX_NAME =
   'uniq_external_source_id_partial' as const;
+export const UNIQUE_DISH_EXTERNAL_SOURCE_INDEX_NAME =
+  'uniq_dish_external_source_id_partial' as const;
 
 export const MAX_DUPLICATE_GROUP_SAMPLES = 200 as const;
 export const MAX_SAMPLE_DOCS_PER_GROUP = 10 as const;
@@ -47,23 +50,22 @@ interface DuplicateFacetRow {
   sampleGroups?: DuplicateAggRow[];
 }
 
-/**
- * Inspects existing restaurant documents for duplicate `(externalSource, externalSourceId)` pairs
- * non-destructively BEFORE attempting partial unique index creation.
- *
- * Uses MongoDB 7.0 `$firstN` + `$facet` so per-group memory stays bounded while computing
- * exact `duplicateGroupCount` and `totalAffectedDocuments` independently from the 200-group sample.
- */
-export async function preflightExternalSourceUniqueIndex(
+async function preflightCollectionExternalSourceUniqueIndex(
   db: Db,
+  target: {
+    collection: string;
+    indexName: string;
+    nameField: string;
+    remediationSteps: readonly string[];
+  },
 ): Promise<IngestionIndexPreflightReport> {
-  const restaurantsCol = db.collection(RESTAURANTS_COLLECTION);
+  const col = db.collection(target.collection);
 
-  const scannedCount = await restaurantsCol.countDocuments(
+  const scannedCount = await col.countDocuments(
     UNIQUE_EXTERNAL_SOURCE_PARTIAL_FILTER,
   );
 
-  const facetRows = (await restaurantsCol
+  const facetRows = (await col
     .aggregate(
       [
         { $match: UNIQUE_EXTERNAL_SOURCE_PARTIAL_FILTER },
@@ -78,7 +80,10 @@ export async function preflightExternalSourceUniqueIndex(
               $firstN: { input: '$_id', n: MAX_SAMPLE_DOCS_PER_GROUP },
             },
             names: {
-              $firstN: { input: '$tenQuan', n: MAX_SAMPLE_DOCS_PER_GROUP },
+              $firstN: {
+                input: `$${target.nameField}`,
+                n: MAX_SAMPLE_DOCS_PER_GROUP,
+              },
             },
           },
         },
@@ -175,8 +180,8 @@ export async function preflightExternalSourceUniqueIndex(
   );
 
   return {
-    collection: RESTAURANTS_COLLECTION,
-    indexName: UNIQUE_EXTERNAL_SOURCE_INDEX_NAME,
+    collection: target.collection,
+    indexName: target.indexName,
     indexSpec: { externalSource: 1, externalSourceId: 1 },
     partialFilterExpression: {
       externalSource: { $type: 'string' },
@@ -195,7 +200,103 @@ export async function preflightExternalSourceUniqueIndex(
     indexCreated: false,
     dryRun: true,
     remediationSteps:
-      duplicateGroupCount > 0 ? [...INDEX_PREFLIGHT_REMEDIATION_STEPS] : [],
+      duplicateGroupCount > 0 ? [...target.remediationSteps] : [],
+  };
+}
+
+/**
+ * Inspects existing restaurant documents for duplicate `(externalSource, externalSourceId)` pairs
+ * non-destructively BEFORE attempting partial unique index creation.
+ */
+export async function preflightExternalSourceUniqueIndex(
+  db: Db,
+): Promise<IngestionIndexPreflightReport> {
+  return preflightCollectionExternalSourceUniqueIndex(db, {
+    collection: RESTAURANTS_COLLECTION,
+    indexName: UNIQUE_EXTERNAL_SOURCE_INDEX_NAME,
+    nameField: 'tenQuan',
+    remediationSteps: INDEX_PREFLIGHT_REMEDIATION_STEPS,
+  });
+}
+
+const DISH_INDEX_PREFLIGHT_REMEDIATION_STEPS = [
+  '1. Review the reported duplicate (externalSource, externalSourceId) dish groups and inspect affected docIds.',
+  '2. Verify restaurant linkage and admin-curated fields (isAvailable, isFeatured, price) before selecting the surviving dish.',
+  '3. Archive superseded duplicates into a dedicated archive collection; never blindly delete or overwrite existing menu_items.',
+  '4. Re-run `--preflight-indexes` until duplicateGroupCount is 0.',
+  '5. Execute `--ensure-indexes --apply` with GASTROWISE_ALLOW_LOCAL_INGESTION=true against gastro_core_test.',
+];
+
+/**
+ * Non-destructively inspects `menu_items` for duplicate `(externalSource, externalSourceId)`
+ * string pairs BEFORE creating the partial unique dish index.
+ */
+export async function preflightDishExternalSourceUniqueIndex(
+  db: Db,
+): Promise<IngestionIndexPreflightReport> {
+  return preflightCollectionExternalSourceUniqueIndex(db, {
+    collection: MENU_ITEMS_COLLECTION,
+    indexName: UNIQUE_DISH_EXTERNAL_SOURCE_INDEX_NAME,
+    nameField: 'name',
+    remediationSteps: DISH_INDEX_PREFLIGHT_REMEDIATION_STEPS,
+  });
+}
+
+/**
+ * Safely rolls out `uniq_dish_external_source_id_partial` on `menu_items` ONLY after preflight
+ * confirms zero `(externalSource, externalSourceId)` duplicates. Never deletes or overwrites records.
+ */
+export async function rolloutDishIngestionIndexes(
+  db: Db,
+  options: { dryRun?: boolean } = {},
+): Promise<IngestionIndexPreflightReport> {
+  const dryRun = options.dryRun !== false;
+  const report = await preflightDishExternalSourceUniqueIndex(db);
+
+  if (!report.safeToCreateUniqueIndex) {
+    const preview = report.duplicates
+      .slice(0, 10)
+      .map(
+        (d) =>
+          `(${d.externalSource}, ${d.externalSourceId}) count=${d.count} sampleDocIds=[${d.docIds.join(', ')}]`,
+      )
+      .join('; ');
+    throw new IngestionValidationError(
+      `Cannot create unique dish index "${UNIQUE_DISH_EXTERNAL_SOURCE_INDEX_NAME}" on "${MENU_ITEMS_COLLECTION}": detected ${report.duplicateGroupCount} duplicate (externalSource, externalSourceId) group(s) affecting ${report.totalAffectedDocuments} document(s) (showing ${report.displayedDuplicateGroupCount} group(s)): ${preview}. Manual remediation required before unique index rollout.`,
+    );
+  }
+
+  if (dryRun) {
+    return {
+      ...report,
+      indexCreated: false,
+      dryRun: true,
+    };
+  }
+
+  const menuItemsCol = db.collection(MENU_ITEMS_COLLECTION);
+  try {
+    await menuItemsCol.createIndex(
+      { externalSource: 1, externalSourceId: 1 },
+      {
+        name: UNIQUE_DISH_EXTERNAL_SOURCE_INDEX_NAME,
+        unique: true,
+        partialFilterExpression: UNIQUE_EXTERNAL_SOURCE_PARTIAL_FILTER,
+      },
+    );
+    await menuItemsCol.createIndex({ restaurantId: 1 });
+    await menuItemsCol.createIndex({ ingestionBatchId: 1 }, { sparse: true });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new IngestionValidationError(
+      `Failed to create unique dish index "${UNIQUE_DISH_EXTERNAL_SOURCE_INDEX_NAME}" on "${MENU_ITEMS_COLLECTION}": ${reason}`,
+    );
+  }
+
+  return {
+    ...report,
+    indexCreated: true,
+    dryRun: false,
   };
 }
 

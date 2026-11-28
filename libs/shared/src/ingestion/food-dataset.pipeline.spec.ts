@@ -17,7 +17,13 @@ import {
   RESTAURANTS_COLLECTION,
 } from './ingestion.types';
 import { assertLocalIngestionTargetOnly } from './ingestion.connection';
+import {
+  preflightDishExternalSourceUniqueIndex,
+  rolloutDishIngestionIndexes,
+  UNIQUE_DISH_EXTERNAL_SOURCE_INDEX_NAME,
+} from './ingestion.index-preflight';
 import { MENU_ITEMS_COLLECTION } from './dish-ingestion.normalizer';
+import { MenuItemSchema } from '../../../../apps/core-service/src/restaurants/schemas/menu-item.schema';
 import { parseFoodDatasetCliArgs } from '../../../../scripts/ingestion/ingest-food-dataset';
 
 type Doc = Record<string, unknown>;
@@ -61,6 +67,7 @@ function matchesFilter(doc: Doc, filter: Doc): boolean {
 
 class InMemoryCollection {
   public docs: Doc[] = [];
+  public createdIndexes: Array<{ spec: Doc; options?: Doc }> = [];
 
   find(filter: Doc = {}) {
     const matched = this.docs.filter((d) => matchesFilter(d, filter));
@@ -70,6 +77,72 @@ class InMemoryCollection {
       }),
       toArray: () => Promise.resolve(matched.map((d) => ({ ...d }))),
     };
+  }
+
+  aggregate() {
+    // Evaluates duplicate (externalSource, externalSourceId) string groups for index preflight tests
+    const groups = new Map<
+      string,
+      {
+        externalSource: string;
+        externalSourceId: string;
+        count: number;
+        docIds: unknown[];
+        names: string[];
+      }
+    >();
+    for (const d of this.docs) {
+      if (
+        typeof d.externalSource === 'string' &&
+        typeof d.externalSourceId === 'string'
+      ) {
+        const key = `${d.externalSource}::${d.externalSourceId}`;
+        const existing = groups.get(key) || {
+          externalSource: d.externalSource,
+          externalSourceId: d.externalSourceId,
+          count: 0,
+          docIds: [],
+          names: [],
+        };
+        existing.count += 1;
+        existing.docIds.push(d._id);
+        existing.names.push(typeof d.name === 'string' ? d.name : '');
+        groups.set(key, existing);
+      }
+    }
+    const dupGroups = Array.from(groups.values())
+      .filter((g) => g.count > 1)
+      .map((g) => ({
+        _id: {
+          externalSource: g.externalSource,
+          externalSourceId: g.externalSourceId,
+        },
+        count: g.count,
+        docIds: g.docIds,
+        names: g.names,
+      }));
+    const summary =
+      dupGroups.length > 0
+        ? [
+            {
+              totalDuplicateGroups: dupGroups.length,
+              totalAffectedDocuments: dupGroups.reduce(
+                (acc, g) => acc + g.count,
+                0,
+              ),
+            },
+          ]
+        : [];
+    return {
+      toArray: () => Promise.resolve([{ summary, sampleGroups: dupGroups }]),
+    };
+  }
+
+  createIndex(spec: Doc, options?: Doc) {
+    this.createdIndexes.push({ spec, options });
+    return Promise.resolve(
+      typeof options?.name === 'string' ? options.name : 'idx',
+    );
   }
 
   findOne(filter: Doc = {}) {
@@ -509,6 +582,199 @@ describe('M10.7 Local Food Dataset & Ingestion Pipeline', () => {
           GASTROWISE_ALLOW_LOCAL_INGESTION: 'true',
         }).mode,
       ).toBe('apply');
+      expect(() =>
+        parseFoodDatasetCliArgs(['--ensure-indexes', '--apply'], {}),
+      ).toThrow(IngestionValidationError);
+      expect(parseFoodDatasetCliArgs(['--preflight-indexes'], {}).mode).toBe(
+        'preflight-indexes',
+      );
+    });
+  });
+
+  describe('Database-level partial unique dish index, concurrency & legacy compatibility', () => {
+    it('declares unique: true partial index on MenuItemSchema for string externalSource + externalSourceId', () => {
+      const schemaIndexes = MenuItemSchema.indexes();
+      const uniqueDishIdx = schemaIndexes.find(
+        ([spec]) => spec.externalSource === 1 && spec.externalSourceId === 1,
+      );
+      expect(uniqueDishIdx).toBeDefined();
+      expect(uniqueDishIdx?.[1]).toMatchObject({
+        name: UNIQUE_DISH_EXTERNAL_SOURCE_INDEX_NAME,
+        unique: true,
+        partialFilterExpression: {
+          externalSource: { $type: 'string' },
+          externalSourceId: { $type: 'string' },
+        },
+      });
+    });
+
+    it('allows different sources with the same externalSourceId and preserves legacy menu items without provenance', async () => {
+      const { db, collections } = createMockDb();
+      const restId = new ObjectId();
+      const restaurantsCol = collections.get(RESTAURANTS_COLLECTION)!;
+      const menuCol = collections.get(MENU_ITEMS_COLLECTION)!;
+
+      // Seed 2 legacy menu items WITHOUT externalSource / externalSourceId
+      await menuCol.insertMany([
+        { restaurantId: restId, name: 'Legacy Phở 1', price: 60000 },
+        { restaurantId: restId, name: 'Legacy Phở 2', price: 65000 },
+      ]);
+      // Seed 2 restaurants under different sources sharing externalSourceId "shared-100"
+      await restaurantsCol.insertMany([
+        {
+          _id: restId,
+          tenQuan: 'Quán Multi-Source',
+          externalSource: 'shopeefood',
+          externalSourceId: 'shared-100',
+        },
+        {
+          _id: new ObjectId(),
+          tenQuan: 'Quán Multi-Source Foody',
+          externalSource: 'foody',
+          externalSourceId: 'shared-100',
+        },
+      ]);
+
+      // Import same dishId "dish-shared-1" from two distinct sources
+      await runLocalFoodDatasetIngestionPipeline(db, {
+        rawContent: JSON.stringify({
+          dishes: [
+            {
+              dishId: 'dish-shared-1',
+              restaurantExternalId: 'shared-100',
+              name: 'Phở ShopeeFood',
+              price: 70000,
+            },
+          ],
+        }),
+        source: 'shopeefood',
+        batchId: 'multi-src-1',
+        mode: 'apply',
+      });
+      await runLocalFoodDatasetIngestionPipeline(db, {
+        rawContent: JSON.stringify({
+          dishes: [
+            {
+              dishId: 'dish-shared-1',
+              restaurantExternalId: 'shared-100',
+              name: 'Phở Foody',
+              price: 72000,
+            },
+          ],
+        }),
+        source: 'foody',
+        batchId: 'multi-src-2',
+        mode: 'apply',
+      });
+
+      // 2 legacy items + 2 distinct-source dishes = 4 total, 0 duplicates
+      expect(menuCol.docs).toHaveLength(4);
+      const preflight = await preflightDishExternalSourceUniqueIndex(db);
+      expect(preflight.safeToCreateUniqueIndex).toBe(true);
+      expect(preflight.duplicateGroupCount).toBe(0);
+    });
+
+    it('handles concurrent upsert attempts (including E11000 unique-index race) without creating duplicate dishes', async () => {
+      const { db, collections } = createMockDb();
+      const restId = new ObjectId();
+      await collections.get(RESTAURANTS_COLLECTION)!.insertOne({
+        _id: restId,
+        tenQuan: 'Quán Concurrent',
+        externalSource: 'shopeefood',
+        externalSourceId: 'conc-rest-1',
+      });
+
+      const menuCol = collections.get(MENU_ITEMS_COLLECTION)!;
+      const origBulkWrite = menuCol.bulkWrite.bind(menuCol) as (
+        ops: AnyBulkWriteOperation[],
+      ) => Promise<{
+        insertedCount: number;
+        modifiedCount: number;
+        upsertedCount: number;
+      }>;
+      let firstRaceTriggered = false;
+      jest.spyOn(menuCol, 'bulkWrite').mockImplementation(async (ops) => {
+        if (!firstRaceTriggered) {
+          firstRaceTriggered = true;
+          // Simulate concurrent insert winning first, then raising MongoDB E11000
+          await origBulkWrite(ops);
+          const dupErr = Object.assign(
+            new Error('E11000 duplicate key error'),
+            {
+              code: 11000,
+            },
+          );
+          throw dupErr;
+        }
+        return origBulkWrite(ops);
+      });
+
+      const dataset = JSON.stringify({
+        dishes: [
+          {
+            dishId: 'conc-dish-1',
+            restaurantExternalId: 'conc-rest-1',
+            name: 'Cơm Gà',
+            price: 55000,
+          },
+        ],
+      });
+
+      await Promise.all([
+        runLocalFoodDatasetIngestionPipeline(db, {
+          rawContent: dataset,
+          source: 'shopeefood',
+          batchId: 'conc-1',
+          mode: 'apply',
+        }),
+        runLocalFoodDatasetIngestionPipeline(db, {
+          rawContent: dataset,
+          source: 'shopeefood',
+          batchId: 'conc-2',
+          mode: 'apply',
+        }),
+      ]);
+
+      expect(menuCol.docs).toHaveLength(1);
+      expect(menuCol.docs[0].externalSourceId).toBe('conc-dish-1');
+    });
+
+    it('detects existing duplicate dish records non-destructively and blocks unique index creation', async () => {
+      const { db, collections } = createMockDb();
+      const restId = new ObjectId();
+      const menuCol = collections.get(MENU_ITEMS_COLLECTION)!;
+
+      // Seed 2 existing duplicate dishes with identical (externalSource, externalSourceId)
+      await menuCol.insertMany([
+        {
+          restaurantId: restId,
+          name: 'Phở Trùng 1',
+          price: 60000,
+          externalSource: 'shopeefood',
+          externalSourceId: 'dup-dish-99',
+        },
+        {
+          restaurantId: restId,
+          name: 'Phở Trùng 2',
+          price: 65000,
+          externalSource: 'shopeefood',
+          externalSourceId: 'dup-dish-99',
+        },
+      ]);
+
+      const report = await preflightDishExternalSourceUniqueIndex(db);
+      expect(report.safeToCreateUniqueIndex).toBe(false);
+      expect(report.duplicateGroupCount).toBe(1);
+      expect(report.totalAffectedDocuments).toBe(2);
+      expect(report.duplicates[0].externalSourceId).toBe('dup-dish-99');
+      expect(report.remediationSteps.length).toBeGreaterThan(0);
+
+      // rolloutDishIngestionIndexes must refuse index creation and NEVER delete existing records
+      await expect(
+        rolloutDishIngestionIndexes(db, { dryRun: false }),
+      ).rejects.toThrow(IngestionValidationError);
+      expect(menuCol.docs).toHaveLength(2);
+      expect(menuCol.createdIndexes).toHaveLength(0);
     });
   });
 });

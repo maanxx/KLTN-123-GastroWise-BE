@@ -60,9 +60,12 @@ MenuItemSchema.index({ restaurantId: 1 });
 MenuItemSchema.index(
   { externalSource: 1, externalSourceId: 1 },
   {
+    name: 'uniq_dish_external_source_id_partial',
+    unique: true,
     partialFilterExpression: {
       externalSource: { $type: 'string' },
       externalSourceId: { $type: 'string' },
     },
   },
 );
+MenuItemSchema.index({ ingestionBatchId: 1 }, { sparse: true });

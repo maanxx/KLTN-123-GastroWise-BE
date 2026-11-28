@@ -397,7 +397,30 @@ export async function runLocalFoodDatasetIngestionPipeline(
       }
 
       if (options.mode === 'apply' && bulkOps.length > 0) {
-        await menuItemsCol.bulkWrite(bulkOps, { ordered: false });
+        try {
+          await menuItemsCol.bulkWrite(bulkOps, { ordered: false });
+        } catch (err) {
+          // Under concurrent upserts with a unique partial index, MongoDB can raise E11000
+          // on the racing insert. Retry affected filters as non-upsert updateOne deterministically.
+          const isDupKey =
+            (err as { code?: number })?.code === 11000 ||
+            (Array.isArray((err as { writeErrors?: unknown[] })?.writeErrors) &&
+              (
+                err as { writeErrors: Array<{ code?: number }> }
+              ).writeErrors.every((we) => we.code === 11000));
+          if (!isDupKey) {
+            throw err;
+          }
+          for (const op of bulkOps) {
+            if ('updateOne' in op && op.updateOne) {
+              await menuItemsCol.updateOne(
+                op.updateOne.filter,
+                op.updateOne.update,
+                { upsert: false },
+              );
+            }
+          }
+        }
       }
     }
   }
