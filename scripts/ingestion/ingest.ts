@@ -2,7 +2,7 @@ import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  assertLocalIngestionApplyAllowed,
+  assertIngestionCliExecutionAllowed,
   parseIngestionCliArgs,
   preflightExternalSourceUniqueIndex,
   recoverIngestionBatch,
@@ -16,11 +16,10 @@ dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 export async function runIngestionCli(
   argv: readonly string[] = process.argv.slice(2),
+  env: Record<string, string | undefined> = process.env,
 ): Promise<void> {
   const parsed = parseIngestionCliArgs(argv);
-  if (parsed.mode === 'apply') {
-    assertLocalIngestionApplyAllowed(process.env);
-  }
+  assertIngestionCliExecutionAllowed(parsed, env);
 
   const output = await withIngestionDatabase(async (db, config) => {
     if (parsed.mode === 'rollback') {
@@ -76,7 +75,7 @@ export async function runIngestionCli(
       targetDb: config.dbName,
       targetUriRedacted: config.redactedUri,
     });
-  });
+  }, env);
 
   const serialized = JSON.stringify(output, null, 2);
   if (parsed.reportOutPath) {

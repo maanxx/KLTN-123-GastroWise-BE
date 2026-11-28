@@ -1,4 +1,5 @@
 import { IngestionMode, IngestionValidationError } from './ingestion.types';
+import { assertLocalIngestionApplyAllowed } from './ingestion.connection';
 import type { RawInputFormat } from './ingestion.staging';
 import type { RecoveryAction } from './ingestion.pipeline';
 
@@ -179,4 +180,30 @@ export function parseIngestionCliArgs(
     batchId,
     reportOutPath,
   };
+}
+
+/**
+ * Explicitly determines whether a parsed CLI invocation can mutate MongoDB.
+ * Covers normal apply, rollback --apply, recover --apply, and ensure-indexes --apply.
+ */
+export function isMutatingIngestionCliArgs(
+  parsed: ParsedIngestionCliArgs,
+): boolean {
+  if (parsed.mode === 'dry-run' || parsed.mode === 'preflight-indexes') {
+    return false;
+  }
+  return !parsed.dryRun;
+}
+
+/**
+ * Enforces GASTROWISE_ALLOW_LOCAL_INGESTION=true for every mutating CLI invocation,
+ * while allowing read-only and dry-run modes without the opt-in flag.
+ */
+export function assertIngestionCliExecutionAllowed(
+  parsed: ParsedIngestionCliArgs,
+  env: Record<string, string | undefined> = process.env,
+): void {
+  if (isMutatingIngestionCliArgs(parsed)) {
+    assertLocalIngestionApplyAllowed(env);
+  }
 }

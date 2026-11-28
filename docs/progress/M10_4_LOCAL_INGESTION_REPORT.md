@@ -33,7 +33,7 @@ ShopeeFood JSON Fixture (scripts/ingestion/fixtures/m10_4_shopeefood_local_fixtu
 |---|---|
 | `libs/shared/src/ingestion/ingestion.connection.ts` | Added `LOCAL_INGESTION_ALLOW_ENV_VAR` (`GASTROWISE_ALLOW_LOCAL_INGESTION`), `assertLocalIngestionApplyAllowed()`, and Docker `MONGO_HOST` local URI assembly (still strictly validated via `assertLocalIngestionTargetOnly()`). |
 | `libs/shared/src/ingestion/ingestion.pipeline.ts` | Added `executeControlledLocalIngestion()` enforcing `dry-run` default, `GASTROWISE_ALLOW_LOCAL_INGESTION=true` before `apply`, and `resolveIngestionDatabaseConfig()`, reusing `runRestaurantIngestionPipeline()` without duplicating normalization or validation. |
-| `libs/shared/src/ingestion/ingestion.cli.ts` & `scripts/ingestion/ingest.ts` | Added `--source=<source>` CLI option and enforced `assertLocalIngestionApplyAllowed(process.env)` before connecting in `--apply` mode. |
+| `libs/shared/src/ingestion/ingestion.cli.ts` & `scripts/ingestion/ingest.ts` | Added `--source=<source>` CLI option, centralized `isMutatingIngestionCliArgs()` and `assertIngestionCliExecutionAllowed()`, and enforced `GASTROWISE_ALLOW_LOCAL_INGESTION=true` before connecting for EVERY mutating CLI mode (`--apply`, `--rollback=... --apply`, `--recover=... --apply`, `--ensure-indexes --apply`) while keeping all dry-run/read-only modes usable without the opt-in flag. |
 | `docker-compose.local-ingestion.yml` | Added optional loopback-only (`127.0.0.1:27018:27017`) Compose override exposing isolated `mongo-test` for host-side local CLI runs and forwarding `GASTROWISE_ALLOW_LOCAL_INGESTION`. |
 | `scripts/ingestion/fixtures/m10_4_shopeefood_local_fixture.json` | Added synthetic/sanitized ShopeeFood fixture covering valid records, missing address/coords, invalid rating, invalid review count, malformed URL, duplicate candidate, and nested secret fields. |
 | `libs/shared/src/ingestion/ingestion.local-apply.spec.ts` | Added automated test suite verifying dry-run zero-writes, apply opt-in guard, Atlas/remote/non-test DB rejections, fixture staging/apply, secret redaction, retry idempotency, user-owned preservation, and LIFO CAS rollback. |
@@ -59,7 +59,7 @@ docker exec gastrowise-core-service wget -qO- http://127.0.0.1:3001/health/ready
 |---|---|---|
 | `MONGODB_URI_CORE` | Dry-run & Apply | Local single-host `mongodb://` URI targeting `/gastro_core_test` (e.g. `mongodb://gastro_core_svc:<local_test_pass>@127.0.0.1:27018/gastro_core_test?authSource=gastro_core_test`). Rejects `mongodb+srv://`, `mongodb.net`, remote hosts, and non-`gastro_core_test` DBs. |
 | `CORE_DB_NAME` | Dry-run & Apply | Must equal `gastro_core_test` (or omitted to default to `gastro_core_test`). |
-| `GASTROWISE_ALLOW_LOCAL_INGESTION` | **Apply mode only** | Must be explicitly set to `true` before `--apply` writes to `gastro_core_test`. |
+| `GASTROWISE_ALLOW_LOCAL_INGESTION` | **All mutating CLI modes (`--apply`, `--rollback=... --apply`, `--recover=... --apply`, `--ensure-indexes --apply`)** | Must be explicitly set to `true` before any mutating operation writes to `gastro_core_test`. Read-only/dry-run modes do not require it. |
 
 ---
 
@@ -89,9 +89,12 @@ npx ts-node -r tsconfig-paths/register scripts/ingestion/ingest.ts \
   --batch-id=m104-local-apply-1
 ```
 
-### Rollback a Local Batch (Compare-And-Set)
+### Rollback a Local Batch (Compare-And-Set — Requires Explicit Opt-In Flag)
 
 ```bash
+GASTROWISE_ALLOW_LOCAL_INGESTION=true \
+MONGODB_URI_CORE="mongodb://gastro_core_svc:<local_test_pass>@127.0.0.1:27018/gastro_core_test?authSource=gastro_core_test" \
+CORE_DB_NAME="gastro_core_test" \
 npx ts-node -r tsconfig-paths/register scripts/ingestion/ingest.ts \
   --rollback=m104-local-apply-1 --apply
 ```
@@ -136,21 +139,32 @@ npx ts-node -r tsconfig-paths/register scripts/ingestion/ingest.ts \
 
 ---
 
-## 6. Actual Verification Results (Local vs. GitHub Actions CI)
+## 6. Actual Verification Results (Mock-Based Unit Tests vs. Docker Checks vs. GitHub Actions CI)
 
-All commands below were executed **locally** after the final code edits (in-memory mocks used in Jest suites; Docker Compose config and live container health verified against local `gastrowise-mongo-test` / `gastrowise-core-service` with zero Atlas connections):
+### A. Local Mock-Based Automated Checks (Jest & Static Analysis)
+
+All commands below ran **locally** after the final M10.4.1 edits. Jest ingestion tests (`ingestion.local-apply.spec.ts`, `ingestion.pipeline.spec.ts`, `ingestion.data-quality.spec.ts`) use in-memory MongoDB mocks (no Atlas or live MongoDB writes):
 
 | Check | Exit Code | Observed Result |
 |---|---:|---|
 | `npx eslint "libs/shared/src/ingestion/*.ts" scripts/ingestion/ingest.ts` | `0` | `0` errors, `0` warnings across all ingestion modules and CLI script. |
 | `npx tsc -p tsconfig.build.json --noEmit` | `0` | `0` TypeScript errors. |
 | `npm run build:all` | `0` | Built `core-service` and `planning-service` cleanly. |
-| `npm run test:microservices` | `0` | **35 passed / 35 suites, 252 passed / 252 tests, 0 failed, 0 skipped.** |
+| `npm run test:microservices` | `0` | **35 passed / 35 suites, 255 passed / 255 tests, 0 failed, 0 skipped.** |
 | `git diff --check` | `0` | Zero whitespace errors or conflict markers. |
-| `docker compose -f docker-compose.yml -f docker-compose.local-ingestion.yml config --quiet` | `0` | Valid Compose merge with `127.0.0.1:27018:27017` loopback binding. |
-| `docker exec gastrowise-core-service wget -qO- http://127.0.0.1:3001/health/ready` | `0` | `{"status":"READY","service":"core-service","database":{"ready":true,"readyState":1,"readyStateLabel":"connected","dbPingOk":true,"latencyMs":1}}`. |
 
-- **GitHub Actions CI:** Pending remote workflow execution once `feat/m10-4-controlled-local-ingestion` is pushed and PR is opened; not observed locally.
+### B. Actual Local Docker Checks Executed
+
+| Check | Exit Code | Observed Result |
+|---|---:|---|
+| `docker compose -f docker-compose.yml -f docker-compose.local-ingestion.yml config --quiet` | `0` | Valid Compose merge with `127.0.0.1:27018:27017` loopback binding. |
+| `docker exec gastrowise-core-service wget -qO- http://127.0.0.1:3001/health/ready` | `0` | `{"status":"READY","service":"core-service","database":{"ready":true,"readyState":1,"readyStateLabel":"connected","dbPingOk":true,"latencyMs":1}}` against running `gastrowise-mongo-test` (`mongo:7.0`). |
+
+- **Not executed against live Docker MongoDB:** Live fixture apply/retry/rollback CLI runs against `127.0.0.1:27018` were NOT executed against a live MongoDB container in this pass (all apply/retry/rollback/mutating-CLI-guard assertions were verified via Jest mock tests).
+
+### C. GitHub Actions CI
+
+- Pending remote workflow completion on GitHub for PR #17 (`https://github.com/maanxx/KLTN-123-GastroWise-BE/pull/17`); not observed locally.
 
 ---
 

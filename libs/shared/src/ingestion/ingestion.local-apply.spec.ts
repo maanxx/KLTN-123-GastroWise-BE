@@ -3,10 +3,12 @@ import * as path from 'path';
 import { ObjectId } from 'mongodb';
 import type { Db } from 'mongodb';
 import {
+  assertIngestionCliExecutionAllowed,
   assertLocalIngestionApplyAllowed,
   executeControlledLocalIngestion,
   INGESTION_BATCHES_COLLECTION,
   IngestionValidationError,
+  isMutatingIngestionCliArgs,
   LOCAL_INGESTION_ALLOW_ENV_VAR,
   parseIngestionCliArgs,
   RAW_STAGING_COLLECTION,
@@ -457,5 +459,111 @@ describe('M10.4 Controlled Local Restaurant Ingestion', () => {
     expect(parsed.mode).toBe('dry-run');
     expect(parsed.dryRun).toBe(true);
     expect(parsed.source).toBe('shopeefood');
+  });
+
+  describe('M10.4.1 mutating CLI write guard enforcement', () => {
+    const mutatingInvocations: Array<{ label: string; argv: string[] }> = [
+      {
+        label: 'normal apply',
+        argv: [
+          '--file=scripts/ingestion/fixtures/m10_4_shopeefood_local_fixture.json',
+          '--apply',
+        ],
+      },
+      {
+        label: 'rollback apply',
+        argv: ['--rollback=m104-batch-1', '--apply'],
+      },
+      {
+        label: 'recover apply',
+        argv: ['--recover=m104-batch-1', '--apply'],
+      },
+      {
+        label: 'ensure-indexes apply',
+        argv: ['--ensure-indexes', '--apply'],
+      },
+    ];
+
+    const readOnlyInvocations: Array<{ label: string; argv: string[] }> = [
+      {
+        label: 'default dry-run',
+        argv: [
+          '--file=scripts/ingestion/fixtures/m10_4_shopeefood_local_fixture.json',
+        ],
+      },
+      {
+        label: 'explicit dry-run',
+        argv: [
+          '--file=scripts/ingestion/fixtures/m10_4_shopeefood_local_fixture.json',
+          '--dry-run',
+        ],
+      },
+      {
+        label: 'preflight-indexes',
+        argv: ['--preflight-indexes'],
+      },
+      {
+        label: 'rollback dry-run',
+        argv: ['--rollback=m104-batch-1'],
+      },
+      {
+        label: 'recover dry-run',
+        argv: ['--recover=m104-batch-1'],
+      },
+      {
+        label: 'ensure-indexes dry-run',
+        argv: ['--ensure-indexes'],
+      },
+    ];
+
+    it('rejects all mutating CLI modes without GASTROWISE_ALLOW_LOCAL_INGESTION=true', () => {
+      for (const item of mutatingInvocations) {
+        const parsed = parseIngestionCliArgs(item.argv);
+        expect(isMutatingIngestionCliArgs(parsed)).toBe(true);
+        expect(() =>
+          assertIngestionCliExecutionAllowed(parsed, safeLocalEnv),
+        ).toThrow(IngestionValidationError);
+      }
+    });
+
+    it('allows all mutating CLI modes when flag is true and local target is approved, while still blocking remote/Atlas', () => {
+      for (const item of mutatingInvocations) {
+        const parsed = parseIngestionCliArgs(item.argv);
+        expect(() =>
+          assertIngestionCliExecutionAllowed(parsed, allowedApplyEnv),
+        ).not.toThrow();
+        expect(resolveIngestionDatabaseConfig(allowedApplyEnv).dbName).toBe(
+          'gastro_core_test',
+        );
+      }
+
+      // Remote & Atlas remain rejected even when GASTROWISE_ALLOW_LOCAL_INGESTION=true
+      expect(() =>
+        resolveIngestionDatabaseConfig({
+          MONGODB_URI_CORE:
+            'mongodb+srv://user:pass@cluster0.mongodb.net/gastro_core_test',
+          CORE_DB_NAME: 'gastro_core_test',
+          [LOCAL_INGESTION_ALLOW_ENV_VAR]: 'true',
+        }),
+      ).toThrow(IngestionValidationError);
+
+      expect(() =>
+        resolveIngestionDatabaseConfig({
+          MONGODB_URI_CORE: 'mongodb://192.168.1.50:27017/gastro_core_test',
+          CORE_DB_NAME: 'gastro_core_test',
+          [LOCAL_INGESTION_ALLOW_ENV_VAR]: 'true',
+        }),
+      ).toThrow(IngestionValidationError);
+    });
+
+    it('allows all read-only and dry-run CLI modes without GASTROWISE_ALLOW_LOCAL_INGESTION', () => {
+      for (const item of readOnlyInvocations) {
+        const parsed = parseIngestionCliArgs(item.argv);
+        expect(isMutatingIngestionCliArgs(parsed)).toBe(false);
+        expect(() =>
+          assertIngestionCliExecutionAllowed(parsed, safeLocalEnv),
+        ).not.toThrow();
+      }
+    });
   });
 });
