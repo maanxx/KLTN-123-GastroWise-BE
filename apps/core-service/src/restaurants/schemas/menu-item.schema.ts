@@ -56,7 +56,11 @@ export class MenuItem {
 
 export const MenuItemSchema = SchemaFactory.createForClass(MenuItem);
 
-MenuItemSchema.index({ restaurantId: 1 });
+// [M10.8] Justified compound index for restaurant dish filtering, availability, and price sorting
+// (also serves single-field `restaurantId` lookups via index prefix without duplicate index).
+MenuItemSchema.index({ restaurantId: 1, isAvailable: 1, price: 1 });
+MenuItemSchema.index({ tags: 1 });
+MenuItemSchema.index({ isFeatured: -1, createdAt: -1 });
 MenuItemSchema.index(
   { externalSource: 1, externalSourceId: 1 },
   {

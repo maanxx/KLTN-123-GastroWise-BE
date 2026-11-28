@@ -24,6 +24,7 @@ paths:
         - { name: district, in: query, schema: { type: string, example: "Quận 1" } }
         - { name: area, in: query, schema: { type: string } }
         - { name: cuisine, in: query, schema: { type: string, example: "Phở" } }
+        - { name: category, in: query, schema: { type: string, example: "Mì phở" } }
         - { name: tags, in: query, schema: { type: string } }
         - { name: minPrice, in: query, schema: { type: number, minimum: 0 } }
         - { name: maxPrice, in: query, schema: { type: number, minimum: 0 } }
@@ -266,14 +267,24 @@ components:
         status: { type: string, enum: [open, closed, pending] }
         isVerified: { type: boolean }
         isFeatured: { type: boolean }
+    PaginationMeta:
+      type: object
+      required: [page, limit, total, totalPages]
+      properties:
+        page: { type: integer, minimum: 1 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+        total: { type: integer, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
     PaginatedRestaurantsResponse:
       type: object
-      required: [data, total, page, limit, currentPage, totalPages, isBoundedResult]
+      required: [data, meta, total, page, limit, currentPage, totalPages, isBoundedResult]
       properties:
         data:
           type: array
           items:
             $ref: "#/components/schemas/Restaurant"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
         total: { type: integer, minimum: 0 }
         page: { type: integer, minimum: 1 }
         limit: { type: integer, minimum: 1, maximum: 100 }
@@ -320,12 +331,14 @@ components:
         updatedAt: { type: string, format: date-time }
     PaginatedDishesResponse:
       type: object
-      required: [data, total, page, limit, totalPages]
+      required: [data, meta, total, page, limit, totalPages]
       properties:
         data:
           type: array
           items:
             $ref: "#/components/schemas/Dish"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
         total: { type: integer, minimum: 0 }
         page: { type: integer, minimum: 1 }
         limit: { type: integer, minimum: 1, maximum: 100 }

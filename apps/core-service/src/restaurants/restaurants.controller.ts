@@ -101,6 +101,7 @@ export class RestaurantsController {
         district: query.district,
         area: query.area,
         cuisine: query.cuisine,
+        category: query.category,
         minPrice: query.minPrice,
         maxPrice: query.maxPrice,
         minRating: query.minRating,
