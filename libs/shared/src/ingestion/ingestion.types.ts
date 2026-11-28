@@ -6,8 +6,22 @@ export const EXTERNAL_SOURCE_FOODY = 'foody_shopeefood' as const;
 export const RAW_STAGING_COLLECTION = 'restaurants_raw_staging' as const;
 export const INGESTION_BATCHES_COLLECTION = 'ingestion_batches' as const;
 export const RESTAURANTS_COLLECTION = 'restaurants' as const;
+export const APPROVED_INGESTION_DB_NAME = 'gastro_core_test' as const;
 
-export type IngestionMode = 'dry-run' | 'apply' | 'rollback';
+export type IngestionMode =
+  | 'dry-run'
+  | 'apply'
+  | 'rollback'
+  | 'recover'
+  | 'preflight-indexes'
+  | 'ensure-indexes';
+
+export type IngestionBatchStatus =
+  | 'pending'
+  | 'applied'
+  | 'failed'
+  | 'rolled_back'
+  | 'recovery_required';
 
 export type ValidationSeverity = 'error' | 'warning';
 
@@ -72,6 +86,7 @@ export interface IngestionQualityMetrics {
   raw_scraped_count: number;
   valid_record_count: number;
   inserted_count: number;
+  matched_count: number;
   updated_count: number;
   rejected_count: number;
   duplicate_count: number;
@@ -84,10 +99,31 @@ export interface IngestionQualityMetrics {
   missing_address_count: number;
 }
 
+export interface IngestionInsertedRecordBackup {
+  docId: ObjectId;
+  postIngestionDigest: string;
+  expectedPostUpdatedAt: Date;
+  expectedPostRevision: number;
+}
+
 export interface IngestionUpdatedBackup {
   docId: ObjectId;
   hadBatchIdBefore: boolean;
+  hadRevisionBefore: boolean;
+  hadPostDigestBefore: boolean;
   previousFields: Record<string, unknown>;
+  postIngestionDigest: string;
+  expectedPostUpdatedAt: Date;
+  expectedPostRevision: number;
+  expectedOwnerId: ObjectId | string | null;
+  expectedReviewsCount: number;
+  expectedIsVerified: boolean;
+  expectedIsFeatured: boolean;
+}
+
+export interface IngestionBatchErrorRecord {
+  name: string;
+  message: string;
 }
 
 export interface IngestionBatchLedgerDocument {
@@ -95,14 +131,20 @@ export interface IngestionBatchLedgerDocument {
   batchId: string;
   source: string;
   checksumSha256: string;
-  status: 'applied' | 'rolled_back';
+  status: IngestionBatchStatus;
   targetDb: string;
   collection: string;
-  appliedAt: Date;
+  startedAt: Date;
+  appliedAt: Date | null;
+  failedAt: Date | null;
   rolledBackAt: Date | null;
+  failureStage: 'staging' | 'restaurant_write' | 'ledger_finalize' | null;
+  error: IngestionBatchErrorRecord | null;
   metrics: IngestionQualityMetrics;
   insertedIds: ObjectId[];
+  insertedRecords: IngestionInsertedRecordBackup[];
   updatedBackups: IngestionUpdatedBackup[];
+  rolledBackDocIds?: ObjectId[];
 }
 
 export interface IngestionBatchSummary {
@@ -121,13 +163,98 @@ export interface IngestionBatchSummary {
   warnings: IngestionValidationIssue[];
 }
 
+export type RollbackConflictReasonCode =
+  | 'DOCUMENT_MISSING'
+  | 'MODIFIED_AFTER_BATCH'
+  | 'OVERLAPPING_BATCH_CONFLICT'
+  | 'USER_OWNED_MODIFIED'
+  | 'CAS_WRITE_MISMATCH';
+
+export interface IngestionRollbackConflict {
+  docId: string;
+  operation: 'delete_insert' | 'restore_update';
+  reasonCode: RollbackConflictReasonCode;
+  reason: string;
+  currentIngestionBatchId?: string | null;
+}
+
 export interface IngestionRollbackResult {
   batchId: string;
   dryRun: boolean;
-  status: 'dry_run_preview' | 'rolled_back' | 'already_rolled_back';
+  status:
+    | 'dry_run_preview'
+    | 'rolled_back'
+    | 'already_rolled_back'
+    | 'conflict';
   deletedInsertedCount: number;
   restoredUpdatedCount: number;
   skippedUserOwnedOrModifiedCount: number;
+  missingDocumentsCount: number;
+  conflicts: IngestionRollbackConflict[];
+}
+
+export interface IngestionRecoveryResult {
+  batchId: string;
+  dryRun: boolean;
+  previousStatus: IngestionBatchStatus;
+  finalStatus: IngestionBatchStatus;
+  actionTaken:
+    | 'completed_pending_apply'
+    | 'compensated_partial_writes'
+    | 'marked_failed_no_writes'
+    | 'no_action_needed';
+  landedInsertedCount: number;
+  landedUpdatedCount: number;
+  deletedInsertedCount: number;
+  restoredUpdatedCount: number;
+  conflicts: IngestionRollbackConflict[];
+  standaloneLimitationNote: string;
+}
+
+export interface ExternalSourceDuplicateGroup {
+  externalSource: string;
+  externalSourceId: string;
+  count: number;
+  docIds: string[];
+  names: string[];
+  sampleTruncated: boolean;
+}
+
+export interface IngestionIndexPreflightReport {
+  collection: string;
+  indexName: string;
+  indexSpec: { externalSource: 1; externalSourceId: 1 };
+  partialFilterExpression: {
+    externalSource: { $type: 'string' };
+    externalSourceId: { $type: 'string' };
+  };
+  scannedCount: number;
+  duplicateGroupCount: number;
+  displayedDuplicateGroupCount: number;
+  totalAffectedDocuments: number;
+  sampleLimits: {
+    maxGroups: number;
+    maxDocsPerGroup: number;
+  };
+  duplicates: ExternalSourceDuplicateGroup[];
+  safeToCreateUniqueIndex: boolean;
+  indexCreated: boolean;
+  dryRun: boolean;
+  remediationSteps: string[];
+}
+
+export interface LegacyNormalizedKeyBackfillResult {
+  collection: string;
+  dryRun: boolean;
+  batchSize: number;
+  batchesProcessed: number;
+  scannedCount: number;
+  missingKeyCount: number;
+  computableCount: number;
+  uncomputableCount: number;
+  updatedCount: number;
+  skippedConcurrentOrAlreadySetCount: number;
+  sampleMissingDocIds: string[];
 }
 
 export class IngestionValidationError extends Error {

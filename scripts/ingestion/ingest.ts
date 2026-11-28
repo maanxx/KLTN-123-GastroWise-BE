@@ -3,7 +3,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   parseIngestionCliArgs,
+  preflightExternalSourceUniqueIndex,
+  recoverIngestionBatch,
   rollbackIngestionBatch,
+  rolloutIngestionIndexes,
   runRestaurantIngestionPipeline,
   withIngestionDatabase,
 } from '@shared/ingestion';
@@ -23,10 +26,37 @@ export async function runIngestionCli(
         rollback: await rollbackIngestionBatch(
           db,
           parsed.rollbackBatchId || '',
-          {
-            dryRun: parsed.dryRun,
-          },
+          { dryRun: parsed.dryRun },
         ),
+      };
+    }
+
+    if (parsed.mode === 'recover') {
+      return {
+        targetDb: config.dbName,
+        targetUriRedacted: config.redactedUri,
+        recovery: await recoverIngestionBatch(db, parsed.recoverBatchId || '', {
+          action: parsed.recoverAction,
+          dryRun: parsed.dryRun,
+        }),
+      };
+    }
+
+    if (parsed.mode === 'preflight-indexes') {
+      return {
+        targetDb: config.dbName,
+        targetUriRedacted: config.redactedUri,
+        indexPreflight: await preflightExternalSourceUniqueIndex(db),
+      };
+    }
+
+    if (parsed.mode === 'ensure-indexes') {
+      return {
+        targetDb: config.dbName,
+        targetUriRedacted: config.redactedUri,
+        indexRollout: await rolloutIngestionIndexes(db, {
+          dryRun: parsed.dryRun,
+        }),
       };
     }
 

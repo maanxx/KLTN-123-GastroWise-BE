@@ -1,5 +1,6 @@
 import { IngestionMode, IngestionValidationError } from './ingestion.types';
 import type { RawInputFormat } from './ingestion.staging';
+import type { RecoveryAction } from './ingestion.pipeline';
 
 export interface ParsedIngestionCliArgs {
   mode: IngestionMode;
@@ -8,11 +9,13 @@ export interface ParsedIngestionCliArgs {
   format: RawInputFormat;
   batchId?: string;
   rollbackBatchId?: string;
+  recoverBatchId?: string;
+  recoverAction?: RecoveryAction;
   reportOutPath?: string;
 }
 
 /**
- * Parses M10.2 ingestion CLI arguments with dry-run enabled by default
+ * Parses M10.2.1 ingestion CLI arguments with dry-run enabled by default
  * and blocks inline URI/credential flags as well as Atlas override flags.
  */
 export function parseIngestionCliArgs(
@@ -23,9 +26,13 @@ export function parseIngestionCliArgs(
   let format: RawInputFormat = 'auto';
   let batchId: string | undefined;
   let rollbackBatchId: string | undefined;
+  let recoverBatchId: string | undefined;
+  let recoverAction: RecoveryAction = 'auto';
   let reportOutPath: string | undefined;
   let sawApplyFlag = false;
   let sawDryRunFlag = false;
+  let sawPreflightIndexes = false;
+  let sawEnsureIndexes = false;
 
   for (const arg of argv) {
     if (
@@ -59,6 +66,20 @@ export function parseIngestionCliArgs(
       batchId = arg.slice('--batch-id='.length).trim();
     } else if (arg.startsWith('--rollback=')) {
       rollbackBatchId = arg.slice('--rollback='.length).trim();
+    } else if (arg.startsWith('--recover=')) {
+      recoverBatchId = arg.slice('--recover='.length).trim();
+    } else if (arg.startsWith('--recover-action=')) {
+      const val = arg.slice('--recover-action='.length).trim().toLowerCase();
+      if (val !== 'auto' && val !== 'complete' && val !== 'compensate') {
+        throw new IngestionValidationError(
+          `Invalid --recover-action="${val}". Expected auto, complete, or compensate.`,
+        );
+      }
+      recoverAction = val;
+    } else if (arg === '--preflight-indexes') {
+      sawPreflightIndexes = true;
+    } else if (arg === '--ensure-indexes') {
+      sawEnsureIndexes = true;
     } else if (arg.startsWith('--report-out=')) {
       reportOutPath = arg.slice('--report-out='.length).trim();
     } else {
@@ -72,6 +93,40 @@ export function parseIngestionCliArgs(
     throw new IngestionValidationError(
       'Cannot specify both --dry-run and --apply in the same invocation.',
     );
+  }
+
+  const specialModeCount =
+    Number(rollbackBatchId !== undefined) +
+    Number(recoverBatchId !== undefined) +
+    Number(sawPreflightIndexes) +
+    Number(sawEnsureIndexes);
+  if (specialModeCount > 1) {
+    throw new IngestionValidationError(
+      'Cannot combine --rollback, --recover, --preflight-indexes, or --ensure-indexes in the same invocation.',
+    );
+  }
+
+  if (sawPreflightIndexes) {
+    if (sawApplyFlag) {
+      throw new IngestionValidationError(
+        '--preflight-indexes is read-only and cannot be combined with --apply. Use --ensure-indexes --apply to create indexes after a clean preflight.',
+      );
+    }
+    return {
+      mode: 'preflight-indexes',
+      dryRun: true,
+      format,
+      reportOutPath,
+    };
+  }
+
+  if (sawEnsureIndexes) {
+    return {
+      mode: 'ensure-indexes',
+      dryRun: !sawApplyFlag,
+      format,
+      reportOutPath,
+    };
   }
 
   if (rollbackBatchId !== undefined) {
@@ -89,9 +144,25 @@ export function parseIngestionCliArgs(
     };
   }
 
+  if (recoverBatchId !== undefined) {
+    if (!recoverBatchId) {
+      throw new IngestionValidationError(
+        '--recover=<batchId> cannot be empty.',
+      );
+    }
+    return {
+      mode: 'recover',
+      dryRun: !sawApplyFlag,
+      format,
+      recoverBatchId,
+      recoverAction,
+      reportOutPath,
+    };
+  }
+
   if (!filePath) {
     throw new IngestionValidationError(
-      'Missing required "--file=<path>" option (or use "--rollback=<batchId>").',
+      'Missing required "--file=<path>" option (or use "--rollback=<batchId>" / "--recover=<batchId>").',
     );
   }
 
