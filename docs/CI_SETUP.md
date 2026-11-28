@@ -55,7 +55,7 @@ Superseded runs on non-`main` branches are cancelled automatically via `concurre
 | Build all services | `npm run build:shared` && `npm run build:all` | **Blocking** |
 | Microservices tests | `npm run test:microservices` (`jest libs/ apps/`) | **Blocking** |
 
-> **Why ESLint is currently advisory:** The repository currently has pre-existing legacy lint errors across older NestJS modules (`@typescript-eslint/no-unsafe-*` and Prettier formatting). Running ESLint without `--fix` as an advisory step surfaces exact counts in every CI run without blocking unrelated PRs while legacy lint debt is paid down. Once legacy errors are resolved, `continue-on-error: true` should be removed to make ESLint strictly blocking.
+> **Why ESLint is currently advisory:** Full-repo ESLint (`npx eslint "{src,apps,libs,test}/**/*.ts"`) currently exits with code `1` due to **pre-existing legacy lint debt** across older NestJS modules (observed baseline: **2,651 problems — 2,436 errors, 215 warnings**, predominantly `@typescript-eslint/no-unsafe-*` and Prettier formatting). Running ESLint without `--fix` as an advisory step (`continue-on-error: true`) surfaces exact counts in `$GITHUB_STEP_SUMMARY` on every CI run without falsely marking lint as passing or blocking unrelated PRs while legacy lint debt is remediated. Once legacy errors are resolved, remove `continue-on-error: true` to make ESLint strictly blocking.
 
 ### Job 2: `python-utility-check`
 | Step | Command | Enforcement |

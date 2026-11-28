@@ -66,19 +66,56 @@ curl -s "http://localhost:8080/api/v1/dishes/674000000000000000000010"
 
 ## 4. Actual Verification Results (Local vs. GitHub Actions CI)
 
-| Check | Exit Code | Observed Result (Local — M10.5.1) |
+| Check | Exit Code | Observed Result (Local — M10.5.2) |
 |---|---:|---|
 | `npx eslint apps/core-service/src/restaurants/dto/query-restaurants.dto.ts apps/core-service/src/restaurants/dto/query-dishes.dto.ts apps/core-service/src/restaurants/dishes.controller.ts apps/core-service/src/restaurants/restaurants.module.ts apps/core-service/src/restaurants/restaurants-dish-api.spec.ts` | `0` | `0` errors, `0` warnings. |
+| `npx eslint "{src,apps,libs,test}/**/*.ts"` (full repo — advisory in CI) | `1` | **2,651 problems (2,436 errors, 215 warnings)** from pre-existing legacy `@typescript-eslint/no-unsafe-*` / Prettier debt. Not masked as passing. |
 | `npx tsc -p tsconfig.build.json --noEmit` | `0` | `0` TypeScript errors. |
-| `npm run build:all` | `0` | Built `core-service` and `planning-service` cleanly. |
-| `npm run test:microservices` | `0` | **35 passed / 35 suites, 258 passed / 258 tests, 0 failed, 0 skipped.** |
+| `npm run build:shared && npm run build:all` | `0` | Built `shared`, `core-service`, and `planning-service` cleanly. |
+| `npm run test:microservices` | `0` | **35 passed / 35 suites, 262 passed / 262 tests, 0 failed, 0 skipped.** |
 | `git diff --check` | `0` | Zero whitespace errors or conflict markers. |
+| OpenAPI YAML parse (`ruby -ryaml` on `docs/api/M10_5_RESTAURANT_DISH_OPENAPI.yaml`) | `0` | Valid OpenAPI 3.0.3 (`7` paths, all `12` `/dishes` query params documented). |
 
-- **GitHub Actions CI:** Pending remote workflow execution after pushing the M10.5.1 commit to PR #18 (`feat/m10-5-restaurant-dish-api`); not observed locally.
+- **GitHub Actions CI (`Backend CI`):** Workflow added at `.github/workflows/backend-ci.yml` (`docs/CI_SETUP.md`). Remote workflow run URL / status on PR #18 is not observable from the local sandbox environment and must be verified directly in the GitHub Actions tab of PR #18.
 
 ---
 
-## 5. M10.5.1 Hardening Summary
+## 5. M10.5.2 Legacy Menu Compatibility & OpenAPI Completion
+
+### 5.1 Legacy Consumer Audit (`getMenu` & `getAllMenuItems`)
+- **Web FE** (`KLTN-123-GastroWise-FE/src/lib/api/restaurant.api.ts:61`): calls `GET /restaurants/:id/menu` and returns `res.data` directly as `any[]`.
+- **Admin FE** (`KLTN-123-GastroWise-Admin-FE/src/app/menu/page.tsx:90`): calls `GET /restaurants/menu/all` and consumes `Array.isArray(menuRes.data) ? menuRes.data : menuRes.data.data || []`.
+- **Mobile App** (`KLTN-123-GastroWise-Mobile`): calls `GET /restaurants/:id/menu` expecting an array of menu items.
+- **Compatibility Decision:** Wrapping the JSON response body into an object would break Web FE and Mobile consumers. Instead, both legacy endpoints **preserve the JSON array body** (bounded to `MAX_MENU_LEGACY_LIMIT = 200` items; never unbounded) and expose truncation, deprecation, and migration metadata via standard HTTP response headers.
+
+### 5.2 Before / After Behavior
+- **Before:** `getMenu()` and `getAllMenuItems()` silently capped results at `.limit(200)` with no indication that items beyond 200 were omitted and no migration pointer.
+- **After:**
+  - `RestaurantsService.getMenuWithMeta()` and `getAllMenuItemsWithMeta()` run `countDocuments(filter)` + `.limit(201)` in parallel to detect truncation (`fetched.length > 200 || dbCount > 200`) while returning at most `200` items.
+  - `RestaurantsController` keeps returning `MenuItem[]` (`@Res({ passthrough: true })`) and sets:
+    - `X-Legacy-Endpoint: true`
+    - `Deprecation: true`
+    - `Link: </api/v1/restaurants/{id}/dishes>; rel="successor-version"` (or `</api/v1/dishes>; rel="successor-version"`)
+    - `X-Total-Count: <exact DB count>`
+    - `X-Result-Limit: 200`
+    - `X-Result-Truncated: true | false`
+    - `Warning: 299 - "Legacy menu response truncated at 200 items (<total> total)..."` (only when truncated)
+  - Direct service methods `getMenu()` and `getAllMenuItems()` remain backward-compatible (`MenuItem[]`).
+- **Deprecation Policy & Migration Path:**
+  - Legacy `GET /api/v1/restaurants/:id/menu` → migrate to `GET /api/v1/restaurants/:id/dishes` (paginated, filtered, sorted).
+  - Legacy `GET /api/v1/restaurants/menu/all` → migrate to `GET /api/v1/dishes` (paginated, filtered, sorted).
+  - Legacy routes remain supported until Web, Admin, and Mobile clients complete migration; removal requires a separate scheduled breaking-change milestone.
+
+### 5.3 OpenAPI Contract Completion
+- Updated `docs/api/M10_5_RESTAURANT_DISH_OPENAPI.yaml` (`v1.1.0`) to document:
+  - All 12 supported parameters on `GET /dishes` (`page`, `limit`, `search`, `restaurantId`, `minPrice`, `maxPrice`, `category`, `tag`, `isAvailable`, `isVegetarian`, `sortBy`, `order`).
+  - All supported dish filters on `GET /restaurants/{id}/dishes`.
+  - Deprecated legacy routes `GET /restaurants/{id}/menu` and `GET /restaurants/menu/all` with their truncation/migration headers.
+  - Complete `components.schemas` for HTTP `200` responses, pagination metadata, and HTTP `400`/`404` error responses.
+
+---
+
+## 6. M10.5.1 Hardening Summary
 
 ### 5.1 Root Cause Analysis & Before/After Behavior
 

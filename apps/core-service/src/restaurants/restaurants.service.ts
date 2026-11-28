@@ -93,16 +93,38 @@ export class RestaurantsService {
     this.internalAiKey = key;
   }
 
-  async getMenu(idOrSlug: string) {
+  async getMenuWithMeta(idOrSlug: string) {
     const restaurant = await this.findOne(idOrSlug);
-    return this.menuItemModel
-      .find({ restaurantId: restaurant._id })
-      .sort({ isFeatured: -1, createdAt: -1 })
-      .limit(MAX_MENU_LEGACY_LIMIT)
-      .exec();
+    const filter = { restaurantId: restaurant._id };
+    const [dbCount, fetched] = await Promise.all([
+      this.menuItemModel.countDocuments(filter).exec(),
+      this.menuItemModel
+        .find(filter)
+        .sort({ isFeatured: -1, createdAt: -1 })
+        .limit(MAX_MENU_LEGACY_LIMIT + 1)
+        .exec(),
+    ]);
+
+    const items = fetched.slice(0, MAX_MENU_LEGACY_LIMIT);
+    const totalCount = Math.max(dbCount, fetched.length);
+    const isTruncated =
+      fetched.length > MAX_MENU_LEGACY_LIMIT || dbCount > MAX_MENU_LEGACY_LIMIT;
+
+    return {
+      items,
+      totalCount,
+      limit: MAX_MENU_LEGACY_LIMIT,
+      isTruncated,
+      successorEndpoint: `/api/v1/restaurants/${String(restaurant._id)}/dishes`,
+    };
   }
 
-  async getAllMenuItems(search?: string, restaurantId?: string) {
+  async getMenu(idOrSlug: string) {
+    const { items } = await this.getMenuWithMeta(idOrSlug);
+    return items;
+  }
+
+  async getAllMenuItemsWithMeta(search?: string, restaurantId?: string) {
     const filter: any = {};
     if (restaurantId && restaurantId !== 'all') {
       if (Types.ObjectId.isValid(restaurantId)) {
@@ -112,12 +134,33 @@ export class RestaurantsService {
     if (search) {
       filter.name = { $regex: escapeRegex(search.trim()), $options: 'i' };
     }
-    return this.menuItemModel
-      .find(filter)
-      .populate('restaurantId', 'tenQuan diaChi')
-      .sort({ isFeatured: -1, createdAt: -1 })
-      .limit(MAX_MENU_LEGACY_LIMIT)
-      .exec();
+    const [dbCount, fetched] = await Promise.all([
+      this.menuItemModel.countDocuments(filter).exec(),
+      this.menuItemModel
+        .find(filter)
+        .populate('restaurantId', 'tenQuan diaChi')
+        .sort({ isFeatured: -1, createdAt: -1 })
+        .limit(MAX_MENU_LEGACY_LIMIT + 1)
+        .exec(),
+    ]);
+
+    const items = fetched.slice(0, MAX_MENU_LEGACY_LIMIT);
+    const totalCount = Math.max(dbCount, fetched.length);
+    const isTruncated =
+      fetched.length > MAX_MENU_LEGACY_LIMIT || dbCount > MAX_MENU_LEGACY_LIMIT;
+
+    return {
+      items,
+      totalCount,
+      limit: MAX_MENU_LEGACY_LIMIT,
+      isTruncated,
+      successorEndpoint: '/api/v1/dishes',
+    };
+  }
+
+  async getAllMenuItems(search?: string, restaurantId?: string) {
+    const { items } = await this.getAllMenuItemsWithMeta(search, restaurantId);
+    return items;
   }
 
   private mapDishToDTO(raw: any) {

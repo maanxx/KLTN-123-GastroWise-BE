@@ -10,10 +10,12 @@ import {
   Delete,
   Query,
   Req,
+  Res,
   UseInterceptors,
   UploadedFile,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { RestaurantsService } from './restaurants.service';
 import { CreateRestaurantDto } from './dto/create-restaurant.dto';
@@ -107,17 +109,57 @@ export class RestaurantsController {
     );
   }
 
+  private applyLegacyMenuHeaders(
+    res: Response | undefined,
+    meta: {
+      totalCount: number;
+      limit: number;
+      isTruncated: boolean;
+      successorEndpoint: string;
+    },
+  ) {
+    if (!res || typeof res.setHeader !== 'function') {
+      return;
+    }
+    res.setHeader('X-Legacy-Endpoint', 'true');
+    res.setHeader('Deprecation', 'true');
+    res.setHeader(
+      'Link',
+      `<${meta.successorEndpoint}>; rel="successor-version"`,
+    );
+    res.setHeader('X-Total-Count', String(meta.totalCount));
+    res.setHeader('X-Result-Limit', String(meta.limit));
+    res.setHeader('X-Result-Truncated', String(meta.isTruncated));
+    if (meta.isTruncated) {
+      res.setHeader(
+        'Warning',
+        `299 - "Legacy menu response truncated at ${meta.limit} items (${meta.totalCount} total). Migrate to ${meta.successorEndpoint} for paginated results."`,
+      );
+    }
+  }
+
   @Get('menu/all')
-  getAllMenuItems(
+  async getAllMenuItems(
     @Query('search') search?: string,
     @Query('restaurantId') restaurantId?: string,
+    @Res({ passthrough: true }) res?: Response,
   ) {
-    return this.restaurantsService.getAllMenuItems(search, restaurantId);
+    const result = await this.restaurantsService.getAllMenuItemsWithMeta(
+      search,
+      restaurantId,
+    );
+    this.applyLegacyMenuHeaders(res, result);
+    return result.items;
   }
 
   @Get(':id/menu')
-  getMenu(@Param('id') id: string) {
-    return this.restaurantsService.getMenu(id);
+  async getMenu(
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res?: Response,
+  ) {
+    const result = await this.restaurantsService.getMenuWithMeta(id);
+    this.applyLegacyMenuHeaders(res, result);
+    return result.items;
   }
 
   /**

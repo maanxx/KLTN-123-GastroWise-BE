@@ -40,6 +40,7 @@ function createChainMock<T>(result: T) {
 
 describe('M10.5 Restaurant & Dish Read APIs', () => {
   let service: RestaurantsService;
+  let restaurantsController: RestaurantsController;
   let dishesController: DishesController;
   let restaurantModel: Record<string, jest.Mock>;
   let menuItemModel: Record<string, jest.Mock>;
@@ -148,6 +149,9 @@ describe('M10.5 Restaurant & Dish Read APIs', () => {
     }).compile();
 
     service = module.get<RestaurantsService>(RestaurantsService);
+    restaurantsController = module.get<RestaurantsController>(
+      RestaurantsController,
+    );
     dishesController = module.get<DishesController>(DishesController);
   });
 
@@ -437,6 +441,168 @@ describe('M10.5 Restaurant & Dish Read APIs', () => {
       const searchClause = clauses.find((c) => '$or' in c);
       expect(searchClause).toBeDefined();
       expect(JSON.stringify(searchClause)).toContain('Phở \\\\(Đặc biệt\\\\)');
+    });
+  });
+
+  describe('M10.5.2 legacy menu compatibility (>200 items) & full dish query contract', () => {
+    function createMockRes() {
+      const headers: Record<string, string> = {};
+      return {
+        headers,
+        res: {
+          setHeader: jest.fn((key: string, value: string) => {
+            headers[key] = value;
+          }),
+        },
+      };
+    }
+
+    it('preserves array contract on GET /restaurants/:id/menu and sets truncation & migration headers when >200 items exist', async () => {
+      const overLimitItems = Array.from({ length: 201 }, (_, idx) => ({
+        _id: new Types.ObjectId().toHexString(),
+        restaurantId: restId1,
+        name: `Dish ${idx + 1}`,
+        price: 50000 + idx * 1000,
+        tags: ['Món chính'],
+        isAvailable: true,
+      }));
+
+      menuItemModel.countDocuments.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(245),
+      });
+      menuItemModel.find.mockReturnValue(createChainMock(overLimitItems));
+
+      const { headers, res } = createMockRes();
+      const body = await restaurantsController.getMenu(restId1, res as never);
+
+      // Backward-compatible array response body for Web & Mobile clients
+      expect(Array.isArray(body)).toBe(true);
+      expect(body).toHaveLength(200);
+
+      // Explicit truncation, deprecation, and migration headers
+      expect(headers['X-Legacy-Endpoint']).toBe('true');
+      expect(headers['Deprecation']).toBe('true');
+      expect(headers['Link']).toBe(
+        `</api/v1/restaurants/${restId1}/dishes>; rel="successor-version"`,
+      );
+      expect(headers['X-Total-Count']).toBe('245');
+      expect(headers['X-Result-Limit']).toBe('200');
+      expect(headers['X-Result-Truncated']).toBe('true');
+      expect(headers['Warning']).toContain(
+        'truncated at 200 items (245 total)',
+      );
+    });
+
+    it('preserves array contract on GET /restaurants/menu/all and sets truncation & migration headers when >200 items exist', async () => {
+      const overLimitItems = Array.from({ length: 201 }, (_, idx) => ({
+        _id: new Types.ObjectId().toHexString(),
+        restaurantId: { _id: restId1, tenQuan: 'Phở Hòa Pasteur' },
+        name: `Catalog Dish ${idx + 1}`,
+        price: 45000,
+        tags: ['Phở'],
+        isAvailable: true,
+      }));
+
+      menuItemModel.countDocuments.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(310),
+      });
+      menuItemModel.find.mockReturnValue(createChainMock(overLimitItems));
+
+      const { headers, res } = createMockRes();
+      const body = await restaurantsController.getAllMenuItems(
+        'Catalog',
+        restId1,
+        res as never,
+      );
+
+      // Backward-compatible array response body for Admin CMS menu page
+      expect(Array.isArray(body)).toBe(true);
+      expect(body).toHaveLength(200);
+      expect(headers['X-Legacy-Endpoint']).toBe('true');
+      expect(headers['Deprecation']).toBe('true');
+      expect(headers['Link']).toBe('</api/v1/dishes>; rel="successor-version"');
+      expect(headers['X-Total-Count']).toBe('310');
+      expect(headers['X-Result-Limit']).toBe('200');
+      expect(headers['X-Result-Truncated']).toBe('true');
+      expect(headers['Warning']).toContain(
+        'truncated at 200 items (310 total)',
+      );
+    });
+
+    it('sets X-Result-Truncated=false and omits Warning when legacy menu has <=200 items, and preserves direct service methods', async () => {
+      const { headers, res } = createMockRes();
+      const body = await restaurantsController.getMenu(restId1, res as never);
+      expect(Array.isArray(body)).toBe(true);
+      expect(body).toHaveLength(1);
+      expect(headers['X-Result-Truncated']).toBe('false');
+      expect(headers['X-Total-Count']).toBe('1');
+      expect(headers['Warning']).toBeUndefined();
+
+      const directMenu = await service.getMenu(restId1);
+      expect(Array.isArray(directMenu)).toBe(true);
+      expect(directMenu).toHaveLength(1);
+
+      const directAll = await service.getAllMenuItems();
+      expect(Array.isArray(directAll)).toBe(true);
+      expect(directAll).toHaveLength(1);
+    });
+
+    it('supports all 12 documented query parameters on GET /dishes and GET /restaurants/:id/dishes, and rejects invalid params', async () => {
+      const res = await dishesController.findAll({
+        page: 2,
+        limit: 15,
+        search: 'Phở',
+        restaurantId: restId1,
+        minPrice: 30000,
+        maxPrice: 120000,
+        category: 'Món chính',
+        tag: 'Phở',
+        isAvailable: 'true',
+        isVegetarian: 'false',
+        sortBy: 'name',
+        order: 'asc',
+      });
+      expect(res.page).toBe(2);
+      expect(res.limit).toBe(15);
+      expect(res.total).toBe(1);
+      expect(res.totalPages).toBe(1);
+
+      const byRest = await restaurantsController.getRestaurantDishes(restId1, {
+        page: 1,
+        limit: 20,
+        search: 'Phở',
+        minPrice: 30000,
+        maxPrice: 120000,
+        category: 'Món chính',
+        tag: 'Phở',
+        isAvailable: 'true',
+        isVegetarian: 'false',
+        sortBy: 'price',
+        order: 'desc',
+      });
+      expect(byRest.total).toBe(1);
+
+      await expect(
+        dishesController.findAll({ minPrice: 150000, maxPrice: 50000 }),
+      ).rejects.toThrow(BadRequestException);
+
+      restaurantModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(null),
+      });
+      await expect(
+        restaurantsController.getRestaurantDishes(
+          new Types.ObjectId().toHexString(),
+          {},
+        ),
+      ).rejects.toThrow(NotFoundException);
+
+      const invalidDishDto = plainToInstance(QueryDishesDto, {
+        isAvailable: 'yes',
+        isVegetarian: '1',
+        order: 'sideways',
+      });
+      const validationErrors = await validate(invalidDishDto);
+      expect(validationErrors.length).toBeGreaterThanOrEqual(3);
     });
   });
 });
