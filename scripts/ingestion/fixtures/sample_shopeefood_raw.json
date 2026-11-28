@@ -1,0 +1,110 @@
+[
+  {
+    "RestaurantID": 1000070216,
+    "Name": "Bò Bía Chợ Phú Nhuận - Cao Thắng",
+    "Address": "3 Cao Thắng, P. 17",
+    "CityID": 217,
+    "City": "TP. HCM",
+    "District": "Quận Phú Nhuận",
+    "PriceMin": 0.0,
+    "PriceMax": 0.0,
+    "Latitude": 10.794344,
+    "Longtitude": 106.683305,
+    "IsActive": false,
+    "IsDelete": false,
+    "TotalReview": 0,
+    "AvgRating": 0.0,
+    "MetaKeywords": "Ăn vặt,bò bía,ănchay",
+    "MicrositeUrl": "/ho-chi-minh/bo-bia-cho-phu-nhuan-cao-thang",
+    "ResUrlRewrite": "bo-bia-cho-phu-nhuan-cao-thang",
+    "Cuisines": [{ "Name": "Món Việt" }, { "Name": "Món Á" }],
+    "LstCategory": [{ "Name": "Ăn vặt/vỉa hè" }, { "Name": "Ăn chay" }],
+    "PictureModel": {
+      "ImageUrl": "https://down-vn.img.susercontent.com/vn-11134513-7r98o-lsvhk3oc89ztb9@resize_ss576x330"
+    },
+    "OpeningTime": [{ "TimeOpen": { "Hours": 14, "Minutes": 0 }, "TimeClose": { "Hours": 22, "Minutes": 0 } }]
+  },
+  {
+    "RestaurantID": 1163155,
+    "Name": "Phở Hùng - Nguyễn Trãi",
+    "Address": "241 Nguyễn Trãi, P. Nguyễn Cư Trinh, Quận 1",
+    "CityID": 217,
+    "City": "TP. HCM",
+    "District": "Quận 1",
+    "PriceMin": 55000,
+    "PriceMax": 95000,
+    "Latitude": 10.76645,
+    "Longtitude": 106.68972,
+    "IsActive": true,
+    "IsDelete": false,
+    "TotalReview": 148,
+    "AvgRating": 8.4,
+    "AvgPointList": [
+      { "Label": "Vị trí", "Point": 8.5 },
+      { "Label": "Giá cả", "Point": 8.0 },
+      { "Label": "Chất lượng", "Point": 8.7 },
+      { "Label": "Phục vụ", "Point": 8.2 },
+      { "Label": "Không gian", "Point": 8.1 }
+    ],
+    "MetaKeywords": "Phở bò, Mì phở, Món Việt",
+    "MicrositeUrl": "/ho-chi-minh/pho-hung-nguyen-trai",
+    "ResUrlRewrite": "pho-hung-nguyen-trai",
+    "Cuisines": [{ "Name": "Món Việt" }],
+    "LstCategory": [{ "Name": "Mì phở" }],
+    "tags": ["MÌ PHỞ", "phở bò, nước dùng"],
+    "PictureModel": {
+      "ImageUrl": "https://images.unsplash.com/photo-1582878826629-29b7ad1cdc43?w=600"
+    },
+    "OpeningTime": [{ "TimeOpen": { "Hours": 6, "Minutes": 0 }, "TimeClose": { "Hours": 23, "Minutes": 0 } }]
+  },
+  {
+    "RestaurantID": 2000451,
+    "Name": "Cơm Tấm Ba Ghiền - Null Island GPS",
+    "Address": "84 Đặng Văn Ngữ, P. 10, Quận Phú Nhuận",
+    "CityID": 217,
+    "City": "TP. HCM",
+    "PriceMin": 45000,
+    "PriceMax": 85000,
+    "Latitude": 0,
+    "Longtitude": 0,
+    "IsActive": true,
+    "IsDelete": false,
+    "TotalReview": 24,
+    "AvgRating": 4.2,
+    "ratingScale": "5_point",
+    "Cuisines": [{ "Name": "Cơm tấm" }],
+    "ResUrlRewrite": "com-tam-ba-ghien"
+  },
+  {
+    "RestaurantID": 1163155,
+    "Name": "Phở Hùng - Nguyễn Trãi (Duplicate ExternalID)",
+    "Address": "241 Nguyễn Trãi, P. Nguyễn Cư Trinh, Quận 1",
+    "CityID": 217,
+    "Latitude": 10.76645,
+    "Longtitude": 106.68972,
+    "AvgRating": 8.4
+  },
+  {
+    "RestaurantID": 2000499,
+    "Name": "Phở Hùng - Nguyễn Trãi",
+    "Address": "241  Nguyễn Trãi,  P. Nguyễn Cư Trinh, Quận 1",
+    "CityID": 217,
+    "Latitude": 10.76645,
+    "Longtitude": 106.68972,
+    "AvgRating": 8.4
+  },
+  {
+    "RestaurantID": 3000100,
+    "externalSource": "third_party_import",
+    "Name": "Quán Trà Sữa Ambiguous Rating",
+    "Address": "",
+    "Latitude": 10.775,
+    "Longtitude": 106.701,
+    "AvgRating": 4.1
+  },
+  {
+    "RestaurantID": 4000999,
+    "Name": "",
+    "Address": "Missing Name Record"
+  }
+]
