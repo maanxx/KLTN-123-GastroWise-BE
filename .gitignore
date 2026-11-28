@@ -40,6 +40,8 @@ lerna-debug.log*
 .env.development.local
 .env.test.local
 .env.production.local
+.env.docker.local
+.env.*.local
 .env.local
 
 # Remediate & migration scripts with potential credentials
