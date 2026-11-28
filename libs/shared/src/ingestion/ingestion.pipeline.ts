@@ -14,6 +14,7 @@ import {
   IngestionUpdatedBackup,
   IngestionValidationError,
   IngestionValidationIssue,
+  LegacyNormalizedKeyBackfillResult,
   NormalizedRestaurantCandidate,
   RESTAURANTS_COLLECTION,
 } from './ingestion.types';
@@ -1708,5 +1709,98 @@ export async function recoverIngestionBatch(
     restoredUpdatedCount: compOutcome.restoredUpdatedCount,
     conflicts: compOutcome.conflicts,
     standaloneLimitationNote: STANDALONE_MONGODB_LIMITATION_NOTE,
+  };
+}
+
+/**
+ * Non-destructive dry-run / CAS backfill helper for legacy restaurant documents
+ * missing `normalizedNameAddressKey`. Defaults to `dryRun: true` and never modifies
+ * user-owned fields, catalog text, or deletes records.
+ */
+export async function backfillLegacyNormalizedKeys(
+  db: Db,
+  options: { dryRun?: boolean; limit?: number } = {},
+): Promise<LegacyNormalizedKeyBackfillResult> {
+  const dryRun = options.dryRun !== false;
+  const restaurantsCol = db.collection<RestaurantDocRecord>(
+    RESTAURANTS_COLLECTION,
+  );
+  const missingFilter = {
+    $or: [
+      { normalizedNameAddressKey: { $exists: false } },
+      { normalizedNameAddressKey: null },
+      { normalizedNameAddressKey: '' },
+    ],
+  };
+
+  const cursor = restaurantsCol.find(missingFilter, {
+    projection: {
+      _id: 1,
+      tenQuan: 1,
+      diaChi: 1,
+      normalizedNameAddressKey: 1,
+    },
+  });
+  const boundedCursor =
+    typeof options.limit === 'number' &&
+    Number.isInteger(options.limit) &&
+    options.limit > 0 &&
+    typeof (cursor as { limit?: (n: number) => unknown }).limit === 'function'
+      ? (
+          cursor as {
+            limit: (n: number) => {
+              toArray: () => Promise<RestaurantDocRecord[]>;
+            };
+          }
+        ).limit(options.limit)
+      : cursor;
+
+  const missingDocs = await boundedCursor.toArray();
+  const scannedCount = await restaurantsCol.countDocuments({});
+
+  let computableCount = 0;
+  let uncomputableCount = 0;
+  let updatedCount = 0;
+  let skippedConcurrentOrAlreadySetCount = 0;
+  const sampleMissingDocIds: string[] = [];
+
+  for (const doc of missingDocs) {
+    const key = computeNameAddressKey(doc.tenQuan, doc.diaChi);
+    if (!key) {
+      uncomputableCount += 1;
+      continue;
+    }
+
+    computableCount += 1;
+    if (sampleMissingDocIds.length < 20) {
+      sampleMissingDocIds.push(String(doc._id));
+    }
+
+    if (!dryRun) {
+      const res = await restaurantsCol.updateOne(
+        {
+          _id: doc._id,
+          ...missingFilter,
+        },
+        { $set: { normalizedNameAddressKey: key } },
+      );
+      if (res.modifiedCount > 0) {
+        updatedCount += 1;
+      } else {
+        skippedConcurrentOrAlreadySetCount += 1;
+      }
+    }
+  }
+
+  return {
+    collection: RESTAURANTS_COLLECTION,
+    dryRun,
+    scannedCount,
+    missingKeyCount: missingDocs.length,
+    computableCount,
+    uncomputableCount,
+    updatedCount,
+    skippedConcurrentOrAlreadySetCount,
+    sampleMissingDocIds,
   };
 }

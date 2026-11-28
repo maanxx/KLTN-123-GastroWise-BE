@@ -217,6 +217,7 @@ export interface ExternalSourceDuplicateGroup {
   count: number;
   docIds: string[];
   names: string[];
+  sampleTruncated: boolean;
 }
 
 export interface IngestionIndexPreflightReport {
@@ -229,11 +230,29 @@ export interface IngestionIndexPreflightReport {
   };
   scannedCount: number;
   duplicateGroupCount: number;
+  displayedDuplicateGroupCount: number;
+  totalAffectedDocuments: number;
+  sampleLimits: {
+    maxGroups: number;
+    maxDocsPerGroup: number;
+  };
   duplicates: ExternalSourceDuplicateGroup[];
   safeToCreateUniqueIndex: boolean;
   indexCreated: boolean;
   dryRun: boolean;
   remediationSteps: string[];
+}
+
+export interface LegacyNormalizedKeyBackfillResult {
+  collection: string;
+  dryRun: boolean;
+  scannedCount: number;
+  missingKeyCount: number;
+  computableCount: number;
+  uncomputableCount: number;
+  updatedCount: number;
+  skippedConcurrentOrAlreadySetCount: number;
+  sampleMissingDocIds: string[];
 }
 
 export class IngestionValidationError extends Error {

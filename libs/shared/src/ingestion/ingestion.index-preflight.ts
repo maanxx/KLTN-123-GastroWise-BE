@@ -11,6 +11,9 @@ import type { Db } from 'mongodb';
 export const UNIQUE_EXTERNAL_SOURCE_INDEX_NAME =
   'uniq_external_source_id_partial' as const;
 
+export const MAX_DUPLICATE_GROUP_SAMPLES = 200 as const;
+export const MAX_SAMPLE_DOCS_PER_GROUP = 10 as const;
+
 export const UNIQUE_EXTERNAL_SOURCE_PARTIAL_FILTER = {
   externalSource: { $type: 'string' },
   externalSourceId: { $type: 'string' },
@@ -34,9 +37,22 @@ interface DuplicateAggRow {
   names?: unknown;
 }
 
+interface DuplicateSummaryRow {
+  totalDuplicateGroups?: unknown;
+  totalAffectedDocuments?: unknown;
+}
+
+interface DuplicateFacetRow {
+  summary?: DuplicateSummaryRow[];
+  sampleGroups?: DuplicateAggRow[];
+}
+
 /**
  * Inspects existing restaurant documents for duplicate `(externalSource, externalSourceId)` pairs
  * non-destructively BEFORE attempting partial unique index creation.
+ *
+ * Uses MongoDB 7.0 `$firstN` + `$facet` so per-group memory stays bounded while computing
+ * exact `duplicateGroupCount` and `totalAffectedDocuments` independently from the 200-group sample.
  */
 export async function preflightExternalSourceUniqueIndex(
   db: Db,
@@ -47,25 +63,61 @@ export async function preflightExternalSourceUniqueIndex(
     UNIQUE_EXTERNAL_SOURCE_PARTIAL_FILTER,
   );
 
-  const dupRows = (await restaurantsCol
-    .aggregate([
-      { $match: UNIQUE_EXTERNAL_SOURCE_PARTIAL_FILTER },
-      {
-        $group: {
-          _id: {
-            externalSource: '$externalSource',
-            externalSourceId: '$externalSourceId',
+  const facetRows = (await restaurantsCol
+    .aggregate(
+      [
+        { $match: UNIQUE_EXTERNAL_SOURCE_PARTIAL_FILTER },
+        {
+          $group: {
+            _id: {
+              externalSource: '$externalSource',
+              externalSourceId: '$externalSourceId',
+            },
+            count: { $sum: 1 },
+            docIds: {
+              $firstN: { input: '$_id', n: MAX_SAMPLE_DOCS_PER_GROUP },
+            },
+            names: {
+              $firstN: { input: '$tenQuan', n: MAX_SAMPLE_DOCS_PER_GROUP },
+            },
           },
-          count: { $sum: 1 },
-          docIds: { $push: '$_id' },
-          names: { $push: '$tenQuan' },
         },
-      },
-      { $match: { count: { $gt: 1 } } },
-      { $sort: { count: -1 } },
-      { $limit: 200 },
-    ])
-    .toArray()) as DuplicateAggRow[];
+        { $match: { count: { $gt: 1 } } },
+        {
+          $facet: {
+            summary: [
+              {
+                $group: {
+                  _id: null,
+                  totalDuplicateGroups: { $sum: 1 },
+                  totalAffectedDocuments: { $sum: '$count' },
+                },
+              },
+            ],
+            sampleGroups: [
+              {
+                $sort: {
+                  count: -1,
+                  '_id.externalSource': 1,
+                  '_id.externalSourceId': 1,
+                },
+              },
+              { $limit: MAX_DUPLICATE_GROUP_SAMPLES },
+            ],
+          },
+        },
+      ],
+      { allowDiskUse: true },
+    )
+    .toArray()) as DuplicateFacetRow[];
+
+  const facetResult = facetRows[0] ?? {};
+  const summaryRow = Array.isArray(facetResult.summary)
+    ? facetResult.summary[0]
+    : undefined;
+  const dupRows = Array.isArray(facetResult.sampleGroups)
+    ? facetResult.sampleGroups
+    : [];
 
   const duplicates: ExternalSourceDuplicateGroup[] = dupRows.map((row) => {
     const extSource =
@@ -79,16 +131,20 @@ export async function preflightExternalSourceUniqueIndex(
         ? row.count
         : 0;
     const docIds = Array.isArray(row.docIds)
-      ? row.docIds.map((id) =>
-          id !== null && typeof id === 'object' && 'toString' in id
-            ? (id as { toString: () => string }).toString()
-            : typeof id === 'string'
-              ? id
-              : '',
-        )
+      ? row.docIds
+          .slice(0, MAX_SAMPLE_DOCS_PER_GROUP)
+          .map((id) =>
+            id !== null && typeof id === 'object' && 'toString' in id
+              ? (id as { toString: () => string }).toString()
+              : typeof id === 'string'
+                ? id
+                : '',
+          )
       : [];
     const names = Array.isArray(row.names)
-      ? row.names.map((n) => (typeof n === 'string' ? n : ''))
+      ? row.names
+          .slice(0, MAX_SAMPLE_DOCS_PER_GROUP)
+          .map((n) => (typeof n === 'string' ? n : ''))
       : [];
 
     return {
@@ -97,8 +153,26 @@ export async function preflightExternalSourceUniqueIndex(
       count,
       docIds,
       names,
+      sampleTruncated: count > docIds.length,
     };
   });
+
+  const rawTotalGroups =
+    typeof summaryRow?.totalDuplicateGroups === 'number' &&
+    Number.isFinite(summaryRow.totalDuplicateGroups)
+      ? summaryRow.totalDuplicateGroups
+      : duplicates.length;
+  const rawTotalAffected =
+    typeof summaryRow?.totalAffectedDocuments === 'number' &&
+    Number.isFinite(summaryRow.totalAffectedDocuments)
+      ? summaryRow.totalAffectedDocuments
+      : duplicates.reduce((acc, g) => acc + g.count, 0);
+
+  const duplicateGroupCount = Math.max(rawTotalGroups, duplicates.length);
+  const totalAffectedDocuments = Math.max(
+    rawTotalAffected,
+    duplicates.reduce((acc, g) => acc + g.count, 0),
+  );
 
   return {
     collection: RESTAURANTS_COLLECTION,
@@ -109,13 +183,19 @@ export async function preflightExternalSourceUniqueIndex(
       externalSourceId: { $type: 'string' },
     },
     scannedCount,
-    duplicateGroupCount: duplicates.length,
+    duplicateGroupCount,
+    displayedDuplicateGroupCount: duplicates.length,
+    totalAffectedDocuments,
+    sampleLimits: {
+      maxGroups: MAX_DUPLICATE_GROUP_SAMPLES,
+      maxDocsPerGroup: MAX_SAMPLE_DOCS_PER_GROUP,
+    },
     duplicates,
-    safeToCreateUniqueIndex: duplicates.length === 0,
+    safeToCreateUniqueIndex: duplicateGroupCount === 0,
     indexCreated: false,
     dryRun: true,
     remediationSteps:
-      duplicates.length > 0 ? [...INDEX_PREFLIGHT_REMEDIATION_STEPS] : [],
+      duplicateGroupCount > 0 ? [...INDEX_PREFLIGHT_REMEDIATION_STEPS] : [],
   };
 }
 
@@ -135,11 +215,11 @@ export async function rolloutIngestionIndexes(
       .slice(0, 10)
       .map(
         (d) =>
-          `(${d.externalSource}, ${d.externalSourceId}) count=${d.count} docIds=[${d.docIds.join(', ')}]`,
+          `(${d.externalSource}, ${d.externalSourceId}) count=${d.count} sampleDocIds=[${d.docIds.join(', ')}]`,
       )
       .join('; ');
     throw new IngestionValidationError(
-      `Cannot create unique index "${UNIQUE_EXTERNAL_SOURCE_INDEX_NAME}": detected ${report.duplicateGroupCount} duplicate (externalSource, externalSourceId) group(s): ${preview}. Manual remediation required before unique index rollout.`,
+      `Cannot create unique index "${UNIQUE_EXTERNAL_SOURCE_INDEX_NAME}": detected ${report.duplicateGroupCount} duplicate (externalSource, externalSourceId) group(s) affecting ${report.totalAffectedDocuments} document(s) (showing ${report.displayedDuplicateGroupCount} group(s)): ${preview}. Manual remediation required before unique index rollout.`,
     );
   }
 

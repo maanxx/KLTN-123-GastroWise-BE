@@ -3,11 +3,14 @@ import type { Db } from 'mongodb';
 import { RestaurantSchema } from '../../../../apps/core-service/src/restaurants/schemas/restaurant.schema';
 import {
   assertLocalIngestionTargetOnly,
+  backfillLegacyNormalizedKeys,
   buildRawStagingDocuments,
   computeBatchChecksumSha256,
   EXTERNAL_SOURCE_FOODY,
   INGESTION_BATCHES_COLLECTION,
   IngestionValidationError,
+  MAX_DUPLICATE_GROUP_SAMPLES,
+  MAX_SAMPLE_DOCS_PER_GROUP,
   parseIngestionCliArgs,
   parseRawIngestionInput,
   preflightExternalSourceUniqueIndex,
@@ -167,6 +170,8 @@ class InMemoryMongoCollection {
     spec: Record<string, unknown>;
     options: Record<string, unknown>;
   }> = [];
+  public readonly aggregatePipelines: Array<Array<Record<string, unknown>>> =
+    [];
   public beforeInsertOne?: (doc: Record<string, unknown>) => void;
   public beforeUpdateOne?: (
     filter: Record<string, unknown>,
@@ -219,62 +224,140 @@ class InMemoryMongoCollection {
   }
 
   aggregate(pipeline: Array<Record<string, unknown>>) {
-    let rows: Array<Record<string, unknown>> = this.docs.map((d) => ({
-      ...d,
-    }));
+    this.aggregatePipelines.push(pipeline);
+    const runStages = (
+      inputRows: Array<Record<string, unknown>>,
+      stages: Array<Record<string, unknown>>,
+    ): Array<Record<string, unknown>> => {
+      let rows = inputRows.map((d) => ({ ...d }));
 
-    for (const stage of pipeline) {
-      if ('$match' in stage && stage.$match) {
-        const matchFilter = stage.$match as Record<string, unknown>;
-        rows = rows.filter((r) => matchesFilter(r as StoredDoc, matchFilter));
-      } else if ('$group' in stage && stage.$group) {
-        const groupSpec = stage.$group as Record<string, unknown>;
-        const idSpec = groupSpec._id as Record<string, string>;
-        const grouped = new Map<
-          string,
-          {
-            _id: Record<string, unknown>;
-            count: number;
-            docIds: unknown[];
-            names: unknown[];
-          }
-        >();
+      for (const stage of stages) {
+        if ('$match' in stage && stage.$match) {
+          const matchFilter = stage.$match as Record<string, unknown>;
+          rows = rows.filter((r) => matchesFilter(r as StoredDoc, matchFilter));
+        } else if ('$group' in stage && stage.$group) {
+          const groupSpec = stage.$group as Record<string, unknown>;
+          const idSpec = groupSpec._id;
+          const grouped = new Map<string, Record<string, unknown>>();
 
-        for (const row of rows) {
-          const groupId: Record<string, unknown> = {};
-          for (const [k, expr] of Object.entries(idSpec)) {
-            const fieldName = expr.startsWith('$') ? expr.slice(1) : expr;
-            groupId[k] = row[fieldName];
+          for (const row of rows) {
+            let groupId: unknown = null;
+            if (idSpec && typeof idSpec === 'object') {
+              const idObj: Record<string, unknown> = {};
+              for (const [k, expr] of Object.entries(
+                idSpec as Record<string, string>,
+              )) {
+                const fieldName = expr.startsWith('$') ? expr.slice(1) : expr;
+                idObj[k] = row[fieldName];
+              }
+              groupId = idObj;
+            }
+            const mapKey = JSON.stringify(groupId);
+            let bucket = grouped.get(mapKey);
+            if (!bucket) {
+              bucket = { _id: groupId };
+              for (const [field, accSpec] of Object.entries(groupSpec)) {
+                if (field === '_id') continue;
+                const accObj = accSpec as Record<string, unknown>;
+                if ('$sum' in accObj) {
+                  bucket[field] = 0;
+                } else if ('$firstN' in accObj || '$push' in accObj) {
+                  bucket[field] = [];
+                }
+              }
+              grouped.set(mapKey, bucket);
+            }
+
+            for (const [field, accSpec] of Object.entries(groupSpec)) {
+              if (field === '_id') continue;
+              const accObj = accSpec as Record<string, unknown>;
+              if ('$sum' in accObj) {
+                const sumExpr = accObj.$sum;
+                const inc =
+                  typeof sumExpr === 'number'
+                    ? sumExpr
+                    : typeof sumExpr === 'string' && sumExpr.startsWith('$')
+                      ? Number(row[sumExpr.slice(1)] ?? 0)
+                      : 0;
+                bucket[field] = Number(bucket[field] ?? 0) + inc;
+              } else if ('$firstN' in accObj) {
+                const firstNSpec = accObj.$firstN as {
+                  input: string;
+                  n: number;
+                };
+                const arr = bucket[field] as unknown[];
+                if (arr.length < firstNSpec.n) {
+                  const fieldName = firstNSpec.input.startsWith('$')
+                    ? firstNSpec.input.slice(1)
+                    : firstNSpec.input;
+                  arr.push(row[fieldName]);
+                }
+              } else if ('$push' in accObj) {
+                const pushExpr = String(accObj.$push);
+                const fieldName = pushExpr.startsWith('$')
+                  ? pushExpr.slice(1)
+                  : pushExpr;
+                (bucket[field] as unknown[]).push(row[fieldName]);
+              }
+            }
           }
-          const mapKey = JSON.stringify(groupId);
-          const bucket = grouped.get(mapKey) ?? {
-            _id: groupId,
-            count: 0,
-            docIds: [],
-            names: [],
-          };
-          bucket.count += 1;
-          bucket.docIds.push(row._id);
-          bucket.names.push(row.tenQuan);
-          grouped.set(mapKey, bucket);
+
+          rows = Array.from(grouped.values());
+        } else if ('$sort' in stage && stage.$sort) {
+          const sortEntries = Object.entries(
+            stage.$sort as Record<string, number>,
+          );
+          const getNested = (
+            obj: Record<string, unknown>,
+            path: string,
+          ): unknown =>
+            path.split('.').reduce<unknown>((cur, seg) => {
+              if (cur && typeof cur === 'object') {
+                return (cur as Record<string, unknown>)[seg];
+              }
+              return undefined;
+            }, obj);
+          rows.sort((a, b) => {
+            for (const [sortKey, sortDir] of sortEntries) {
+              const av = getNested(a, sortKey);
+              const bv = getNested(b, sortKey);
+              if (typeof av === 'number' && typeof bv === 'number') {
+                if (av !== bv) return sortDir < 0 ? bv - av : av - bv;
+              } else {
+                const as =
+                  typeof av === 'string' ? av : JSON.stringify(av ?? '');
+                const bs =
+                  typeof bv === 'string' ? bv : JSON.stringify(bv ?? '');
+                if (as !== bs) {
+                  return sortDir < 0
+                    ? bs.localeCompare(as)
+                    : as.localeCompare(bs);
+                }
+              }
+            }
+            return 0;
+          });
+        } else if ('$limit' in stage && typeof stage.$limit === 'number') {
+          rows = rows.slice(0, stage.$limit);
+        } else if ('$facet' in stage && stage.$facet) {
+          const facetSpec = stage.$facet as Record<
+            string,
+            Array<Record<string, unknown>>
+          >;
+          const facetOut: Record<string, Array<Record<string, unknown>>> = {};
+          for (const [facetName, subPipeline] of Object.entries(facetSpec)) {
+            facetOut[facetName] = runStages(rows, subPipeline);
+          }
+          rows = [facetOut];
         }
-
-        rows = Array.from(grouped.values());
-      } else if ('$sort' in stage && stage.$sort) {
-        const sortSpec = stage.$sort as Record<string, number>;
-        const [[sortKey, sortDir]] = Object.entries(sortSpec);
-        rows.sort((a, b) => {
-          const av = typeof a[sortKey] === 'number' ? a[sortKey] : 0;
-          const bv = typeof b[sortKey] === 'number' ? b[sortKey] : 0;
-          return sortDir < 0 ? bv - av : av - bv;
-        });
-      } else if ('$limit' in stage && typeof stage.$limit === 'number') {
-        rows = rows.slice(0, stage.$limit);
       }
-    }
 
+      return rows;
+    };
+
+    const resultRows = runStages(this.docs, pipeline);
     return {
-      toArray: () => Promise.resolve(rows),
+      toArray: () => Promise.resolve(resultRows),
     };
   }
 
@@ -1522,6 +1605,176 @@ describe('M10.2.1 Ingestion Safety Hardening & Recovery', () => {
       expect(extIndex).toBeDefined();
       const [, extOpts] = extIndex!;
       expect((extOpts as { unique?: boolean }).unique).not.toBe(true);
+    });
+  });
+
+  describe('Final hardening: preflight reporting accuracy, bounded memory & legacy key compatibility', () => {
+    it('reports true total duplicateGroupCount and totalAffectedDocuments independently when > 200 duplicate groups exist', async () => {
+      const docs: StoredDoc[] = [];
+      const totalGroups = 215;
+      for (let g = 0; g < totalGroups; g += 1) {
+        const sourceId = `dup-group-${g}`;
+        docs.push(
+          {
+            _id: new ObjectId(),
+            tenQuan: `Restaurant ${g} A`,
+            externalSource: EXTERNAL_SOURCE_FOODY,
+            externalSourceId: sourceId,
+          },
+          {
+            _id: new ObjectId(),
+            tenQuan: `Restaurant ${g} B`,
+            externalSource: EXTERNAL_SOURCE_FOODY,
+            externalSourceId: sourceId,
+          },
+        );
+      }
+
+      const { db, collections } = createInMemoryDb(docs);
+      const report = await preflightExternalSourceUniqueIndex(db);
+
+      expect(report.scannedCount).toBe(430);
+      expect(report.duplicateGroupCount).toBe(215);
+      expect(report.displayedDuplicateGroupCount).toBe(
+        MAX_DUPLICATE_GROUP_SAMPLES,
+      );
+      expect(report.duplicates).toHaveLength(MAX_DUPLICATE_GROUP_SAMPLES);
+      expect(report.totalAffectedDocuments).toBe(430);
+      expect(report.safeToCreateUniqueIndex).toBe(false);
+      expect(report.indexCreated).toBe(false);
+      expect(report.remediationSteps.length).toBeGreaterThan(0);
+
+      await expect(
+        rolloutIngestionIndexes(db, { dryRun: false }),
+      ).rejects.toThrow(IngestionValidationError);
+      expect(collections[RESTAURANTS_COLLECTION].createdIndexes).toHaveLength(
+        0,
+      );
+    });
+
+    it('bounds per-group docIds and names via MongoDB 7.0 $firstN for very large duplicate groups while preserving actual count', async () => {
+      const docs: StoredDoc[] = [];
+      const hugeGroupSize = 250;
+      for (let i = 0; i < hugeGroupSize; i += 1) {
+        docs.push({
+          _id: new ObjectId(),
+          tenQuan: `Huge Duplicate ${i}`,
+          externalSource: EXTERNAL_SOURCE_FOODY,
+          externalSourceId: 'huge-group-1',
+        });
+      }
+
+      const { db, collections } = createInMemoryDb(docs);
+      const report = await preflightExternalSourceUniqueIndex(db);
+
+      expect(report.duplicateGroupCount).toBe(1);
+      expect(report.displayedDuplicateGroupCount).toBe(1);
+      expect(report.totalAffectedDocuments).toBe(hugeGroupSize);
+      expect(report.safeToCreateUniqueIndex).toBe(false);
+      expect(report.duplicates[0].count).toBe(hugeGroupSize);
+      expect(report.duplicates[0].docIds).toHaveLength(
+        MAX_SAMPLE_DOCS_PER_GROUP,
+      );
+      expect(report.duplicates[0].names).toHaveLength(
+        MAX_SAMPLE_DOCS_PER_GROUP,
+      );
+      expect(report.duplicates[0].sampleTruncated).toBe(true);
+
+      const pipelineJson = JSON.stringify(
+        collections[RESTAURANTS_COLLECTION].aggregatePipelines[0],
+      );
+      expect(pipelineJson).toContain('$firstN');
+      expect(pipelineJson).toContain('$facet');
+      expect(pipelineJson).not.toContain('$push');
+    });
+
+    it('matches exact legacy docs without normalizedNameAddressKey, and resolves casing/whitespace drift cleanly via non-destructive backfill', async () => {
+      const exactLegacyId = new ObjectId();
+      const driftedLegacyId = new ObjectId();
+      const { db, collections } = createInMemoryDb([
+        {
+          _id: exactLegacyId,
+          tenQuan: 'Phở Phú Vương',
+          diaChi: '120 Nguyễn Thái Bình, Q1',
+          reviewsCount: 5,
+          isVerified: true,
+        },
+        {
+          _id: driftedLegacyId,
+          tenQuan: 'BÚN BÒ   HUẾ ĐÔNG BA',
+          diaChi: ' 110A Nguyễn Du, Q1 ',
+          ownerId: new ObjectId(),
+          reviewsCount: 12,
+          isVerified: true,
+        },
+      ]);
+
+      // 1. Exact tenQuan+diaChi legacy record without normalizedNameAddressKey still matches via Tier 4 exact compound fallback
+      const exactMatchSummary = await runRestaurantIngestionPipeline(db, {
+        rawContent: JSON.stringify([
+          {
+            RestaurantID: '9601',
+            Name: 'Phở Phú Vương',
+            Address: '120 Nguyễn Thái Bình, Q1',
+            Latitude: 10.769,
+            Longtitude: 106.697,
+            AvgRating: 8.4,
+          },
+        ]),
+        batchId: 'batch-legacy-exact',
+        mode: 'apply',
+      });
+      expect(exactMatchSummary.metrics.matched_count).toBe(1);
+      expect(exactMatchSummary.metrics.inserted_count).toBe(0);
+
+      // 2. Dry-run backfill inspects missing normalizedNameAddressKey without modifying existing docs
+      const dryBackfill = await backfillLegacyNormalizedKeys(db, {
+        dryRun: true,
+      });
+      expect(dryBackfill.dryRun).toBe(true);
+      expect(dryBackfill.missingKeyCount).toBe(1);
+      expect(dryBackfill.computableCount).toBe(1);
+      expect(dryBackfill.updatedCount).toBe(0);
+
+      const driftedBefore = collections[RESTAURANTS_COLLECTION].docs.find(
+        (d) => String(d._id) === driftedLegacyId.toString(),
+      );
+      expect(driftedBefore?.normalizedNameAddressKey).toBeUndefined();
+
+      // 3. Apply non-destructive backfill: populates ONLY normalizedNameAddressKey, preserves ownerId/reviewsCount/tenQuan/diaChi
+      const appliedBackfill = await backfillLegacyNormalizedKeys(db, {
+        dryRun: false,
+      });
+      expect(appliedBackfill.dryRun).toBe(false);
+      expect(appliedBackfill.updatedCount).toBe(1);
+
+      const driftedAfter = collections[RESTAURANTS_COLLECTION].docs.find(
+        (d) => String(d._id) === driftedLegacyId.toString(),
+      );
+      expect(driftedAfter?.normalizedNameAddressKey).toBe(
+        'bún bò huế đông ba::110a nguyễn du, q1',
+      );
+      expect(driftedAfter?.tenQuan).toBe('BÚN BÒ   HUẾ ĐÔNG BA');
+      expect(driftedAfter?.reviewsCount).toBe(12);
+      expect(driftedAfter?.ownerId).toBeDefined();
+
+      // 4. Subsequent ingestion with standard casing/spacing now matches the drifted legacy doc reliably
+      const driftedMatchSummary = await runRestaurantIngestionPipeline(db, {
+        rawContent: JSON.stringify([
+          {
+            RestaurantID: '9602',
+            Name: 'Bún Bò Huế Đông Ba',
+            Address: '110A Nguyễn Du, Q1',
+            Latitude: 10.773,
+            Longtitude: 106.695,
+            AvgRating: 8.6,
+          },
+        ]),
+        batchId: 'batch-legacy-after-backfill',
+        mode: 'apply',
+      });
+      expect(driftedMatchSummary.metrics.matched_count).toBe(1);
+      expect(driftedMatchSummary.metrics.inserted_count).toBe(0);
     });
   });
 });
