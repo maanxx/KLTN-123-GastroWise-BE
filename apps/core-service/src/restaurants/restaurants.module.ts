@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { RestaurantsService } from './restaurants.service';
 import { RestaurantsController } from './restaurants.controller';
 import { DishesController } from './dishes.controller';
+import { RecommendationsController } from './recommendations.controller';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Restaurant, RestaurantSchema } from './schemas/restaurant.schema';
 import { MenuItem, MenuItemSchema } from './schemas/menu-item.schema';
@@ -29,7 +30,11 @@ import { InteractionsModule } from '../interactions/interactions.module';
     TasteDnaModule,
     InteractionsModule,
   ],
-  controllers: [RestaurantsController, DishesController],
+  controllers: [
+    RestaurantsController,
+    DishesController,
+    RecommendationsController,
+  ],
   providers: [RestaurantsService],
   exports: [RestaurantsService],
 })
