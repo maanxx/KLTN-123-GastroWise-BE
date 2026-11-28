@@ -42,6 +42,7 @@ export interface RestaurantListExtraFilters {
   district?: string;
   area?: string;
   cuisine?: string;
+  category?: string;
   minPrice?: number;
   maxPrice?: number;
   minRating?: number;
@@ -52,6 +53,10 @@ const MAX_PAGE_LIMIT = 100;
 const MAX_PAGE_NUMBER = 1000;
 const MAX_MANUAL_SCAN_LIMIT = 500;
 const MAX_MENU_LEGACY_LIMIT = 200;
+const RESTAURANT_PUBLIC_PROJECTION =
+  '-ingestionBatchId -ingestionRevision -ingestionPostDigest -normalizedNameAddressKey -ownerId';
+const DISH_PUBLIC_PROJECTION =
+  '-externalSource -externalSourceId -ingestionBatchId -sourceMetadata -_ingestionContentDigest';
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -307,10 +312,15 @@ export class RestaurantsService {
     const sortSpec =
       (query.sortBy && sortMap[query.sortBy]) || sortMap.isFeatured;
 
+    const dishCursor = this.menuItemModel.find(filter);
+    const projectedDishCursor =
+      typeof dishCursor.select === 'function'
+        ? dishCursor.select(DISH_PUBLIC_PROJECTION)
+        : dishCursor;
+
     const [total, rawItems] = await Promise.all([
       this.menuItemModel.countDocuments(filter).exec(),
-      this.menuItemModel
-        .find(filter)
+      projectedDishCursor
         .populate('restaurantId', 'tenQuan diaChi lat lon location')
         .sort(sortSpec)
         .skip(skip)
@@ -319,12 +329,19 @@ export class RestaurantsService {
         .exec(),
     ]);
 
+    const totalPages = Math.ceil(total / limitNum);
     return {
       data: rawItems.map((item) => this.mapDishToDTO(item)),
+      meta: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages,
+      },
       total,
       page: pageNum,
       limit: limitNum,
-      totalPages: Math.ceil(total / limitNum),
+      totalPages,
     };
   }
 
@@ -343,8 +360,13 @@ export class RestaurantsService {
       );
     }
 
-    const dish = await this.menuItemModel
-      .findById(id)
+    const dishFindById = this.menuItemModel.findById(id);
+    const projectedDishById =
+      typeof dishFindById.select === 'function'
+        ? dishFindById.select(DISH_PUBLIC_PROJECTION)
+        : dishFindById;
+
+    const dish = await projectedDishById
       .populate('restaurantId', 'tenQuan diaChi lat lon location')
       .lean()
       .exec();
@@ -1211,7 +1233,7 @@ export class RestaurantsService {
       }
     }
 
-    const combinedTags = [tags, extraFilters.cuisine]
+    const combinedTags = [tags, extraFilters.cuisine, extraFilters.category]
       .filter((t) => typeof t === 'string' && t.trim() && t.trim() !== 'Tất cả')
       .join(',');
     if (combinedTags) {
@@ -1247,28 +1269,31 @@ export class RestaurantsService {
         const aiResponse = await firstValueFrom(
           this.httpService.post(`${aiUrl}/recommend`, payload, {
             headers,
+            timeout: 2500,
           }),
         );
 
         const recommendedItems = aiResponse.data.scores || [];
         const recommendedIds = recommendedItems.map((item: any) => item.id);
 
+        const keywordOrClauses = [
+          { tenQuan: { $regex: safeSearch, $options: 'i' } },
+          { name: { $regex: safeSearch, $options: 'i' } },
+          { tags: { $regex: safeSearch, $options: 'i' } },
+          { cuisines: { $regex: safeSearch, $options: 'i' } },
+          { diaChi: { $regex: safeSearch, $options: 'i' } },
+          { address: { $regex: safeSearch, $options: 'i' } },
+        ];
+
         if (recommendedIds.length > 0) {
-          andConditions.push({ _id: { $in: recommendedIds } });
+          andConditions.push({
+            $or: [{ _id: { $in: recommendedIds } }, ...keywordOrClauses],
+          });
           recommendedItems.forEach((item: any, index: number) => {
             aiIndexMap[item.id] = index;
           });
         } else {
-          andConditions.push({
-            $or: [
-              { tenQuan: { $regex: safeSearch, $options: 'i' } },
-              { name: { $regex: safeSearch, $options: 'i' } },
-              { tags: { $regex: safeSearch, $options: 'i' } },
-              { cuisines: { $regex: safeSearch, $options: 'i' } },
-              { diaChi: { $regex: safeSearch, $options: 'i' } },
-              { address: { $regex: safeSearch, $options: 'i' } },
-            ],
-          });
+          andConditions.push({ $or: keywordOrClauses });
           isAiSearch = false;
         }
       } catch (error: any) {
@@ -1314,10 +1339,14 @@ export class RestaurantsService {
         .countDocuments(filterQuery)
         .exec();
       const manualCursor = this.restaurantModel.find(filterQuery);
-      const sortedManualCursor =
-        typeof manualCursor.sort === 'function'
-          ? manualCursor.sort(sortOptions)
+      const projectedManualCursor =
+        typeof manualCursor.select === 'function'
+          ? manualCursor.select(RESTAURANT_PUBLIC_PROJECTION)
           : manualCursor;
+      const sortedManualCursor =
+        typeof projectedManualCursor.sort === 'function'
+          ? projectedManualCursor.sort(sortOptions)
+          : projectedManualCursor;
       const fetchedCandidates = await sortedManualCursor
         .limit(MAX_MANUAL_SCAN_LIMIT + 1)
         .lean()
@@ -1428,8 +1457,12 @@ export class RestaurantsService {
         .map((res) => this.mapRestaurantToDTO(res));
     } else {
       total = await this.restaurantModel.countDocuments(filterQuery).exec();
-      const rawData = await this.restaurantModel
-        .find(filterQuery)
+      const dbCursor = this.restaurantModel.find(filterQuery);
+      const projectedDbCursor =
+        typeof dbCursor.select === 'function'
+          ? dbCursor.select(RESTAURANT_PUBLIC_PROJECTION)
+          : dbCursor;
+      const rawData = await projectedDbCursor
         .sort(sortOptions)
         .skip(skip)
         .limit(limitNum)
@@ -1437,13 +1470,20 @@ export class RestaurantsService {
       data = rawData.map((res) => this.mapRestaurantToDTO(res));
     }
 
+    const totalPages = Math.ceil(total / limitNum);
     return {
       data,
+      meta: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages,
+      },
       total,
       page: pageNum,
       limit: limitNum,
       currentPage: pageNum,
-      totalPages: Math.ceil(total / limitNum),
+      totalPages,
       sortBy: sortBy,
       order: order,
       isBoundedResult,

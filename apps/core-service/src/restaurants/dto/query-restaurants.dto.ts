@@ -87,6 +87,11 @@ export class QueryRestaurantsDto {
   @IsOptional()
   @IsString()
   @MaxLength(128)
+  category?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
   tags?: string;
 
   @IsOptional()

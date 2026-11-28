@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
@@ -10,13 +12,21 @@ import { RestaurantsService } from './restaurants.service';
 import { RestaurantsController } from './restaurants.controller';
 import { DishesController } from './dishes.controller';
 import { Restaurant } from './schemas/restaurant.schema';
-import { MenuItem } from './schemas/menu-item.schema';
+import { MenuItem, MenuItemSchema } from './schemas/menu-item.schema';
 import { QueryRestaurantsDto } from './dto/query-restaurants.dto';
 import { QueryDishesDto } from './dto/query-dishes.dto';
 import { ROLES_KEY } from '../auth/roles.decorator';
 
+interface PaginationMeta {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
 interface RestaurantListResponse {
   data: Array<Record<string, unknown>>;
+  meta: PaginationMeta;
   total: number;
   page: number;
   limit: number;
@@ -29,6 +39,7 @@ interface RestaurantListResponse {
 
 function createChainMock<T>(result: T) {
   const chain: Record<string, jest.Mock> = {};
+  chain.select = jest.fn(() => chain);
   chain.populate = jest.fn(() => chain);
   chain.sort = jest.fn(() => chain);
   chain.skip = jest.fn(() => chain);
@@ -603,6 +614,135 @@ describe('M10.5 Restaurant & Dish Read APIs', () => {
       });
       const validationErrors = await validate(invalidDishDto);
       expect(validationErrors.length).toBeGreaterThanOrEqual(3);
+    });
+  });
+
+  describe('M10.8 standardized meta, projections, category filter, indexes & gateway routing', () => {
+    it('returns standardized meta pagination object alongside legacy fields on restaurants and dishes endpoints', async () => {
+      const restChain = createChainMock(sampleRestaurants);
+      restaurantModel.find.mockReturnValue(restChain);
+
+      const restRes = (await restaurantsController.findAll({
+        page: 1,
+        limit: 10,
+        category: 'Mì phở',
+        sortBy: 'rating',
+        order: 'desc',
+      })) as RestaurantListResponse;
+
+      expect(restRes.meta).toEqual({
+        page: 1,
+        limit: 10,
+        total: 2,
+        totalPages: 1,
+      });
+      expect(restRes.total).toBe(2);
+      expect(restChain.select).toHaveBeenCalledWith(
+        expect.stringContaining('-ingestionBatchId'),
+      );
+
+      const dishChain = createChainMock(sampleDishes);
+      menuItemModel.find.mockReturnValue(dishChain);
+
+      const dishRes = await dishesController.findAll({
+        page: 1,
+        limit: 20,
+        restaurantId: restId1,
+        sortBy: 'price',
+        order: 'asc',
+      });
+
+      expect(dishRes.meta).toEqual({
+        page: 1,
+        limit: 20,
+        total: 1,
+        totalPages: 1,
+      });
+      expect(dishChain.select).toHaveBeenCalledWith(
+        expect.stringContaining('-sourceMetadata'),
+      );
+      expect(dishChain.sort).toHaveBeenCalledWith({ price: 1, _id: 1 });
+    });
+
+    it('isolates restaurant filter on dishes so unrelated restaurants are never queried', async () => {
+      await dishesController.findAll({
+        restaurantId: restId1,
+        page: 1,
+        limit: 10,
+      });
+
+      const calls = menuItemModel.find.mock.calls as Array<
+        [Record<string, unknown>]
+      >;
+      const filter = calls[0][0];
+      expect(filter.restaurantId).toBeInstanceOf(Types.ObjectId);
+      expect((filter.restaurantId as Types.ObjectId).toHexString()).toBe(
+        restId1,
+      );
+    });
+
+    it('combines AI recommendations with MongoDB regex keyword search so newly ingested restaurants are immediately searchable', async () => {
+      httpService.post.mockReturnValue(
+        of({ data: { scores: [{ id: restId2, score: 0.9 }] } }),
+      );
+
+      await restaurantsController.findAll({
+        search: 'Phở',
+        page: 1,
+        limit: 10,
+      });
+
+      const calls = restaurantModel.find.mock.calls as Array<
+        [{ $or?: Array<Record<string, unknown>> }]
+      >;
+      const filter = calls[0][0];
+      expect(Array.isArray(filter.$or)).toBe(true);
+      const serialized = JSON.stringify(filter.$or);
+      expect(serialized).toContain(restId2);
+      expect(serialized).toContain('tenQuan');
+    });
+
+    it('declares justified non-duplicate compound dish indexes on MenuItemSchema', () => {
+      const indexes = MenuItemSchema.indexes();
+      expect(
+        indexes.some(
+          ([spec]) =>
+            spec.restaurantId === 1 &&
+            spec.isAvailable === 1 &&
+            spec.price === 1,
+        ),
+      ).toBe(true);
+      expect(indexes.some(([spec]) => spec.tags === 1)).toBe(true);
+      // Must not duplicate a standalone `{ restaurantId: 1 }` index
+      expect(
+        indexes.some(
+          ([spec]) => Object.keys(spec).length === 1 && spec.restaurantId === 1,
+        ),
+      ).toBe(false);
+    });
+
+    it('verifies Nginx Gateway routes restaurants & dishes to Core Service and preserves Core/Planning boundaries', () => {
+      const nginxConfPath = path.resolve(
+        __dirname,
+        '../../../../nginx/nginx.conf',
+      );
+      const conf = fs.readFileSync(nginxConfPath, 'utf8');
+
+      // Core Service upstream & /api/v1/* routing (preserves query strings)
+      expect(conf).toContain('server core-service:3001');
+      expect(conf).toContain('location /api/v1/');
+      expect(conf).toContain('proxy_pass http://core_service;');
+      // Planning Service isolated to /api/v1/itineraries
+      expect(conf).toContain('server planning-service:3003');
+      expect(conf).toContain('location /api/v1/itineraries');
+      expect(conf).toContain('proxy_pass http://planning_service;');
+      // Legacy non-versioned rewrite includes both restaurants and dishes
+      expect(conf).toMatch(
+        /location ~ \^\/\(auth\|users\|restaurants\|dishes\|/,
+      );
+      // Timeouts configured
+      expect(conf).toContain('proxy_read_timeout 30s;');
+      expect(conf).toContain('proxy_connect_timeout 5s;');
     });
   });
 });
