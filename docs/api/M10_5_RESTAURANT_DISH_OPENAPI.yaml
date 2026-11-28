@@ -168,6 +168,34 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /recommendations/food:
+    get:
+      summary: Personalized food discovery and restaurant/dish recommendations (deterministic + hybrid AI)
+      tags: [Recommendations]
+      parameters:
+        - { name: keyword, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: latitude, in: query, schema: { type: number, minimum: -90, maximum: 90 } }
+        - { name: longitude, in: query, schema: { type: number, minimum: -180, maximum: 180 } }
+        - { name: radiusKm, in: query, schema: { type: number, minimum: 0.1, maximum: 100, default: 10 } }
+        - { name: minBudget, in: query, schema: { type: number, minimum: 0 } }
+        - { name: maxBudget, in: query, schema: { type: number, minimum: 0 } }
+        - { name: cuisines, in: query, schema: { type: string, maxLength: 256, example: "Món Việt,Phở" } }
+        - { name: categories, in: query, schema: { type: string, maxLength: 256, example: "Món chính,Bánh mì" } }
+        - { name: isVegetarian, in: query, schema: { type: string, enum: ["true", "false"] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 10 } }
+      responses:
+        "200":
+          description: Ranked restaurant and dish recommendations with truthful explanations and strategy metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FoodRecommendationResponse"
+        "400":
+          description: Invalid coordinates (partial lat/lon or [0,0]), invalid budget range (minBudget > maxBudget), or invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /restaurants/{id}/menu:
     get:
       summary: "[Legacy] List up to 200 menu items for a restaurant"
@@ -343,6 +371,39 @@ components:
         page: { type: integer, minimum: 1 }
         limit: { type: integer, minimum: 1, maximum: 100 }
         totalPages: { type: integer, minimum: 0 }
+    FoodRecommendationItem:
+      type: object
+      required: [restaurant, recommendedDishes, score, reasons]
+      properties:
+        restaurant:
+          $ref: "#/components/schemas/Restaurant"
+        recommendedDishes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Dish"
+        score: { type: number, minimum: 0, maximum: 1 }
+        reasons:
+          type: array
+          items: { type: string }
+        distanceKm: { type: number }
+    FoodRecommendationResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/FoodRecommendationItem"
+        meta:
+          type: object
+          required: [total, limit, strategy]
+          properties:
+            total: { type: integer, minimum: 0 }
+            limit: { type: integer, minimum: 1, maximum: 50 }
+            strategy: { type: string, enum: [hybrid, deterministic] }
+            weights:
+              type: object
+              additionalProperties: { type: number }
     ErrorResponse:
       type: object
       properties:
