@@ -9,17 +9,82 @@ import {
   IngestionValidationIssue,
   NormalizedRestaurantCandidate,
   ParsedRawRecord,
+  SUPPORTED_INGESTION_SOURCES,
 } from './ingestion.types';
+import {
+  redactSensitiveDiagnosticString,
+  sanitizeDiagnosticValue,
+} from './ingestion.sanitizer';
 
 export interface RecordNormalizationOutcome {
   candidate: NormalizedRestaurantCandidate | null;
   errors: IngestionValidationIssue[];
   warnings: IngestionValidationIssue[];
+  infos: IngestionValidationIssue[];
   invalidOrMissingCoords: boolean;
   ratingKind: '10_point' | '5_point' | 'unrated_zero' | 'ambiguous';
   missingTags: boolean;
   missingPrice: boolean;
   missingAddress: boolean;
+}
+
+export function isSupportedIngestionSource(source: string): boolean {
+  const normalized = source.trim().toLowerCase();
+  return (SUPPORTED_INGESTION_SOURCES as readonly string[]).includes(
+    normalized,
+  );
+}
+
+export function isFoodyFamilySource(source: string): boolean {
+  const normalized = source.trim().toLowerCase();
+  return (
+    normalized === EXTERNAL_SOURCE_FOODY ||
+    normalized === 'shopeefood' ||
+    normalized === 'foody'
+  );
+}
+
+export function redactUrlCredentials(rawUrl: string): string {
+  return redactSensitiveDiagnosticString(rawUrl);
+}
+
+function normalizeDisplayText(raw: string): string {
+  const withoutControls = Array.from(raw.normalize('NFC'))
+    .map((ch) => {
+      const code = ch.charCodeAt(0);
+      return code < 32 || code === 127 ? ' ' : ch;
+    })
+    .join('');
+  return withoutControls.replace(/\s+/g, ' ').trim();
+}
+
+function isNonEmptyInput(value: unknown): boolean {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (typeof value === 'string' && value.trim().length === 0) {
+    return false;
+  }
+  return true;
+}
+
+function normalizePhoneNumber(raw: string): {
+  normalized: string;
+  valid: boolean;
+} {
+  const cleaned = normalizeDisplayText(raw);
+  if (!cleaned) {
+    return { normalized: '', valid: true };
+  }
+  const compact = cleaned.replace(/[\s().-]+/g, '');
+  const vnNormalized = /^\+84\d{9,10}$/.test(compact)
+    ? `0${compact.slice(3)}`
+    : compact;
+  const valid = /^\+?\d{7,15}$/.test(vnNormalized);
+  return {
+    normalized: valid ? vnNormalized : '',
+    valid,
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -254,8 +319,11 @@ function validateHttpUrl(rawUrl: string): string {
 }
 
 function extractSourceUrlAndSlug(doc: Record<string, unknown>): {
+  rawMicrosite: string;
   urlGoc: string;
   slug: string;
+  malformedUrl: boolean;
+  derivedFromSlug: boolean;
 } {
   const rawMicrosite = readText(doc, [
     'MicrositeUrl',
@@ -265,29 +333,79 @@ function extractSourceUrlAndSlug(doc: Record<string, unknown>): {
   const rawSlug = readText(doc, ['ResUrlRewrite', 'slug']);
 
   let urlGoc = '';
-  if (
-    rawMicrosite.startsWith('http://') ||
-    rawMicrosite.startsWith('https://')
-  ) {
-    urlGoc = validateHttpUrl(rawMicrosite);
-  } else if (rawMicrosite.startsWith('/')) {
-    urlGoc = `https://www.foody.vn${rawMicrosite}`;
-  } else if (rawMicrosite.length > 0 && rawMicrosite.includes('/')) {
-    urlGoc = `https://www.foody.vn/${rawMicrosite}`;
+  let malformedUrl = false;
+  let derivedFromSlug = false;
+
+  if (rawMicrosite.length > 0) {
+    if (
+      rawMicrosite.startsWith('http://') ||
+      rawMicrosite.startsWith('https://')
+    ) {
+      urlGoc = validateHttpUrl(rawMicrosite);
+      if (!urlGoc || /\s/.test(rawMicrosite)) {
+        malformedUrl = true;
+        urlGoc = '';
+      }
+    } else if (rawMicrosite.startsWith('/')) {
+      if (/\s/.test(rawMicrosite)) {
+        malformedUrl = true;
+      } else {
+        urlGoc = validateHttpUrl(`https://www.foody.vn${rawMicrosite}`);
+        if (!urlGoc) malformedUrl = true;
+      }
+    } else if (
+      /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawMicrosite) ||
+      /\s/.test(rawMicrosite) ||
+      !rawMicrosite.includes('/')
+    ) {
+      malformedUrl = true;
+    } else {
+      urlGoc = validateHttpUrl(`https://www.foody.vn/${rawMicrosite}`);
+      if (!urlGoc) malformedUrl = true;
+    }
   } else if (rawSlug.length > 0) {
-    urlGoc = `https://www.foody.vn/ho-chi-minh/${rawSlug}`;
+    urlGoc = validateHttpUrl(`https://www.foody.vn/ho-chi-minh/${rawSlug}`);
+    derivedFromSlug = Boolean(urlGoc);
   }
 
   let slug = rawSlug;
-  if (!slug && rawMicrosite.length > 0) {
+  if (!slug && rawMicrosite.length > 0 && !malformedUrl) {
     const segments = rawMicrosite.split('/').filter(Boolean);
     if (segments.length > 0) {
       slug = segments[segments.length - 1];
     }
   }
-  slug = slug.trim().toLowerCase();
+  slug = normalizeDisplayText(slug).toLowerCase();
 
-  return { urlGoc, slug };
+  return { rawMicrosite, urlGoc, slug, malformedUrl, derivedFromSlug };
+}
+
+function extractImages(
+  doc: Record<string, unknown>,
+  avatarUrl: string,
+): string[] {
+  const urls: string[] = [];
+  const pushValid = (val: unknown): void => {
+    if (typeof val !== 'string') return;
+    const valid = validateHttpUrl(val.trim());
+    if (valid && !urls.includes(valid)) {
+      urls.push(valid);
+    }
+  };
+  if (avatarUrl) pushValid(avatarUrl);
+  const pictureModel = asRecord(doc.PictureModel);
+  if (pictureModel) {
+    pushValid(pictureModel.ImageUrl);
+    pushValid(pictureModel.FullSizeImageUrl);
+  }
+  pushValid(doc.MobileImageUrl);
+  pushValid(doc.avatarUrl);
+  if (Array.isArray(doc.images)) {
+    for (const img of doc.images) {
+      pushValid(img);
+    }
+  }
+  return urls;
 }
 
 function deriveCityId(doc: Record<string, unknown>): string | undefined {
@@ -358,10 +476,12 @@ function readExplicitRatingScaleInput(
 export function validateAndNormalizeRestaurantRecord(
   parsed: ParsedRawRecord,
   batchId: string,
+  defaultSource: string = EXTERNAL_SOURCE_FOODY,
 ): RecordNormalizationOutcome {
   const { recordIndex, payload } = parsed;
   const errors: IngestionValidationIssue[] = [];
   const warnings: IngestionValidationIssue[] = [];
+  const infos: IngestionValidationIssue[] = [];
 
   if (
     payload._malformedJsonLine !== undefined ||
@@ -371,16 +491,14 @@ export function validateAndNormalizeRestaurantRecord(
       recordIndex,
       field: 'record',
       errorCode: 'MALFORMED_RECORD',
-      reason:
-        typeof payload._parseError === 'string'
-          ? `Malformed JSON record: ${payload._parseError}`
-          : 'Record must be a valid JSON object.',
+      reason: 'Record must be a valid JSON object.',
       severity: 'error',
     });
     return {
       candidate: null,
       errors,
       warnings,
+      infos,
       invalidOrMissingCoords: false,
       ratingKind: 'unrated_zero',
       missingTags: false,
@@ -394,9 +512,28 @@ export function validateAndNormalizeRestaurantRecord(
     'restaurantId',
     'externalSourceId',
   ]);
-  const externalSource =
-    readText(payload, ['externalSource', 'source']) || EXTERNAL_SOURCE_FOODY;
-  const tenQuan = readText(payload, ['Name', 'tenQuan', 'name']);
+  const rawExternalSource = readText(payload, ['externalSource', 'source']);
+  const effectiveDefaultSource = defaultSource.trim() || EXTERNAL_SOURCE_FOODY;
+  const resolvedRawSource = rawExternalSource || effectiveDefaultSource;
+  const normalizedSource = resolvedRawSource.toLowerCase();
+  const externalSource = isSupportedIngestionSource(normalizedSource)
+    ? normalizedSource
+    : resolvedRawSource;
+  if (!isSupportedIngestionSource(normalizedSource)) {
+    const safeSource = redactSensitiveDiagnosticString(resolvedRawSource, 64);
+    errors.push({
+      recordIndex,
+      field: 'externalSource',
+      errorCode: 'UNSUPPORTED_SOURCE_FORMAT',
+      reason: `Unsupported externalSource "${safeSource}". Supported sources: ${SUPPORTED_INGESTION_SOURCES.join(', ')}.`,
+      severity: 'error',
+      sourceId: externalSourceId || undefined,
+      originalValue: sanitizeDiagnosticValue(resolvedRawSource),
+    });
+  }
+
+  const rawName = readText(payload, ['Name', 'tenQuan', 'name']);
+  const tenQuan = normalizeDisplayText(rawName);
 
   if (!externalSourceId) {
     errors.push({
@@ -427,6 +564,84 @@ export function validateAndNormalizeRestaurantRecord(
       reason: 'Upstream record has IsDelete=true and cannot be imported.',
       severity: 'error',
       sourceId: externalSourceId || undefined,
+      originalValue: true,
+    });
+  }
+
+  // Validate numeric rating & review count up-front so invalid values reject cleanly
+  const subscores = extractFoodySubscores(payload);
+  const hasExplicitFoodyReviewsProvenance =
+    payload._reviewsCountIsFoodySource === true ||
+    payload.crawlerSource === 'crawl_shopeefood';
+  const rawReviewInputValue =
+    payload.TotalReview ??
+    payload.foodyReviewsCount ??
+    (hasExplicitFoodyReviewsProvenance ? payload.reviewsCount : undefined);
+  const foodyReviewsCount = readOptionalFiniteNumber(rawReviewInputValue);
+  if (
+    isNonEmptyInput(rawReviewInputValue) &&
+    (foodyReviewsCount === undefined || foodyReviewsCount < 0)
+  ) {
+    errors.push({
+      recordIndex,
+      field: 'TotalReview',
+      errorCode: 'INVALID_REVIEW_COUNT',
+      reason:
+        'Review count must be a non-negative finite number when provided.',
+      severity: 'error',
+      sourceId: externalSourceId || undefined,
+      originalValue: sanitizeDiagnosticValue(rawReviewInputValue),
+    });
+  }
+
+  const rawRatingInputValue =
+    payload.AvgRating ?? payload.diemTrungBinh ?? payload.rating;
+  const rawRatingInput = readOptionalFiniteNumber(rawRatingInputValue);
+  const explicitScale = readExplicitRatingScaleInput(payload);
+  if (
+    isNonEmptyInput(rawRatingInputValue) &&
+    (rawRatingInput === undefined ||
+      rawRatingInput < 0 ||
+      rawRatingInput > 10 ||
+      (explicitScale === '5_point' && rawRatingInput > 5))
+  ) {
+    errors.push({
+      recordIndex,
+      field: 'AvgRating',
+      errorCode: 'INVALID_RATING',
+      reason:
+        explicitScale === '5_point'
+          ? 'Rating exceeds valid [0, 5] range for 5_point scale.'
+          : 'Rating must be a finite number within [0, 10].',
+      severity: 'error',
+      sourceId: externalSourceId || undefined,
+      originalValue: sanitizeDiagnosticValue(rawRatingInputValue),
+    });
+  }
+
+  // Source URL & slug validation
+  const { rawMicrosite, urlGoc, slug, malformedUrl, derivedFromSlug } =
+    extractSourceUrlAndSlug(payload);
+  if (malformedUrl) {
+    errors.push({
+      recordIndex,
+      field: 'MicrositeUrl/urlGoc',
+      errorCode: 'MALFORMED_URL',
+      reason:
+        'Source URL must be a valid HTTP/HTTPS URL or relative Foody path.',
+      severity: 'error',
+      sourceId: externalSourceId || undefined,
+      originalValue: sanitizeDiagnosticValue(rawMicrosite),
+    });
+  } else if (derivedFromSlug) {
+    infos.push({
+      recordIndex,
+      field: 'urlGoc',
+      errorCode: 'SOURCE_URL_DERIVED_FROM_SLUG',
+      reason: 'Derived canonical source URL from ResUrlRewrite/slug.',
+      severity: 'info',
+      sourceId: externalSourceId || undefined,
+      originalValue: sanitizeDiagnosticValue(slug),
     });
   }
 
@@ -435,6 +650,7 @@ export function validateAndNormalizeRestaurantRecord(
       candidate: null,
       errors,
       warnings,
+      infos,
       invalidOrMissingCoords: false,
       ratingKind: 'unrated_zero',
       missingTags: false,
@@ -444,7 +660,8 @@ export function validateAndNormalizeRestaurantRecord(
   }
 
   // Address (do not fabricate default city string when absent)
-  const diaChi = readText(payload, ['Address', 'diaChi', 'address']);
+  const rawAddress = readText(payload, ['Address', 'diaChi', 'address']);
+  const diaChi = normalizeDisplayText(rawAddress);
   const missingAddress = diaChi.length === 0;
   if (missingAddress) {
     warnings.push({
@@ -454,6 +671,16 @@ export function validateAndNormalizeRestaurantRecord(
       reason: 'Address is missing; leaving diaChi empty without fabrication.',
       severity: 'warning',
       sourceId: externalSourceId,
+    });
+  } else if (diaChi.length < 5 || !/[a-zA-ZÀ-ỹ0-9]/.test(diaChi)) {
+    warnings.push({
+      recordIndex,
+      field: 'Address',
+      errorCode: 'INCOMPLETE_ADDRESS',
+      reason: 'Address appears incomplete; manual review recommended.',
+      severity: 'warning',
+      sourceId: externalSourceId,
+      originalValue: sanitizeDiagnosticValue(rawAddress),
     });
   }
 
@@ -473,22 +700,6 @@ export function validateAndNormalizeRestaurantRecord(
       sourceId: externalSourceId,
     });
   }
-
-  // Subscores & Ratings (separate Foody TotalReview into foodyReviewsCount;
-  // do NOT treat native reviewsCount as Foody count without explicit provenance)
-  const subscores = extractFoodySubscores(payload);
-  const hasExplicitFoodyReviewsProvenance =
-    payload._reviewsCountIsFoodySource === true ||
-    payload.crawlerSource === 'crawl_shopeefood';
-  const foodyReviewsCount = readOptionalFiniteNumber(
-    payload.TotalReview ??
-      payload.foodyReviewsCount ??
-      (hasExplicitFoodyReviewsProvenance ? payload.reviewsCount : undefined),
-  );
-  const rawRatingInput = readOptionalFiniteNumber(
-    payload.AvgRating ?? payload.diemTrungBinh ?? payload.rating,
-  );
-  const explicitScale = readExplicitRatingScaleInput(payload);
 
   let diemTrungBinh: number | undefined;
   let rawRating: number | undefined;
@@ -513,7 +724,7 @@ export function validateAndNormalizeRestaurantRecord(
     diemTrungBinh = 0;
     ratingScale =
       explicitScale ??
-      (externalSource === EXTERNAL_SOURCE_FOODY ? '10_point' : 'ambiguous');
+      (isFoodyFamilySource(externalSource) ? '10_point' : 'ambiguous');
     ratingNormalizedFlag = ratingScale !== 'ambiguous';
     ratingKind = 'unrated_zero';
   } else {
@@ -521,7 +732,7 @@ export function validateAndNormalizeRestaurantRecord(
       explicitScale ?? undefined;
     if (!resolvedInputScale) {
       if (
-        externalSource === EXTERNAL_SOURCE_FOODY ||
+        isFoodyFamilySource(externalSource) ||
         rawRatingInput > 5 ||
         Object.keys(subscores).length > 0
       ) {
@@ -545,6 +756,15 @@ export function validateAndNormalizeRestaurantRecord(
 
     if (norm.ratingScale === '10_point') {
       ratingKind = '10_point';
+      infos.push({
+        recordIndex,
+        field: 'AvgRating',
+        errorCode: 'RATING_NORMALIZED_10_TO_5',
+        reason: `Normalized 10-point rating ${rawRatingInput} to ${diemTrungBinh} (5-point scale).`,
+        severity: 'info',
+        sourceId: externalSourceId,
+        originalValue: rawRatingInput,
+      });
     } else if (norm.ratingScale === '5_point') {
       ratingKind = '5_point';
     } else {
@@ -556,6 +776,7 @@ export function validateAndNormalizeRestaurantRecord(
         reason: `Rating ${rawRatingInput} in [0, 5] lacks explicit scale metadata; flagged as ratingScale='ambiguous'.`,
         severity: 'warning',
         sourceId: externalSourceId,
+        originalValue: rawRatingInput,
       });
     }
   }
@@ -592,20 +813,58 @@ export function validateAndNormalizeRestaurantRecord(
     });
   }
 
-  // Avatar URL
+  // Avatar URL & Images
   const pictureModel = asRecord(payload.PictureModel);
   const rawAvatar =
     (pictureModel
       ? readText(pictureModel, ['ImageUrl', 'FullSizeImageUrl'])
       : '') || readText(payload, ['MobileImageUrl', 'avatarUrl']);
   const avatarUrl = validateHttpUrl(rawAvatar);
+  if (rawAvatar && !avatarUrl) {
+    warnings.push({
+      recordIndex,
+      field: 'avatarUrl',
+      errorCode: 'MALFORMED_IMAGE_URL',
+      reason: 'Avatar image URL is not a valid HTTP/HTTPS URL; omitted safely.',
+      severity: 'warning',
+      sourceId: externalSourceId,
+      originalValue: sanitizeDiagnosticValue(rawAvatar),
+    });
+  }
+  const images = extractImages(payload, avatarUrl);
 
-  // Source URL & slug
-  const { urlGoc, slug } = extractSourceUrlAndSlug(payload);
+  // Phone normalization
+  const rawPhone = readText(payload, ['contactPhone', 'Phone', 'Mobile']);
+  const phoneResult = normalizePhoneNumber(rawPhone);
+  if (rawPhone && !phoneResult.valid) {
+    warnings.push({
+      recordIndex,
+      field: 'contactPhone',
+      errorCode: 'INVALID_PHONE_NUMBER',
+      reason: 'Phone number format is invalid; omitted safely.',
+      severity: 'warning',
+      sourceId: externalSourceId,
+      originalValue: sanitizeDiagnosticValue(rawPhone),
+    });
+  }
 
   // Status (respect IsActive=false as 'closed')
   const status: 'open' | 'closed' =
     payload.IsActive === false ? 'closed' : 'open';
+
+  const sourceMetadata: Record<string, unknown> = {};
+  for (const key of [
+    'CityID',
+    'City',
+    'District',
+    'crawlerSource',
+    'RestaurantStatus',
+    'IsActive',
+  ]) {
+    if (payload[key] !== undefined) {
+      sourceMetadata[key] = payload[key];
+    }
+  }
 
   const candidate: NormalizedRestaurantCandidate = {
     recordIndex,
@@ -631,17 +890,38 @@ export function validateAndNormalizeRestaurantRecord(
     gioMoCua,
     tags,
     avatarUrl,
+    images,
     urlGoc,
     slug,
-    contactPhone: readText(payload, ['contactPhone', 'Phone', 'Mobile']),
+    contactPhone: phoneResult.normalized,
     status,
     ingestionBatchId: batchId,
+    rawPreserved: {
+      name: rawName ? redactSensitiveDiagnosticString(rawName) : undefined,
+      address: rawAddress
+        ? redactSensitiveDiagnosticString(rawAddress)
+        : undefined,
+      phone: rawPhone ? redactSensitiveDiagnosticString(rawPhone) : undefined,
+      url: rawMicrosite
+        ? redactSensitiveDiagnosticString(rawMicrosite)
+        : undefined,
+      avatarUrl: rawAvatar
+        ? redactSensitiveDiagnosticString(rawAvatar)
+        : undefined,
+      rating: sanitizeDiagnosticValue(rawRatingInputValue),
+      reviewCount: sanitizeDiagnosticValue(rawReviewInputValue),
+      sourceMetadata:
+        Object.keys(sourceMetadata).length > 0
+          ? (sanitizeDiagnosticValue(sourceMetadata) as Record<string, unknown>)
+          : undefined,
+    },
   };
 
   return {
     candidate,
     errors,
     warnings,
+    infos,
     invalidOrMissingCoords,
     ratingKind,
     missingTags,

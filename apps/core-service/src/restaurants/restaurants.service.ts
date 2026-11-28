@@ -30,6 +30,11 @@ import {
   normalizeRestaurantRating,
   normalizeRestaurantTags,
 } from '@shared/utils/restaurant-normalizer.util';
+import {
+  evaluateRestaurantDataQuality,
+  IngestionValidationError,
+} from '@shared/ingestion';
+import { ValidateRestaurantDataQualityDto } from './dto/validate-restaurant-data-quality.dto';
 
 @Injectable()
 export class RestaurantsService {
@@ -92,7 +97,10 @@ export class RestaurantsService {
   async createMenuItem(restaurantId: string, dto: any) {
     let targetRestId: string | null = null;
     if (restaurantId && Types.ObjectId.isValid(restaurantId)) {
-      const rest = await this.restaurantModel.findById(restaurantId).lean().exec();
+      const rest = await this.restaurantModel
+        .findById(restaurantId)
+        .lean()
+        .exec();
       if (rest) {
         targetRestId = rest._id.toString();
       }
@@ -142,8 +150,10 @@ export class RestaurantsService {
         : {}),
     };
 
-    const hasLat = createRestaurantDto.lat !== undefined && createRestaurantDto.lat !== null;
-    const hasLon = createRestaurantDto.lon !== undefined && createRestaurantDto.lon !== null;
+    const hasLat =
+      createRestaurantDto.lat !== undefined && createRestaurantDto.lat !== null;
+    const hasLon =
+      createRestaurantDto.lon !== undefined && createRestaurantDto.lon !== null;
     const hasLocation = createRestaurantDto.location !== undefined;
 
     if (hasLocation) {
@@ -165,7 +175,10 @@ export class RestaurantsService {
         restaurantData.location = { type: 'Point', coordinates: [lon, lat] };
       }
     } else if (hasLat || hasLon) {
-      const geoPoint = toGeoJsonPoint(createRestaurantDto.lat, createRestaurantDto.lon);
+      const geoPoint = toGeoJsonPoint(
+        createRestaurantDto.lat,
+        createRestaurantDto.lon,
+      );
       if (!geoPoint) {
         throw new BadRequestException(
           'Invalid restaurant coordinates: lat [-90..90] and lon [-180..180] must both be valid numbers and not [0, 0]',
@@ -988,9 +1001,13 @@ export class RestaurantsService {
       } else if (isSortDistance) {
         allCandidates.sort((a: any, b: any) => {
           const dA =
-            typeof a.distance === 'number' ? a.distance : Number.POSITIVE_INFINITY;
+            typeof a.distance === 'number'
+              ? a.distance
+              : Number.POSITIVE_INFINITY;
           const dB =
-            typeof b.distance === 'number' ? b.distance : Number.POSITIVE_INFINITY;
+            typeof b.distance === 'number'
+              ? b.distance
+              : Number.POSITIVE_INFINITY;
           return order === 'asc' ? dA - dB : dB - dA;
         });
       } else {
@@ -1308,6 +1325,53 @@ export class RestaurantsService {
         data: topRestaurants,
         results: topRestaurants,
       };
+    }
+  }
+
+  /**
+   * [M10.3] Dry-run restaurant data quality validation & normalization preview (no DB writes).
+   */
+  validateDataQuality(dto: ValidateRestaurantDataQualityDto) {
+    const hasRawContent = dto.rawContent !== undefined;
+    const hasRecords = dto.records !== undefined;
+    if (!hasRawContent && !hasRecords) {
+      throw new BadRequestException(
+        'Either rawContent or records array is required for data quality validation.',
+      );
+    }
+    if (hasRawContent && hasRecords) {
+      throw new BadRequestException(
+        'Provide exactly one of rawContent or records, not both simultaneously.',
+      );
+    }
+
+    try {
+      const evaluated = evaluateRestaurantDataQuality({
+        rawContent: dto.rawContent,
+        records: dto.records,
+        format: dto.format,
+        source: dto.source,
+        batchId: dto.batchId,
+        maxRejectedSample: dto.maxRejectedSample,
+      });
+
+      return {
+        batchId: evaluated.batchId,
+        source: evaluated.source,
+        dryRun: true,
+        validationStatus: evaluated.report.overallQualityStatus,
+        validatedRestaurants: evaluated.validatedCandidates,
+        rejectedRecords: evaluated.rejectedRecords,
+        fieldErrors: evaluated.errors,
+        warnings: evaluated.warnings,
+        infos: evaluated.infos,
+        dataQualitySummary: evaluated.report,
+      };
+    } catch (err) {
+      if (err instanceof IngestionValidationError) {
+        throw new BadRequestException(err.message);
+      }
+      throw err;
     }
   }
 }

@@ -21,6 +21,7 @@ import { UpdateRestaurantDto } from './dto/update-restaurant.dto';
 import { CreateMenuItemDto } from './dto/create-menu-item.dto';
 import { UpdateMenuItemDto } from './dto/update-menu-item.dto';
 import { ChatRestaurantDto } from './dto/chat-restaurant.dto';
+import { ValidateRestaurantDataQualityDto } from './dto/validate-restaurant-data-quality.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -209,6 +210,17 @@ export class RestaurantsController {
   @Post('recommender/sync-cf')
   syncInteractionsToAi() {
     return this.restaurantsService.syncInteractionsToAi();
+  }
+
+  /**
+   * [M10.3] Dry-run restaurant data quality validation & normalization preview (Admin only)
+   * POST /restaurants/data-quality/validate
+   */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Post('data-quality/validate')
+  validateDataQuality(@Body() dto: ValidateRestaurantDataQualityDto) {
+    return this.restaurantsService.validateDataQuality(dto);
   }
 
   @Get(':id')
