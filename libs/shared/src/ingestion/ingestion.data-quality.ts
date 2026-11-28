@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import {
   DataQualityReport,
   DataQualityStatus,
@@ -12,18 +13,26 @@ import {
   SUPPORTED_INGESTION_SOURCES,
 } from './ingestion.types';
 import {
-  computeBatchChecksumSha256,
   createIngestionBatchId,
   parseRawIngestionInput,
   RawInputFormat,
 } from './ingestion.staging';
 import {
   isSupportedIngestionSource,
+  redactUrlCredentials,
   validateAndNormalizeRestaurantRecord,
 } from './ingestion.normalizer';
 
 export const MAX_REJECTED_SAMPLE_RECORDS = 50 as const;
 export const MAX_DUPLICATE_CANDIDATE_SAMPLES = 50 as const;
+export const MAX_RAW_CONTENT_BYTES = 2 * 1024 * 1024;
+export const MAX_DATA_QUALITY_RECORDS = 5000 as const;
+const MAX_SANITIZE_DEPTH = 4;
+const MAX_SANITIZE_OBJECT_KEYS = 20;
+const MAX_SANITIZE_ARRAY_ITEMS = 20;
+const MAX_SANITIZE_STRING_LENGTH = 500;
+const SENSITIVE_KEY_PATTERN =
+  /password|passphrase|secret|token|api[-_]?key|auth(?:orization)?|cookie|credential|private[-_]?key|session/i;
 
 export interface EvaluateDataQualityOptions {
   rawContent?: string;
@@ -81,23 +90,89 @@ function normalizeUrlToken(value: unknown): string {
   return value.trim().replace(/\/+$/, '').toLowerCase();
 }
 
-function sanitizeRawPreview(
+function sanitizeSanitizedString(value: string): string {
+  const redacted = redactUrlCredentials(value);
+  if (redacted.length > MAX_SANITIZE_STRING_LENGTH) {
+    return `${redacted.slice(0, MAX_SANITIZE_STRING_LENGTH)}...[truncated]`;
+  }
+  return redacted;
+}
+
+function sanitizePreviewValue(
+  value: unknown,
+  depth: number,
+  seen: WeakSet<object>,
+): unknown {
+  if (value === null || value === undefined || typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : '[NonFiniteNumber]';
+  }
+  if (typeof value === 'string') {
+    return sanitizeSanitizedString(value);
+  }
+  if (typeof value === 'bigint') {
+    return value.toString();
+  }
+  if (typeof value !== 'object') {
+    return '[UnsupportedValue]';
+  }
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime())
+      ? '[InvalidDate]'
+      : value.toISOString();
+  }
+
+  if (seen.has(value)) {
+    return '[Circular]';
+  }
+
+  if (depth >= MAX_SANITIZE_DEPTH) {
+    return Array.isArray(value) ? '[MaxDepthArray]' : '[MaxDepthObject]';
+  }
+
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const limit = Math.min(value.length, MAX_SANITIZE_ARRAY_ITEMS);
+      const out: unknown[] = [];
+      for (let i = 0; i < limit; i += 1) {
+        out.push(sanitizePreviewValue(value[i], depth + 1, seen));
+      }
+      if (value.length > limit) {
+        out.push(`[+${value.length - limit} more items]`);
+      }
+      return out;
+    }
+
+    const safe: Record<string, unknown> = {};
+    let count = 0;
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (SENSITIVE_KEY_PATTERN.test(k)) {
+        continue;
+      }
+      if (count >= MAX_SANITIZE_OBJECT_KEYS) {
+        break;
+      }
+      safe[k] = sanitizePreviewValue(v, depth + 1, seen);
+      count += 1;
+    }
+    return safe;
+  } finally {
+    seen.delete(value);
+  }
+}
+
+export function sanitizeRawPreview(
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
-  const safe: Record<string, unknown> = {};
-  const blockedKeyPattern = /password|secret|token|api[_-]?key|auth/i;
-  let count = 0;
-  for (const [k, v] of Object.entries(payload)) {
-    if (blockedKeyPattern.test(k)) {
-      continue;
-    }
-    if (count >= 12) {
-      break;
-    }
-    safe[k] = v;
-    count += 1;
-  }
-  return safe;
+  const sanitized = sanitizePreviewValue(payload, 0, new WeakSet<object>());
+  return typeof sanitized === 'object' &&
+    sanitized !== null &&
+    !Array.isArray(sanitized)
+    ? (sanitized as Record<string, unknown>)
+    : {};
 }
 
 export function buildDataQualityReport(params: {
@@ -209,38 +284,91 @@ export function evaluateRestaurantDataQuality(
       `Unsupported batch source "${rawSource}". Supported sources: ${SUPPORTED_INGESTION_SOURCES.join(', ')}.`,
     );
   }
-  const maxRejectedSample =
-    options.maxRejectedSample ?? MAX_REJECTED_SAMPLE_RECORDS;
 
-  let parsedRecords: ParsedRawRecord[];
-  if (Array.isArray(options.records)) {
-    parsedRecords = options.records.map((payload, idx) => ({
-      recordIndex: idx,
-      payload:
-        typeof payload === 'object' &&
-        payload !== null &&
-        !Array.isArray(payload)
-          ? payload
-          : { _invalidPayload: payload },
-    }));
-  } else if (typeof options.rawContent === 'string') {
-    parsedRecords = parseRawIngestionInput(
-      options.rawContent,
-      options.format || 'auto',
+  const hasRawContent = options.rawContent !== undefined;
+  const hasRecords = options.records !== undefined;
+  if (hasRawContent && hasRecords) {
+    throw new IngestionValidationError(
+      'Provide exactly one of rawContent or records, not both simultaneously.',
     );
-  } else {
+  }
+  if (!hasRawContent && !hasRecords) {
     throw new IngestionValidationError(
       'Either rawContent or records array must be provided for data quality evaluation.',
     );
   }
 
-  const checksumSeed =
-    typeof options.rawContent === 'string'
-      ? options.rawContent
-      : JSON.stringify(parsedRecords.map((r) => r.payload));
+  const requestedMaxSample = options.maxRejectedSample;
+  const maxRejectedSample =
+    typeof requestedMaxSample === 'number' &&
+    Number.isFinite(requestedMaxSample)
+      ? Math.max(
+          0,
+          Math.min(MAX_REJECTED_SAMPLE_RECORDS, Math.floor(requestedMaxSample)),
+        )
+      : MAX_REJECTED_SAMPLE_RECORDS;
+
+  let parsedRecords: ParsedRawRecord[];
+  const hash = createHash('sha256');
+
+  if (hasRecords) {
+    if (!Array.isArray(options.records) || options.records.length === 0) {
+      throw new IngestionValidationError(
+        'records must be a non-empty array of restaurant objects.',
+      );
+    }
+    if (options.records.length > MAX_DATA_QUALITY_RECORDS) {
+      throw new IngestionValidationError(
+        `records exceeds maximum allowed count of ${MAX_DATA_QUALITY_RECORDS} (received ${options.records.length}).`,
+      );
+    }
+    parsedRecords = options.records.map((payload, idx) => {
+      const normalizedPayload =
+        typeof payload === 'object' &&
+        payload !== null &&
+        !Array.isArray(payload)
+          ? payload
+          : { _invalidPayload: payload };
+      hash.update(JSON.stringify(normalizedPayload), 'utf8');
+      return {
+        recordIndex: idx,
+        payload: normalizedPayload,
+      };
+    });
+  } else {
+    if (
+      typeof options.rawContent !== 'string' ||
+      options.rawContent.trim().length === 0
+    ) {
+      throw new IngestionValidationError(
+        'rawContent must be a non-empty JSON or JSONL string.',
+      );
+    }
+    const rawBytes = Buffer.byteLength(options.rawContent, 'utf8');
+    if (rawBytes > MAX_RAW_CONTENT_BYTES) {
+      throw new IngestionValidationError(
+        `rawContent exceeds maximum allowed size of ${MAX_RAW_CONTENT_BYTES} bytes (received ${rawBytes} bytes).`,
+      );
+    }
+    hash.update(options.rawContent, 'utf8');
+    parsedRecords = parseRawIngestionInput(
+      options.rawContent,
+      options.format || 'auto',
+    );
+    if (parsedRecords.length === 0) {
+      throw new IngestionValidationError(
+        'rawContent contains zero restaurant records.',
+      );
+    }
+    if (parsedRecords.length > MAX_DATA_QUALITY_RECORDS) {
+      throw new IngestionValidationError(
+        `Parsed record count exceeds maximum allowed count of ${MAX_DATA_QUALITY_RECORDS} (received ${parsedRecords.length}).`,
+      );
+    }
+  }
+
   const batchId =
-    options.batchId?.trim() ||
-    createIngestionBatchId(computeBatchChecksumSha256(checksumSeed));
+    options.batchId?.trim() || createIngestionBatchId(hash.digest('hex'));
 
   const errors: IngestionValidationIssue[] = [];
   const warnings: IngestionValidationIssue[] = [];

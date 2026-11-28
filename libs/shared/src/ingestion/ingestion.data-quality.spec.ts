@@ -3,10 +3,13 @@ import {
   EXTERNAL_SOURCE_FOODY,
   IngestionValidationError,
   INGESTION_BATCHES_COLLECTION,
+  MAX_DATA_QUALITY_RECORDS,
+  MAX_RAW_CONTENT_BYTES,
   MAX_REJECTED_SAMPLE_RECORDS,
   RAW_STAGING_COLLECTION,
   RESTAURANTS_COLLECTION,
   runRestaurantIngestionPipeline,
+  sanitizeRawPreview,
 } from './index';
 import type { Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
@@ -458,6 +461,120 @@ describe('M10.3 Restaurant Data Quality & Ingestion Readiness', () => {
         'supersecret',
       );
       expect(String(rawRes.errors[0].originalValue)).not.toContain('abc123');
+    });
+  });
+
+  describe('M10.3.2 API hardening, recursive sanitization & resource safety', () => {
+    it('rejects empty inputs and supplying both rawContent and records simultaneously', () => {
+      expect(() =>
+        evaluateRestaurantDataQuality({
+          rawContent: '[]',
+          records: [{ RestaurantID: '1', Name: 'A' }],
+        }),
+      ).toThrow(IngestionValidationError);
+
+      expect(() =>
+        evaluateRestaurantDataQuality({ rawContent: '   ' }),
+      ).toThrow(IngestionValidationError);
+
+      expect(() => evaluateRestaurantDataQuality({ records: [] })).toThrow(
+        IngestionValidationError,
+      );
+    });
+
+    it('rejects oversized rawContent and excessive record counts before parsing or normalizing', () => {
+      const oversizedRaw = 'x'.repeat(MAX_RAW_CONTENT_BYTES + 1);
+      expect(() =>
+        evaluateRestaurantDataQuality({ rawContent: oversizedRaw }),
+      ).toThrow(IngestionValidationError);
+
+      const tooManyRecords = Array.from(
+        { length: MAX_DATA_QUALITY_RECORDS + 1 },
+        (_, i) => ({
+          RestaurantID: `r-${i}`,
+          Name: `Name ${i}`,
+        }),
+      );
+      expect(() =>
+        evaluateRestaurantDataQuality({ records: tooManyRecords }),
+      ).toThrow(IngestionValidationError);
+    });
+
+    it('recursively redacts nested secrets, array secrets, circular refs, and bounds deep payloads', () => {
+      const deep: Record<string, unknown> = {
+        level1: {
+          password: 'p1',
+          level2: {
+            authorization: 'Bearer secret-jwt',
+            level3: {
+              cookie: 'session=secret-cookie',
+              level4: {
+                credential: 'nested-cred',
+                beyondLimit: 'hidden',
+              },
+            },
+          },
+        },
+        items: [
+          { apiKey: 'arr-api-key', safeName: 'item-1' },
+          { token: 'arr-token', note: 'https://u:pw@host.com/x?token=zzz' },
+        ],
+        secret: 'top-secret',
+      };
+      deep.self = deep;
+
+      const sanitized = sanitizeRawPreview(deep);
+      const serialized = JSON.stringify(sanitized);
+
+      expect(serialized).not.toContain('p1');
+      expect(serialized).not.toContain('secret-jwt');
+      expect(serialized).not.toContain('secret-cookie');
+      expect(serialized).not.toContain('nested-cred');
+      expect(serialized).not.toContain('arr-api-key');
+      expect(serialized).not.toContain('arr-token');
+      expect(serialized).not.toContain('top-secret');
+      expect(serialized).not.toContain(':pw@');
+      expect(serialized).not.toContain('=zzz');
+      expect(serialized).toContain('[Circular]');
+      expect(serialized).toContain('[MaxDepthObject]');
+      expect(serialized).toContain('item-1');
+
+      // Verify rejectedSample in report uses recursive sanitization
+      const evalRes = evaluateRestaurantDataQuality({
+        records: [
+          {
+            RestaurantID: '',
+            Name: '',
+            metadata: {
+              token: 'nested-secret-token',
+              headers: [{ cookie: 'c=123', label: 'ok' }],
+            },
+          },
+        ],
+      });
+      const sampleJson = JSON.stringify(evalRes.report.rejectedSample);
+      expect(sampleJson).not.toContain('nested-secret-token');
+      expect(sampleJson).not.toContain('c=123');
+      expect(sampleJson).toContain('ok');
+    });
+
+    it('clamps excessive maxRejectedSample to MAX_REJECTED_SAMPLE_RECORDS', () => {
+      const records = Array.from(
+        { length: MAX_REJECTED_SAMPLE_RECORDS + 15 },
+        (_, i) => ({
+          RestaurantID: `clamp-${i}`,
+        }),
+      );
+      const res = evaluateRestaurantDataQuality({
+        records,
+        maxRejectedSample: 999999,
+      });
+
+      expect(res.report.rejectedRecords).toBe(MAX_REJECTED_SAMPLE_RECORDS + 15);
+      expect(res.rejectedRecords).toHaveLength(MAX_REJECTED_SAMPLE_RECORDS);
+      expect(res.report.rejectedSample).toHaveLength(
+        MAX_REJECTED_SAMPLE_RECORDS,
+      );
     });
   });
 });

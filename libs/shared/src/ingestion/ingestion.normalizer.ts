@@ -40,7 +40,7 @@ export function isFoodyFamilySource(source: string): boolean {
   );
 }
 
-function redactUrlCredentials(rawUrl: string): string {
+export function redactUrlCredentials(rawUrl: string): string {
   return rawUrl
     .replace(/(https?:\/\/)([^/@\s]+@)/gi, '$1***@')
     .replace(/([?&](?:token|key|secret|password|auth)=)[^&\s]+/gi, '$1***');

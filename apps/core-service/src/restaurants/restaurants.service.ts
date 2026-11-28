@@ -1332,9 +1332,16 @@ export class RestaurantsService {
    * [M10.3] Dry-run restaurant data quality validation & normalization preview (no DB writes).
    */
   validateDataQuality(dto: ValidateRestaurantDataQualityDto) {
-    if (!dto.rawContent && !Array.isArray(dto.records)) {
+    const hasRawContent = dto.rawContent !== undefined;
+    const hasRecords = dto.records !== undefined;
+    if (!hasRawContent && !hasRecords) {
       throw new BadRequestException(
         'Either rawContent or records array is required for data quality validation.',
+      );
+    }
+    if (hasRawContent && hasRecords) {
+      throw new BadRequestException(
+        'Provide exactly one of rawContent or records, not both simultaneously.',
       );
     }
 
@@ -1345,6 +1352,7 @@ export class RestaurantsService {
         format: dto.format,
         source: dto.source,
         batchId: dto.batchId,
+        maxRejectedSample: dto.maxRejectedSample,
       });
 
       return {
