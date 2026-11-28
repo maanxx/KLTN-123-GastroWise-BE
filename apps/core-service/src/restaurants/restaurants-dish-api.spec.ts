@@ -22,6 +22,9 @@ interface RestaurantListResponse {
   limit: number;
   currentPage: number;
   totalPages: number;
+  isBoundedResult?: boolean;
+  evaluatedWindowLimit?: number;
+  totalMatchingBeforePostFilter?: number;
 }
 
 function createChainMock<T>(result: T) {
@@ -331,5 +334,109 @@ describe('M10.5 Restaurant & Dish Read APIs', () => {
     expect(createRoles).toEqual(['admin', 'owner']);
     expect(deleteRoles).toEqual(['admin']);
     expect(readRoles).toBeUndefined();
+  });
+
+  describe('M10.5.1 pagination accuracy (>500 docs) & combined dish filters', () => {
+    it('reports exact DB total for >500 restaurants on DB-side pagination without truncation', async () => {
+      restaurantModel.countDocuments.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(650),
+      });
+      restaurantModel.find.mockReturnValue(createChainMock(sampleRestaurants));
+
+      const res = (await service.findAll(
+        2,
+        20,
+        'rating',
+        'desc',
+      )) as RestaurantListResponse;
+
+      expect(res.total).toBe(650);
+      expect(res.page).toBe(2);
+      expect(res.limit).toBe(20);
+      expect(res.totalPages).toBe(33);
+      expect(res.isBoundedResult).toBe(false);
+      expect(res.evaluatedWindowLimit).toBeUndefined();
+    });
+
+    it('explicitly flags bounded scan semantics when manual price-filtered dataset exceeds 500 restaurants', async () => {
+      const overLimitDocs = Array.from({ length: 501 }, (_, idx) => ({
+        _id: new Types.ObjectId().toHexString(),
+        tenQuan: `Restaurant ${idx}`,
+        diaChi: 'Quận 1, TP. HCM',
+        diemTrungBinh: 4.5,
+        ratingScale: '5_point',
+        giaCa: '50.000đ - 90.000đ',
+        status: 'open',
+      }));
+
+      restaurantModel.countDocuments.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(650),
+      });
+      restaurantModel.find.mockReturnValue(createChainMock(overLimitDocs));
+
+      const res = (await service.findAll(
+        1,
+        20,
+        'price',
+        'asc',
+        'all',
+        'false',
+        '',
+        '',
+        '',
+        '',
+        '',
+        { minPrice: 30000, maxPrice: 120000 },
+      )) as RestaurantListResponse;
+
+      expect(res.isBoundedResult).toBe(true);
+      expect(res.evaluatedWindowLimit).toBe(500);
+      expect(res.totalMatchingBeforePostFilter).toBe(650);
+      expect(res.total).toBe(500);
+      expect(res.data).toHaveLength(20);
+    });
+
+    it('composes category AND tag simultaneously with search, price, availability, and vegetarian filters in findDishes()', async () => {
+      await service.findDishes({
+        search: 'Phở (Đặc biệt)',
+        category: 'Món chính',
+        tag: 'Phở',
+        minPrice: 40000,
+        maxPrice: 100000,
+        isAvailable: 'true',
+        isVegetarian: 'false',
+        page: 1,
+        limit: 10,
+      });
+
+      const calls = menuItemModel.find.mock.calls as Array<
+        [{ $and?: Array<Record<string, unknown>> }]
+      >;
+      const executedFilter = calls[0][0];
+      expect(Array.isArray(executedFilter.$and)).toBe(true);
+      const clauses = executedFilter.$and || [];
+
+      // Both category and tag must be present as separate AND clauses on tags
+      const tagClauses = clauses.filter((c) => 'tags' in c);
+      expect(tagClauses).toHaveLength(2);
+      const tagRegexSources = tagClauses.map(
+        (c) => (c.tags as { $regex: RegExp }).$regex.source,
+      );
+      expect(tagRegexSources).toEqual(
+        expect.arrayContaining(['Món chính', 'Phở']),
+      );
+
+      // Price, availability, vegetarian, and escaped regex search must all compose together
+      expect(clauses).toEqual(
+        expect.arrayContaining([
+          { price: { $gte: 40000, $lte: 100000 } },
+          { isAvailable: true },
+          { isVegetarian: false },
+        ]),
+      );
+      const searchClause = clauses.find((c) => '$or' in c);
+      expect(searchClause).toBeDefined();
+      expect(JSON.stringify(searchClause)).toContain('Phở \\\\(Đặc biệt\\\\)');
+    });
   });
 });

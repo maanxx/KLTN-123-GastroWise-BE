@@ -34,7 +34,12 @@ paths:
         - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: desc } }
       responses:
         "200":
-          description: Paginated list of normalized restaurants with coordinates
+          description: >
+            Paginated list of normalized restaurants with coordinates. Standard DB-side queries
+            return exact `total` with `isBoundedResult: false`. In-memory post-filtered or
+            string-price-sorted queries cap candidate scans at 500 and explicitly return
+            `isBoundedResult: true`, `evaluatedWindowLimit: 500`, and `totalMatchingBeforePostFilter`
+            when matching documents exceed 500.
         "400":
           description: Invalid query parameters (e.g. limit > 100 or minPrice > maxPrice)
   /restaurants/{id}:
@@ -61,8 +66,8 @@ paths:
         - { name: search, in: query, schema: { type: string } }
         - { name: minPrice, in: query, schema: { type: number, minimum: 0 } }
         - { name: maxPrice, in: query, schema: { type: number, minimum: 0 } }
-        - { name: category, in: query, schema: { type: string, description: "Matches MenuItem.tags" } }
-        - { name: tag, in: query, schema: { type: string } }
+        - { name: category, in: query, schema: { type: string, description: "Matches MenuItem.tags (composed with `tag` using AND semantics)" } }
+        - { name: tag, in: query, schema: { type: string, description: "Matches MenuItem.tags (composed with `category` using AND semantics)" } }
         - { name: isAvailable, in: query, schema: { type: string, enum: ["true", "false"] } }
         - { name: isVegetarian, in: query, schema: { type: string, enum: ["true", "false"] } }
         - { name: sortBy, in: query, schema: { type: string, enum: [price, isFeatured, createdAt, name] } }

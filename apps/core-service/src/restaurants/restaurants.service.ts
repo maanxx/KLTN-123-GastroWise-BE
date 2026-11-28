@@ -185,7 +185,7 @@ export class RestaurantsService {
       );
     }
 
-    const filter: Record<string, unknown> = {};
+    const andConditions: Array<Record<string, unknown>> = [];
 
     if (query.restaurantId && query.restaurantId !== 'all') {
       if (
@@ -196,42 +196,63 @@ export class RestaurantsService {
           `Invalid restaurantId "${query.restaurantId}". Expected a 24-character hex ObjectId.`,
         );
       }
-      filter.restaurantId = new Types.ObjectId(query.restaurantId);
+      andConditions.push({
+        restaurantId: new Types.ObjectId(query.restaurantId),
+      });
     }
 
     if (query.minPrice !== undefined || query.maxPrice !== undefined) {
       const priceRange: Record<string, number> = {};
       if (query.minPrice !== undefined) priceRange.$gte = Number(query.minPrice);
       if (query.maxPrice !== undefined) priceRange.$lte = Number(query.maxPrice);
-      filter.price = priceRange;
+      andConditions.push({ price: priceRange });
     }
 
-    const categoryOrTag = (query.category || query.tag || '').trim();
-    if (categoryOrTag && categoryOrTag !== 'all') {
-      const safeTag = escapeRegex(categoryOrTag);
-      filter.tags = { $regex: new RegExp(safeTag, 'i') };
+    // Both `category` and `tag` map onto MenuItem.tags with explicit AND semantics
+    // so providing both filters narrows results to dishes matching BOTH tags.
+    const categoryVal = (query.category || '').trim();
+    if (categoryVal && categoryVal !== 'all') {
+      andConditions.push({
+        tags: { $regex: new RegExp(escapeRegex(categoryVal), 'i') },
+      });
+    }
+
+    const tagVal = (query.tag || '').trim();
+    if (tagVal && tagVal !== 'all') {
+      andConditions.push({
+        tags: { $regex: new RegExp(escapeRegex(tagVal), 'i') },
+      });
     }
 
     if (query.isAvailable === 'true') {
-      filter.isAvailable = true;
+      andConditions.push({ isAvailable: true });
     } else if (query.isAvailable === 'false') {
-      filter.isAvailable = false;
+      andConditions.push({ isAvailable: false });
     }
 
     if (query.isVegetarian === 'true') {
-      filter.isVegetarian = true;
+      andConditions.push({ isVegetarian: true });
     } else if (query.isVegetarian === 'false') {
-      filter.isVegetarian = false;
+      andConditions.push({ isVegetarian: false });
     }
 
     if (query.search && query.search.trim().length > 0) {
       const safeSearch = escapeRegex(query.search.trim());
-      filter.$or = [
-        { name: { $regex: safeSearch, $options: 'i' } },
-        { description: { $regex: safeSearch, $options: 'i' } },
-        { tags: { $regex: safeSearch, $options: 'i' } },
-      ];
+      andConditions.push({
+        $or: [
+          { name: { $regex: safeSearch, $options: 'i' } },
+          { description: { $regex: safeSearch, $options: 'i' } },
+          { tags: { $regex: safeSearch, $options: 'i' } },
+        ],
+      });
     }
+
+    const filter: Record<string, unknown> =
+      andConditions.length === 0
+        ? {}
+        : andConditions.length === 1
+          ? andConditions[0]
+          : { $and: andConditions };
 
     const sortDir = query.order === 'asc' ? 1 : -1;
     const sortMap: Record<string, Record<string, 1 | -1>> = {
@@ -1242,13 +1263,33 @@ export class RestaurantsService {
 
     let data: any[] = [];
     let total = 0;
+    let isBoundedResult = false;
+    let totalMatchingBeforePostFilter: number | undefined;
 
     if (isManualProcessing) {
-      let allCandidates = await this.restaurantModel
-        .find(filterQuery)
-        .limit(MAX_MANUAL_SCAN_LIMIT)
+      const rawMatchingTotal = await this.restaurantModel
+        .countDocuments(filterQuery)
+        .exec();
+      const manualCursor = this.restaurantModel.find(filterQuery);
+      const sortedManualCursor =
+        typeof manualCursor.sort === 'function'
+          ? manualCursor.sort(sortOptions)
+          : manualCursor;
+      const fetchedCandidates = await sortedManualCursor
+        .limit(MAX_MANUAL_SCAN_LIMIT + 1)
         .lean()
         .exec();
+
+      isBoundedResult =
+        fetchedCandidates.length > MAX_MANUAL_SCAN_LIMIT ||
+        rawMatchingTotal > MAX_MANUAL_SCAN_LIMIT;
+      if (isBoundedResult) {
+        totalMatchingBeforePostFilter = Math.max(
+          rawMatchingTotal,
+          fetchedCandidates.length,
+        );
+      }
+      let allCandidates = fetchedCandidates.slice(0, MAX_MANUAL_SCAN_LIMIT);
 
       if (userLat && userLon) {
         const userPoint = parseValidCoordinatePair(userLat, userLon);
@@ -1267,6 +1308,11 @@ export class RestaurantsService {
           });
         }
       }
+
+      const hasInMemoryPostFilter =
+        isOpenNowBool ||
+        extraFilters.minPrice !== undefined ||
+        extraFilters.maxPrice !== undefined;
 
       if (isOpenNowBool) {
         allCandidates = allCandidates.filter((res: any) =>
@@ -1331,7 +1377,9 @@ export class RestaurantsService {
         });
       }
 
-      total = allCandidates.length;
+      total = hasInMemoryPostFilter
+        ? allCandidates.length
+        : Math.max(rawMatchingTotal, allCandidates.length);
       data = allCandidates
         .slice(skip, skip + limitNum)
         .map((res) => this.mapRestaurantToDTO(res));
@@ -1355,6 +1403,13 @@ export class RestaurantsService {
       totalPages: Math.ceil(total / limitNum),
       sortBy: sortBy,
       order: order,
+      isBoundedResult,
+      ...(isBoundedResult
+        ? {
+            evaluatedWindowLimit: MAX_MANUAL_SCAN_LIMIT,
+            totalMatchingBeforePostFilter,
+          }
+        : {}),
     };
   }
 
