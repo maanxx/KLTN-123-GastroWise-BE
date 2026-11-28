@@ -106,9 +106,20 @@ function matchesFilter(
         if (typeof val !== 'string') return false;
         continue;
       }
-      if ('$gt' in condObj && typeof condObj.$gt === 'number') {
-        if (typeof val !== 'number' || val <= condObj.$gt) return false;
-        continue;
+      if ('$gt' in condObj) {
+        const gtTarget = condObj.$gt;
+        if (typeof val === 'number' && typeof gtTarget === 'number') {
+          if (val <= gtTarget) return false;
+          continue;
+        }
+        if (
+          (val instanceof ObjectId || typeof val === 'string') &&
+          (gtTarget instanceof ObjectId || typeof gtTarget === 'string')
+        ) {
+          if (String(val) <= String(gtTarget)) return false;
+          continue;
+        }
+        return false;
       }
       if ('$regex' in condObj && typeof condObj.$regex === 'string') {
         const opts =
@@ -186,14 +197,28 @@ class InMemoryMongoCollection {
     this.findFilters.push({ ...filter });
     const matched = this.docs.filter((d) => matchesFilter(d, filter));
     let cap: number | undefined;
+    let sortSpec: Record<string, number> | undefined;
     const cursor = {
+      sort: (spec: Record<string, number>) => {
+        sortSpec = spec;
+        return cursor;
+      },
       limit: (n: number) => {
         cap = n;
         return cursor;
       },
       toArray: () => {
         this.findLimits.push(cap);
-        const sliced = cap !== undefined ? matched.slice(0, cap) : matched;
+        const ordered = [...matched];
+        if (sortSpec && '_id' in sortSpec) {
+          const dir = sortSpec._id;
+          ordered.sort((a, b) => {
+            const as = String(a._id);
+            const bs = String(b._id);
+            return dir < 0 ? bs.localeCompare(as) : as.localeCompare(bs);
+          });
+        }
+        const sliced = cap !== undefined ? ordered.slice(0, cap) : ordered;
         return Promise.resolve(sliced.map((d) => ({ ...d })));
       },
     };
@@ -1775,6 +1800,125 @@ describe('M10.2.1 Ingestion Safety Hardening & Recovery', () => {
       });
       expect(driftedMatchSummary.metrics.matched_count).toBe(1);
       expect(driftedMatchSummary.metrics.inserted_count).toBe(0);
+    });
+
+    it('processes large legacy collections in bounded _id-keyset batches without full-collection materialization', async () => {
+      const docs: StoredDoc[] = [];
+      for (let i = 0; i < 25; i += 1) {
+        docs.push({
+          _id: new ObjectId(),
+          tenQuan: `Legacy Restaurant ${i}`,
+          diaChi: `${i + 1} Lê Lợi, Q1`,
+          ownerId: new ObjectId(),
+          reviewsCount: i,
+          isVerified: i % 2 === 0,
+          isFeatured: i % 3 === 0,
+        });
+      }
+      // 2 uncomputable docs missing diaChi
+      docs.push(
+        { _id: new ObjectId(), tenQuan: 'No Address A', diaChi: '' },
+        { _id: new ObjectId(), tenQuan: 'No Address B' },
+      );
+      // 5 docs already having normalizedNameAddressKey (must never be overwritten)
+      for (let i = 0; i < 5; i += 1) {
+        docs.push({
+          _id: new ObjectId(),
+          tenQuan: `Already Populated ${i}`,
+          diaChi: `${i + 1} Hai Bà Trưng, Q1`,
+          normalizedNameAddressKey: `custom-existing-key-${i}`,
+        });
+      }
+
+      const { db, collections } = createInMemoryDb(docs);
+
+      // Dry-run default processes in bounded batches of 6 with zero mutations
+      const dryRunRes = await backfillLegacyNormalizedKeys(db, {
+        batchSize: 6,
+      });
+      expect(dryRunRes.dryRun).toBe(true);
+      expect(dryRunRes.batchSize).toBe(6);
+      expect(dryRunRes.batchesProcessed).toBe(5);
+      expect(dryRunRes.scannedCount).toBe(32);
+      expect(dryRunRes.missingKeyCount).toBe(27);
+      expect(dryRunRes.computableCount).toBe(25);
+      expect(dryRunRes.uncomputableCount).toBe(2);
+      expect(dryRunRes.updatedCount).toBe(0);
+      expect(
+        collections[RESTAURANTS_COLLECTION].findLimits.every((l) => l === 6),
+      ).toBe(true);
+      expect(collections[RESTAURANTS_COLLECTION].updateOneFilters).toHaveLength(
+        0,
+      );
+
+      // Apply in bounded batches of 6
+      collections[RESTAURANTS_COLLECTION].findLimits.length = 0;
+      const applyRes = await backfillLegacyNormalizedKeys(db, {
+        dryRun: false,
+        batchSize: 6,
+      });
+      expect(applyRes.dryRun).toBe(false);
+      expect(applyRes.batchesProcessed).toBe(5);
+      expect(applyRes.scannedCount).toBe(32);
+      expect(applyRes.missingKeyCount).toBe(27);
+      expect(applyRes.computableCount).toBe(25);
+      expect(applyRes.uncomputableCount).toBe(2);
+      expect(applyRes.updatedCount).toBe(25);
+      expect(applyRes.skippedConcurrentOrAlreadySetCount).toBe(0);
+      expect(
+        collections[RESTAURANTS_COLLECTION].findLimits.every((l) => l === 6),
+      ).toBe(true);
+
+      // Protected fields and pre-existing normalizedNameAddressKey values stay intact
+      for (let i = 0; i < 25; i += 1) {
+        expect(docs[i].normalizedNameAddressKey).toBe(
+          `legacy restaurant ${i}::${i + 1} lê lợi, q1`,
+        );
+        expect(docs[i].tenQuan).toBe(`Legacy Restaurant ${i}`);
+        expect(docs[i].reviewsCount).toBe(i);
+        expect(docs[i].ownerId).toBeDefined();
+      }
+      for (let i = 0; i < 5; i += 1) {
+        expect(docs[27 + i].normalizedNameAddressKey).toBe(
+          `custom-existing-key-${i}`,
+        );
+      }
+    });
+
+    it('skips concurrent normalizedNameAddressKey updates cleanly via CAS and rejects invalid batchSize', async () => {
+      const targetId = new ObjectId();
+      const { db, collections } = createInMemoryDb([
+        {
+          _id: targetId,
+          tenQuan: 'Cơm Tấm Cali',
+          diaChi: '236 Lê Thánh Tôn, Q1',
+        },
+      ]);
+
+      collections[RESTAURANTS_COLLECTION].beforeUpdateOne = () => {
+        const target = collections[RESTAURANTS_COLLECTION].docs[0];
+        if (target) {
+          target.normalizedNameAddressKey = 'concurrently-populated-key';
+        }
+      };
+
+      const res = await backfillLegacyNormalizedKeys(db, {
+        dryRun: false,
+        batchSize: 10,
+      });
+      collections[RESTAURANTS_COLLECTION].beforeUpdateOne = undefined;
+
+      expect(res.missingKeyCount).toBe(1);
+      expect(res.computableCount).toBe(1);
+      expect(res.updatedCount).toBe(0);
+      expect(res.skippedConcurrentOrAlreadySetCount).toBe(1);
+      expect(
+        collections[RESTAURANTS_COLLECTION].docs[0].normalizedNameAddressKey,
+      ).toBe('concurrently-populated-key');
+
+      await expect(
+        backfillLegacyNormalizedKeys(db, { batchSize: 0 }),
+      ).rejects.toThrow(IngestionValidationError);
     });
   });
 });

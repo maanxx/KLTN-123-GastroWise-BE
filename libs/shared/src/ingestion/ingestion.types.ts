@@ -246,6 +246,8 @@ export interface IngestionIndexPreflightReport {
 export interface LegacyNormalizedKeyBackfillResult {
   collection: string;
   dryRun: boolean;
+  batchSize: number;
+  batchesProcessed: number;
   scannedCount: number;
   missingKeyCount: number;
   computableCount: number;

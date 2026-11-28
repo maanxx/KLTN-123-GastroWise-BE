@@ -1712,20 +1712,42 @@ export async function recoverIngestionBatch(
   };
 }
 
+export const DEFAULT_LEGACY_BACKFILL_BATCH_SIZE = 200 as const;
+
 /**
  * Non-destructive dry-run / CAS backfill helper for legacy restaurant documents
- * missing `normalizedNameAddressKey`. Defaults to `dryRun: true` and never modifies
- * user-owned fields, catalog text, or deletes records.
+ * missing `normalizedNameAddressKey`. Processes records in bounded `_id`-keyset batches
+ * so large collections never materialize all documents into memory.
+ * Defaults to `dryRun: true` and never modifies user-owned fields, catalog text, or deletes records.
  */
 export async function backfillLegacyNormalizedKeys(
   db: Db,
-  options: { dryRun?: boolean; limit?: number } = {},
+  options: { dryRun?: boolean; batchSize?: number; limit?: number } = {},
 ): Promise<LegacyNormalizedKeyBackfillResult> {
   const dryRun = options.dryRun !== false;
+  const batchSize =
+    options.batchSize === undefined
+      ? DEFAULT_LEGACY_BACKFILL_BATCH_SIZE
+      : options.batchSize;
+
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw new IngestionValidationError(
+      `Invalid backfill batchSize=${String(batchSize)}: expected integer >= 1.`,
+    );
+  }
+  if (
+    options.limit !== undefined &&
+    (!Number.isInteger(options.limit) || options.limit < 1)
+  ) {
+    throw new IngestionValidationError(
+      `Invalid backfill limit=${String(options.limit)}: expected integer >= 1.`,
+    );
+  }
+
   const restaurantsCol = db.collection<RestaurantDocRecord>(
     RESTAURANTS_COLLECTION,
   );
-  const missingFilter = {
+  const missingFilter: Record<string, unknown> = {
     $or: [
       { normalizedNameAddressKey: { $exists: false } },
       { normalizedNameAddressKey: null },
@@ -1733,70 +1755,108 @@ export async function backfillLegacyNormalizedKeys(
     ],
   };
 
-  const cursor = restaurantsCol.find(missingFilter, {
-    projection: {
-      _id: 1,
-      tenQuan: 1,
-      diaChi: 1,
-      normalizedNameAddressKey: 1,
-    },
-  });
-  const boundedCursor =
-    typeof options.limit === 'number' &&
-    Number.isInteger(options.limit) &&
-    options.limit > 0 &&
-    typeof (cursor as { limit?: (n: number) => unknown }).limit === 'function'
-      ? (
-          cursor as {
-            limit: (n: number) => {
-              toArray: () => Promise<RestaurantDocRecord[]>;
-            };
-          }
-        ).limit(options.limit)
-      : cursor;
-
-  const missingDocs = await boundedCursor.toArray();
   const scannedCount = await restaurantsCol.countDocuments({});
 
+  let missingKeyCount = 0;
   let computableCount = 0;
   let uncomputableCount = 0;
   let updatedCount = 0;
   let skippedConcurrentOrAlreadySetCount = 0;
+  let batchesProcessed = 0;
+  let lastSeenId: ObjectId | string | undefined;
   const sampleMissingDocIds: string[] = [];
 
-  for (const doc of missingDocs) {
-    const key = computeNameAddressKey(doc.tenQuan, doc.diaChi);
-    if (!key) {
-      uncomputableCount += 1;
-      continue;
+  while (true) {
+    const remaining =
+      options.limit !== undefined ? options.limit - missingKeyCount : batchSize;
+    if (remaining <= 0) {
+      break;
     }
 
-    computableCount += 1;
-    if (sampleMissingDocIds.length < 20) {
-      sampleMissingDocIds.push(String(doc._id));
+    const fetchCount = Math.min(batchSize, remaining);
+    const pageFilter: Record<string, unknown> =
+      lastSeenId !== undefined
+        ? { $and: [missingFilter, { _id: { $gt: lastSeenId } }] }
+        : missingFilter;
+
+    const cursor = restaurantsCol.find(pageFilter, {
+      projection: {
+        _id: 1,
+        tenQuan: 1,
+        diaChi: 1,
+        normalizedNameAddressKey: 1,
+      },
+    });
+    const sortedCursor =
+      typeof (cursor as { sort?: (spec: Record<string, 1 | -1>) => unknown })
+        .sort === 'function'
+        ? (
+            cursor as {
+              sort: (spec: Record<string, 1 | -1>) => typeof cursor;
+            }
+          ).sort({ _id: 1 })
+        : cursor;
+    const boundedCursor =
+      typeof (sortedCursor as { limit?: (n: number) => unknown }).limit ===
+      'function'
+        ? (
+            sortedCursor as {
+              limit: (n: number) => {
+                toArray: () => Promise<RestaurantDocRecord[]>;
+              };
+            }
+          ).limit(fetchCount)
+        : sortedCursor;
+
+    const batch = await boundedCursor.toArray();
+    if (batch.length === 0) {
+      break;
     }
 
-    if (!dryRun) {
-      const res = await restaurantsCol.updateOne(
-        {
-          _id: doc._id,
-          ...missingFilter,
-        },
-        { $set: { normalizedNameAddressKey: key } },
-      );
-      if (res.modifiedCount > 0) {
-        updatedCount += 1;
-      } else {
-        skippedConcurrentOrAlreadySetCount += 1;
+    batchesProcessed += 1;
+    lastSeenId = batch[batch.length - 1]._id;
+
+    for (const doc of batch) {
+      missingKeyCount += 1;
+      const key = computeNameAddressKey(doc.tenQuan, doc.diaChi);
+      if (!key) {
+        uncomputableCount += 1;
+        continue;
       }
+
+      computableCount += 1;
+      if (sampleMissingDocIds.length < 20) {
+        sampleMissingDocIds.push(String(doc._id));
+      }
+
+      if (!dryRun) {
+        const res = await restaurantsCol.updateOne(
+          {
+            _id: doc._id,
+            ...missingFilter,
+          },
+          { $set: { normalizedNameAddressKey: key } },
+        );
+        if (res.modifiedCount > 0) {
+          updatedCount += 1;
+        } else {
+          skippedConcurrentOrAlreadySetCount += 1;
+        }
+      }
+    }
+
+    if (batch.length < fetchCount) {
+      break;
     }
   }
 
   return {
     collection: RESTAURANTS_COLLECTION,
     dryRun,
+    batchSize,
+    batchesProcessed,
     scannedCount,
-    missingKeyCount: missingDocs.length,
+    missingKeyCount,
     computableCount,
     uncomputableCount,
     updatedCount,
