@@ -1,0 +1,92 @@
+[
+  {
+    "RestaurantID": "m104-sf-1001",
+    "Name": "  Phở   Hòa Pasteur  ",
+    "Address": "  260C Pasteur, Phường Võ Thị Sáu, Quận 3, TP. HCM ",
+    "CityID": 217,
+    "Latitude": 10.7852,
+    "Longtitude": 106.6879,
+    "AvgRating": 8.8,
+    "TotalReview": 312,
+    "PriceMin": 65000,
+    "PriceMax": 95000,
+    "Cuisines": [{ "Name": "Phở" }, { "Name": "Món Việt" }],
+    "Phone": "+84 28-3829-7943",
+    "MicrositeUrl": "/ho-chi-minh/pho-hoa-pasteur-m104",
+    "ResUrlRewrite": "pho-hoa-pasteur-m104",
+    "PictureModel": {
+      "ImageUrl": "https://images.foody.vn/res/g1/m104-pho-hoa.jpg"
+    },
+    "IsActive": true
+  },
+  {
+    "RestaurantID": "m104-sf-1002",
+    "Name": "Cơm Tấm Ba Ghiền M104",
+    "Address": "84 Đặng Văn Ngữ, Phú Nhuận, TP. HCM",
+    "CityID": 217,
+    "Latitude": 10.7931,
+    "Longtitude": 106.6712,
+    "AvgRating": 9.0,
+    "TotalReview": 520,
+    "PriceMin": 55000,
+    "PriceMax": 110000,
+    "Cuisines": [{ "Name": "Cơm tấm" }, { "Name": "Món Việt" }],
+    "Phone": "0901 234 567",
+    "MicrositeUrl": "/ho-chi-minh/com-tam-ba-ghien-m104",
+    "ResUrlRewrite": "com-tam-ba-ghien-m104",
+    "IsActive": true
+  },
+  {
+    "RestaurantID": "m104-sf-1003",
+    "Name": "Quán Bún Bò Thiếu Tọa Độ",
+    "Address": "",
+    "CityID": 217,
+    "Latitude": 0,
+    "Longtitude": 0,
+    "AvgRating": 8.0,
+    "TotalReview": 18,
+    "PriceMin": 0,
+    "PriceMax": 0,
+    "Cuisines": [{ "Name": "Bún bò Huế" }],
+    "MicrositeUrl": "/ho-chi-minh/bun-bo-thieu-toa-do-m104",
+    "IsActive": true
+  },
+  {
+    "RestaurantID": "m104-sf-1001",
+    "Name": "Phở Hòa Pasteur (Duplicate Candidate)",
+    "Address": "260C Pasteur, Phường Võ Thị Sáu, Quận 3, TP. HCM",
+    "CityID": 217,
+    "Latitude": 10.7852,
+    "Longtitude": 106.6879,
+    "AvgRating": 8.8,
+    "TotalReview": 312,
+    "MicrositeUrl": "/ho-chi-minh/pho-hoa-pasteur-m104",
+    "IsActive": true
+  },
+  {
+    "RestaurantID": "m104-sf-bad-rating",
+    "Name": "Quán Rating Không Hợp Lệ",
+    "Address": "12 Lê Lợi, Q1, TP. HCM",
+    "AvgRating": 15.2,
+    "TotalReview": 10,
+    "metadata": {
+      "password": "fixture-secret-password",
+      "apiKey": "fixture-secret-apikey",
+      "headers": [{ "authorization": "Bearer fixture-jwt-secret", "cookie": "sid=fixture-cookie-secret" }]
+    }
+  },
+  {
+    "RestaurantID": "m104-sf-bad-reviews",
+    "Name": "Quán Review Âm",
+    "Address": "45 Nguyễn Huệ, Q1, TP. HCM",
+    "AvgRating": 8.4,
+    "TotalReview": -8
+  },
+  {
+    "RestaurantID": "m104-sf-bad-url",
+    "Name": "Quán URL Lỗi",
+    "Address": "99 Đồng Khởi, Q1, TP. HCM",
+    "AvgRating": 8.2,
+    "MicrositeUrl": "https://user:fixture-url-pass@bad host/res?token=fixture-url-token"
+  }
+]

@@ -25,6 +25,11 @@ import {
   MAX_REJECTED_SAMPLE_RECORDS,
 } from './ingestion.data-quality';
 import {
+  assertLocalIngestionApplyAllowed,
+  resolveIngestionDatabaseConfig,
+  withIngestionDatabase,
+} from './ingestion.connection';
+import {
   redactSensitiveDiagnosticString,
   sanitizeRawPreview,
 } from './ingestion.sanitizer';
@@ -1776,6 +1781,58 @@ export async function recoverIngestionBatch(
     conflicts: compOutcome.conflicts,
     standaloneLimitationNote: STANDALONE_MONGODB_LIMITATION_NOTE,
   };
+}
+
+export interface ControlledLocalIngestionOptions
+  extends Omit<RunIngestionOptions, 'targetDb' | 'targetUriRedacted'> {
+  env?: Record<string, string | undefined>;
+  /** Optional injected Db instance for isolated unit testing without live sockets. */
+  db?: Db;
+}
+
+/**
+ * Controlled local ingestion entrypoint (M10.4):
+ * - Defaults to `dry-run`.
+ * - Enforces `GASTROWISE_ALLOW_LOCAL_INGESTION=true` before `apply` mode.
+ * - Enforces local-only `gastro_core_test` target via `resolveIngestionDatabaseConfig()`.
+ * - Reuses `runRestaurantIngestionPipeline()` (M10.2.1 + M10.3 data quality & staging).
+ */
+export async function executeControlledLocalIngestion(
+  options: ControlledLocalIngestionOptions,
+): Promise<IngestionBatchSummary> {
+  const env = options.env ?? process.env;
+  const mode: IngestionMode = options.mode || 'dry-run';
+  if (mode !== 'dry-run' && mode !== 'apply') {
+    throw new IngestionValidationError(
+      `Unsupported mode "${mode}" for executeControlledLocalIngestion(): expected "dry-run" or "apply".`,
+    );
+  }
+
+  if (mode === 'apply') {
+    assertLocalIngestionApplyAllowed(env);
+  }
+
+  const config = resolveIngestionDatabaseConfig(env);
+
+  if (options.db) {
+    return runRestaurantIngestionPipeline(options.db, {
+      ...options,
+      mode,
+      targetDb: config.dbName,
+      targetUriRedacted: config.redactedUri,
+    });
+  }
+
+  return withIngestionDatabase(
+    (db, resolvedConfig) =>
+      runRestaurantIngestionPipeline(db, {
+        ...options,
+        mode,
+        targetDb: resolvedConfig.dbName,
+        targetUriRedacted: resolvedConfig.redactedUri,
+      }),
+    env,
+  );
 }
 
 export const DEFAULT_LEGACY_BACKFILL_BATCH_SIZE = 200 as const;

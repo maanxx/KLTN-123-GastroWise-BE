@@ -1,0 +1,13 @@
+# ==============================================================================
+# GASTROWISE — M10.4 LOCAL INGESTION DOCKER COMPOSE OVERRIDE
+# Exposes isolated mongo-test on loopback 127.0.0.1:27018 ONLY for local CLI
+# dry-run/apply testing against `gastro_core_test`. Never use in production.
+# ==============================================================================
+services:
+  mongo-test:
+    ports:
+      - "127.0.0.1:27018:27017"
+
+  core-service:
+    environment:
+      - GASTROWISE_ALLOW_LOCAL_INGESTION=${GASTROWISE_ALLOW_LOCAL_INGESTION:-false}

@@ -2,6 +2,7 @@ import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
+  assertLocalIngestionApplyAllowed,
   parseIngestionCliArgs,
   preflightExternalSourceUniqueIndex,
   recoverIngestionBatch,
@@ -17,6 +18,9 @@ export async function runIngestionCli(
   argv: readonly string[] = process.argv.slice(2),
 ): Promise<void> {
   const parsed = parseIngestionCliArgs(argv);
+  if (parsed.mode === 'apply') {
+    assertLocalIngestionApplyAllowed(process.env);
+  }
 
   const output = await withIngestionDatabase(async (db, config) => {
     if (parsed.mode === 'rollback') {
@@ -66,6 +70,7 @@ export async function runIngestionCli(
     return runRestaurantIngestionPipeline(db, {
       rawContent,
       format: parsed.format,
+      source: parsed.source,
       batchId: parsed.batchId,
       mode: parsed.mode,
       targetDb: config.dbName,

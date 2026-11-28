@@ -6,10 +6,28 @@ import {
   IngestionValidationError,
 } from './ingestion.types';
 
+export const LOCAL_INGESTION_ALLOW_ENV_VAR =
+  'GASTROWISE_ALLOW_LOCAL_INGESTION' as const;
+
 export interface ResolvedIngestionConnectionConfig {
   uri: string;
   dbName: string;
   redactedUri: string;
+}
+
+/**
+ * Enforces an explicit opt-in environment guard (`GASTROWISE_ALLOW_LOCAL_INGESTION=true`)
+ * before local apply mode can write to `gastro_core_test`.
+ */
+export function assertLocalIngestionApplyAllowed(
+  env: Record<string, string | undefined> = process.env,
+): void {
+  const flag = env[LOCAL_INGESTION_ALLOW_ENV_VAR]?.trim().toLowerCase();
+  if (flag !== 'true') {
+    throw new IngestionValidationError(
+      `Refusing local ingestion apply mode: set ${LOCAL_INGESTION_ALLOW_ENV_VAR}=true explicitly to enable writes to "${APPROVED_INGESTION_DB_NAME}". Dry-run remains the default.`,
+    );
+  }
 }
 
 const APPROVED_LOCAL_HOSTS = new Set([
@@ -202,7 +220,21 @@ export function assertLocalIngestionTargetOnly(
 export function resolveIngestionDatabaseConfig(
   env: Record<string, string | undefined> = process.env,
 ): ResolvedIngestionConnectionConfig {
-  const uri = env.MONGODB_URI_CORE || env.CORE_MONGODB_URI || env.MONGODB_URI;
+  let uri = env.MONGODB_URI_CORE || env.CORE_MONGODB_URI || env.MONGODB_URI;
+  if ((!uri || uri.trim().length === 0) && env.MONGO_HOST?.trim()) {
+    const host = env.MONGO_HOST.trim();
+    const port = env.MONGO_PORT?.trim() || '27017';
+    const dbNamePart = env.CORE_DB_NAME?.trim() || APPROVED_INGESTION_DB_NAME;
+    const authSource = env.MONGO_AUTH_SOURCE?.trim() || dbNamePart;
+    const user = env.CORE_DB_USER?.trim();
+    const pass = env.CORE_DB_PASSWORD;
+    const authPrefix =
+      user && pass
+        ? `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@`
+        : '';
+    uri = `mongodb://${authPrefix}${host}:${port}/${dbNamePart}?authSource=${encodeURIComponent(authSource)}`;
+  }
+
   if (!uri || uri.trim().length === 0) {
     throw new IngestionValidationError(
       'MONGODB_URI_CORE (or CORE_MONGODB_URI / MONGODB_URI) environment variable is required for local ingestion.',

@@ -7,6 +7,7 @@ export interface ParsedIngestionCliArgs {
   dryRun: boolean;
   filePath?: string;
   format: RawInputFormat;
+  source?: string;
   batchId?: string;
   rollbackBatchId?: string;
   recoverBatchId?: string;
@@ -24,6 +25,7 @@ export function parseIngestionCliArgs(
   let mode: IngestionMode = 'dry-run';
   let filePath: string | undefined;
   let format: RawInputFormat = 'auto';
+  let source: string | undefined;
   let batchId: string | undefined;
   let rollbackBatchId: string | undefined;
   let recoverBatchId: string | undefined;
@@ -62,6 +64,8 @@ export function parseIngestionCliArgs(
         );
       }
       format = val;
+    } else if (arg.startsWith('--source=')) {
+      source = arg.slice('--source='.length).trim();
     } else if (arg.startsWith('--batch-id=')) {
       batchId = arg.slice('--batch-id='.length).trim();
     } else if (arg.startsWith('--rollback=')) {
@@ -171,6 +175,7 @@ export function parseIngestionCliArgs(
     dryRun: mode !== 'apply',
     filePath,
     format,
+    ...(source ? { source } : {}),
     batchId,
     reportOutPath,
   };
