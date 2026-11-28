@@ -10,10 +10,12 @@ import {
   Delete,
   Query,
   Req,
+  Res,
   UseInterceptors,
   UploadedFile,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { RestaurantsService } from './restaurants.service';
 import { CreateRestaurantDto } from './dto/create-restaurant.dto';
@@ -22,6 +24,8 @@ import { CreateMenuItemDto } from './dto/create-menu-item.dto';
 import { UpdateMenuItemDto } from './dto/update-menu-item.dto';
 import { ChatRestaurantDto } from './dto/chat-restaurant.dto';
 import { ValidateRestaurantDataQualityDto } from './dto/validate-restaurant-data-quality.dto';
+import { QueryRestaurantsDto } from './dto/query-restaurants.dto';
+import { QueryDishesDto } from './dto/query-dishes.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -80,45 +84,94 @@ export class RestaurantsController {
   }
 
   @Get()
-  findAll(
-    @Query('page') page: number,
-    @Query('limit') limit: number,
-    @Query('sortBy') sortBy: string,
-    @Query('order') order: string,
-    @Query('rating') rating: string,
-    @Query('openNow') openNow: string,
-    @Query('userLat') userLat: string,
-    @Query('userLon') userLon: string,
-    @Query('search') search: string,
-    @Query('city') city: string,
-    @Query('tags') tags: string,
-  ) {
+  findAll(@Query() query: QueryRestaurantsDto) {
     return this.restaurantsService.findAll(
-      page,
-      limit,
-      sortBy,
-      order,
-      rating,
-      openNow,
-      userLat,
-      userLon,
-      search,
-      city,
-      tags,
+      query.page,
+      query.limit,
+      query.sortBy,
+      query.order,
+      query.rating,
+      query.openNow,
+      query.userLat,
+      query.userLon,
+      query.search,
+      query.city,
+      query.tags,
+      {
+        district: query.district,
+        area: query.area,
+        cuisine: query.cuisine,
+        minPrice: query.minPrice,
+        maxPrice: query.maxPrice,
+        minRating: query.minRating,
+        status: query.status,
+      },
     );
   }
 
+  private applyLegacyMenuHeaders(
+    res: Response | undefined,
+    meta: {
+      totalCount: number;
+      limit: number;
+      isTruncated: boolean;
+      successorEndpoint: string;
+    },
+  ) {
+    if (!res || typeof res.setHeader !== 'function') {
+      return;
+    }
+    res.setHeader('X-Legacy-Endpoint', 'true');
+    res.setHeader('Deprecation', 'true');
+    res.setHeader(
+      'Link',
+      `<${meta.successorEndpoint}>; rel="successor-version"`,
+    );
+    res.setHeader('X-Total-Count', String(meta.totalCount));
+    res.setHeader('X-Result-Limit', String(meta.limit));
+    res.setHeader('X-Result-Truncated', String(meta.isTruncated));
+    if (meta.isTruncated) {
+      res.setHeader(
+        'Warning',
+        `299 - "Legacy menu response truncated at ${meta.limit} items (${meta.totalCount} total). Migrate to ${meta.successorEndpoint} for paginated results."`,
+      );
+    }
+  }
+
   @Get('menu/all')
-  getAllMenuItems(
+  async getAllMenuItems(
     @Query('search') search?: string,
     @Query('restaurantId') restaurantId?: string,
+    @Res({ passthrough: true }) res?: Response,
   ) {
-    return this.restaurantsService.getAllMenuItems(search, restaurantId);
+    const result = await this.restaurantsService.getAllMenuItemsWithMeta(
+      search,
+      restaurantId,
+    );
+    this.applyLegacyMenuHeaders(res, result);
+    return result.items;
   }
 
   @Get(':id/menu')
-  getMenu(@Param('id') id: string) {
-    return this.restaurantsService.getMenu(id);
+  async getMenu(
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res?: Response,
+  ) {
+    const result = await this.restaurantsService.getMenuWithMeta(id);
+    this.applyLegacyMenuHeaders(res, result);
+    return result.items;
+  }
+
+  /**
+   * [M10.5] List dishes belonging to a restaurant with pagination, search, price & tag filters
+   * GET /api/v1/restaurants/:id/dishes
+   */
+  @Get(':id/dishes')
+  getRestaurantDishes(
+    @Param('id') id: string,
+    @Query() query: QueryDishesDto,
+  ) {
+    return this.restaurantsService.findDishesByRestaurant(id, query);
   }
 
   /**

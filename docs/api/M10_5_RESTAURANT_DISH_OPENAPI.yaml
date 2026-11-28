@@ -1,0 +1,342 @@
+openapi: 3.0.3
+info:
+  title: GastroWise Core Service — Restaurant & Dish Read APIs (M10.5)
+  version: 1.1.0
+  description: >
+    Validated, paginated Restaurant and Dish (MenuItem) read APIs owned by Core Service
+    (`gastro_core`). Preserves Web, Admin, and Mobile compatibility, including backward-compatible
+    deprecation and truncation headers on legacy menu routes.
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local API Gateway (Nginx)
+  - url: http://localhost:3001/api/v1
+    description: Core Service Direct
+paths:
+  /restaurants:
+    get:
+      summary: List, search, filter, and sort restaurants with pagination
+      tags: [Restaurants]
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 32 } }
+        - { name: search, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: city, in: query, schema: { type: string, example: hcmc } }
+        - { name: district, in: query, schema: { type: string, example: "Quận 1" } }
+        - { name: area, in: query, schema: { type: string } }
+        - { name: cuisine, in: query, schema: { type: string, example: "Phở" } }
+        - { name: tags, in: query, schema: { type: string } }
+        - { name: minPrice, in: query, schema: { type: number, minimum: 0 } }
+        - { name: maxPrice, in: query, schema: { type: number, minimum: 0 } }
+        - { name: minRating, in: query, schema: { type: number, minimum: 0, maximum: 5 } }
+        - { name: rating, in: query, schema: { type: string, enum: [all, gte4_5, gte4, gte3_5, gte3, lt6] } }
+        - { name: status, in: query, schema: { type: string, enum: [open, closed, pending, all] } }
+        - { name: openNow, in: query, schema: { type: string, enum: ["true", "false"] } }
+        - { name: sortBy, in: query, schema: { type: string, enum: [diemTrungBinh, rating, price, diemGiaCa, diemKhongGian, diemViTri, diemChatLuong, diemPhucVu, distance, default] } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: desc } }
+      responses:
+        "200":
+          description: >
+            Paginated list of normalized restaurants with coordinates. Standard DB-side queries
+            return exact `total` with `isBoundedResult: false`. In-memory post-filtered or
+            string-price-sorted queries cap candidate scans at 500 and explicitly return
+            `isBoundedResult: true`, `evaluatedWindowLimit: 500`, and `totalMatchingBeforePostFilter`
+            when matching documents exceed 500.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedRestaurantsResponse"
+        "400":
+          description: Invalid query parameters (e.g. limit > 100 or minPrice > maxPrice)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /restaurants/{id}:
+    get:
+      summary: Get restaurant detail by ObjectId or slug
+      tags: [Restaurants]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: "^[a-zA-Z0-9_-]{1,128}$" } }
+      responses:
+        "200":
+          description: Normalized restaurant detail with coordinates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Restaurant"
+        "400":
+          description: Invalid restaurant ID or slug format
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Restaurant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /restaurants/{id}/dishes:
+    get:
+      summary: List dishes belonging to a restaurant with pagination and filters
+      tags: [Dishes]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: "^[a-zA-Z0-9_-]{1,128}$" }, description: "Restaurant 24-hex ObjectId or slug" }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: search, in: query, schema: { type: string, maxLength: 128 }, description: "Case-insensitive regex-escaped match across name, description, and tags" }
+        - { name: minPrice, in: query, schema: { type: number, minimum: 0 } }
+        - { name: maxPrice, in: query, schema: { type: number, minimum: 0 } }
+        - { name: category, in: query, schema: { type: string, maxLength: 64 }, description: "Matches MenuItem.tags (composed with `tag` using explicit AND semantics)" }
+        - { name: tag, in: query, schema: { type: string, maxLength: 64 }, description: "Matches MenuItem.tags (composed with `category` using explicit AND semantics)" }
+        - { name: isAvailable, in: query, schema: { type: string, enum: ["true", "false"] } }
+        - { name: isVegetarian, in: query, schema: { type: string, enum: ["true", "false"] } }
+        - { name: sortBy, in: query, schema: { type: string, enum: [price, isFeatured, createdAt, name], default: isFeatured } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: desc } }
+      responses:
+        "200":
+          description: Paginated dishes for the restaurant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedDishesResponse"
+        "400":
+          description: Invalid restaurant ID/slug or query parameters (e.g. minPrice > maxPrice, limit > 100)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Restaurant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /dishes:
+    get:
+      summary: Search and list dishes across restaurants with pagination and filters
+      tags: [Dishes]
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: search, in: query, schema: { type: string, maxLength: 128 }, description: "Case-insensitive regex-escaped match across name, description, and tags" }
+        - { name: restaurantId, in: query, schema: { type: string, maxLength: 64 }, description: "24-character hex MongoDB ObjectId or 'all'" }
+        - { name: minPrice, in: query, schema: { type: number, minimum: 0 } }
+        - { name: maxPrice, in: query, schema: { type: number, minimum: 0 } }
+        - { name: category, in: query, schema: { type: string, maxLength: 64 }, description: "Matches MenuItem.tags (composed with `tag` using explicit AND semantics)" }
+        - { name: tag, in: query, schema: { type: string, maxLength: 64 }, description: "Matches MenuItem.tags (composed with `category` using explicit AND semantics)" }
+        - { name: isAvailable, in: query, schema: { type: string, enum: ["true", "false"] } }
+        - { name: isVegetarian, in: query, schema: { type: string, enum: ["true", "false"] } }
+        - { name: sortBy, in: query, schema: { type: string, enum: [price, isFeatured, createdAt, name], default: isFeatured } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: desc } }
+      responses:
+        "200":
+          description: Paginated dish list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedDishesResponse"
+        "400":
+          description: Invalid query parameters, minPrice > maxPrice, or invalid restaurantId ObjectId
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /dishes/{id}:
+    get:
+      summary: Get dish detail by ObjectId
+      tags: [Dishes]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: "^[0-9a-fA-F]{24}$" } }
+      responses:
+        "200":
+          description: Dish detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dish"
+        "400":
+          description: Invalid dish ObjectId
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Dish not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /restaurants/{id}/menu:
+    get:
+      summary: "[Legacy] List up to 200 menu items for a restaurant"
+      deprecated: true
+      description: >
+        Preserved as a JSON array response for existing Web and Mobile clients.
+        Reads are bounded to 200 items (`MAX_MENU_LEGACY_LIMIT`). Truncation and migration metadata
+        are communicated via HTTP response headers (`X-Result-Truncated`, `X-Total-Count`,
+        `X-Result-Limit`, `Deprecation`, `Link`, and `Warning` when truncated).
+        New integrations should use `GET /restaurants/{id}/dishes`.
+      tags: [Legacy Menu]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Array of up to 200 menu items for the restaurant
+          headers:
+            X-Legacy-Endpoint: { schema: { type: string, enum: ["true"] } }
+            Deprecation: { schema: { type: string, enum: ["true"] } }
+            Link: { schema: { type: string }, description: 'Successor paginated endpoint, e.g. `</api/v1/restaurants/{id}/dishes>; rel="successor-version"`' }
+            X-Total-Count: { schema: { type: integer }, description: "Exact total matching menu items in MongoDB" }
+            X-Result-Limit: { schema: { type: integer, example: 200 } }
+            X-Result-Truncated: { schema: { type: string, enum: ["true", "false"] } }
+            Warning: { schema: { type: string }, description: "Present only when X-Result-Truncated is true" }
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        "400":
+          description: Invalid restaurant ID or slug format
+        "404":
+          description: Restaurant not found
+  /restaurants/menu/all:
+    get:
+      summary: "[Legacy] List up to 200 menu items across restaurants"
+      deprecated: true
+      description: >
+        Preserved as a JSON array response for the existing Admin CMS menu page.
+        Reads are bounded to 200 items (`MAX_MENU_LEGACY_LIMIT`). Truncation and migration metadata
+        are communicated via HTTP response headers (`X-Result-Truncated`, `X-Total-Count`,
+        `X-Result-Limit`, `Deprecation`, `Link`, and `Warning` when truncated).
+        New integrations should use `GET /dishes`.
+      tags: [Legacy Menu]
+      parameters:
+        - { name: search, in: query, schema: { type: string } }
+        - { name: restaurantId, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Array of up to 200 menu items
+          headers:
+            X-Legacy-Endpoint: { schema: { type: string, enum: ["true"] } }
+            Deprecation: { schema: { type: string, enum: ["true"] } }
+            Link: { schema: { type: string, example: '</api/v1/dishes>; rel="successor-version"' } }
+            X-Total-Count: { schema: { type: integer } }
+            X-Result-Limit: { schema: { type: integer, example: 200 } }
+            X-Result-Truncated: { schema: { type: string, enum: ["true", "false"] } }
+            Warning: { schema: { type: string }, description: "Present only when X-Result-Truncated is true" }
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+components:
+  schemas:
+    GeoJsonPoint:
+      type: object
+      properties:
+        type: { type: string, enum: [Point] }
+        coordinates:
+          type: array
+          items: { type: number }
+          minItems: 2
+          maxItems: 2
+          description: "[longitude, latitude]"
+    Restaurant:
+      type: object
+      properties:
+        id: { type: string }
+        _id: { type: string }
+        tenQuan: { type: string }
+        diaChi: { type: string }
+        cityId: { type: string }
+        diemTrungBinh: { type: number }
+        giaCa: { type: string }
+        tags: { type: string }
+        lat: { type: number, nullable: true }
+        lon: { type: number, nullable: true }
+        lng: { type: number, nullable: true }
+        location:
+          allOf:
+            - $ref: "#/components/schemas/GeoJsonPoint"
+          nullable: true
+        status: { type: string, enum: [open, closed, pending] }
+        isVerified: { type: boolean }
+        isFeatured: { type: boolean }
+    PaginatedRestaurantsResponse:
+      type: object
+      required: [data, total, page, limit, currentPage, totalPages, isBoundedResult]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Restaurant"
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+        currentPage: { type: integer, minimum: 1 }
+        totalPages: { type: integer, minimum: 0 }
+        sortBy: { type: string }
+        order: { type: string, enum: [asc, desc] }
+        isBoundedResult: { type: boolean }
+        evaluatedWindowLimit: { type: integer, example: 500 }
+        totalMatchingBeforePostFilter: { type: integer }
+    DishRestaurantSummary:
+      type: object
+      properties:
+        id: { type: string }
+        tenQuan: { type: string }
+        diaChi: { type: string }
+        lat: { type: number, nullable: true }
+        lon: { type: number, nullable: true }
+        location:
+          allOf:
+            - $ref: "#/components/schemas/GeoJsonPoint"
+          nullable: true
+    Dish:
+      type: object
+      required: [id, _id, restaurantId, name, price, tags, isAvailable, isFeatured, isVegetarian]
+      properties:
+        id: { type: string }
+        _id: { type: string }
+        restaurantId: { type: string, nullable: true }
+        restaurant:
+          $ref: "#/components/schemas/DishRestaurantSummary"
+        name: { type: string }
+        description: { type: string }
+        price: { type: number, minimum: 0 }
+        image: { type: string }
+        isVegetarian: { type: boolean }
+        calories: { type: number, nullable: true }
+        tags:
+          type: array
+          items: { type: string }
+        isAvailable: { type: boolean }
+        isFeatured: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    PaginatedDishesResponse:
+      type: object
+      required: [data, total, page, limit, totalPages]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Dish"
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+        totalPages: { type: integer, minimum: 0 }
+    ErrorResponse:
+      type: object
+      properties:
+        statusCode: { type: integer, example: 400 }
+        message:
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: string }
+        error: { type: string, example: Bad Request }
