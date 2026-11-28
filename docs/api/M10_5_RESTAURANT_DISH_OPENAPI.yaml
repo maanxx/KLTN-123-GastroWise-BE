@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
-  title: GastroWise Core Service — Restaurant & Dish Read APIs (M10.5)
-  version: 1.1.0
+  title: GastroWise Core Service — Restaurant, Dish & Recommendation APIs (M10.5–M10.10)
+  version: 1.2.0
   description: >
     Validated, paginated Restaurant and Dish (MenuItem) read APIs owned by Core Service
     (`gastro_core`). Preserves Web, Admin, and Mobile compatibility, including backward-compatible
@@ -177,8 +177,8 @@ paths:
         - { name: latitude, in: query, schema: { type: number, minimum: -90, maximum: 90 } }
         - { name: longitude, in: query, schema: { type: number, minimum: -180, maximum: 180 } }
         - { name: radiusKm, in: query, schema: { type: number, minimum: 0.1, maximum: 100, default: 10 } }
-        - { name: minBudget, in: query, schema: { type: number, minimum: 0 } }
-        - { name: maxBudget, in: query, schema: { type: number, minimum: 0 } }
+        - { name: minBudget, in: query, schema: { type: number, minimum: 0, maximum: 50000000 } }
+        - { name: maxBudget, in: query, schema: { type: number, minimum: 0, maximum: 50000000 } }
         - { name: cuisines, in: query, schema: { type: string, maxLength: 256, example: "Món Việt,Phở" } }
         - { name: categories, in: query, schema: { type: string, maxLength: 256, example: "Món chính,Bánh mì" } }
         - { name: isVegetarian, in: query, schema: { type: string, enum: ["true", "false"] } }
