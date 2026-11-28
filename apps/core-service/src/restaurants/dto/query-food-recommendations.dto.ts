@@ -10,6 +10,8 @@ import {
   Min,
 } from 'class-validator';
 
+export const MAX_RECOMMENDATION_BUDGET_VND = 50_000_000;
+
 export class QueryFoodRecommendationsDto {
   @IsOptional()
   @IsString()
@@ -41,12 +43,14 @@ export class QueryFoodRecommendationsDto {
   @Type(() => Number)
   @IsNumber()
   @Min(0)
+  @Max(MAX_RECOMMENDATION_BUDGET_VND)
   minBudget?: number;
 
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(0)
+  @Max(MAX_RECOMMENDATION_BUDGET_VND)
   maxBudget?: number;
 
   @IsOptional()

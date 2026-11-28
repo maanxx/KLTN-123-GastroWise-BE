@@ -37,7 +37,10 @@ import {
 } from '@shared/ingestion';
 import { ValidateRestaurantDataQualityDto } from './dto/validate-restaurant-data-quality.dto';
 import { QueryDishesDto } from './dto/query-dishes.dto';
-import { QueryFoodRecommendationsDto } from './dto/query-food-recommendations.dto';
+import {
+  MAX_RECOMMENDATION_BUDGET_VND,
+  QueryFoodRecommendationsDto,
+} from './dto/query-food-recommendations.dto';
 import {
   DEFAULT_FOOD_RECOMMENDATION_WEIGHTS,
   extractPreferenceTerms,
@@ -182,7 +185,9 @@ export class RestaurantsService {
     const populatedRest =
       d.restaurantId &&
       typeof d.restaurantId === 'object' &&
-      '_id' in d.restaurantId
+      !(d.restaurantId instanceof Types.ObjectId) &&
+      '_id' in d.restaurantId &&
+      ('tenQuan' in d.restaurantId || 'diaChi' in d.restaurantId)
         ? d.restaurantId
         : null;
     const restaurantIdStr = populatedRest
@@ -1821,6 +1826,50 @@ export class RestaurantsService {
       }
     }
 
+    if (query.radiusKm !== undefined && query.radiusKm !== null) {
+      const r = Number(query.radiusKm);
+      if (!Number.isFinite(r) || r < 0.1 || r > 100) {
+        throw new BadRequestException(
+          'radiusKm must be a finite number between 0.1 and 100.',
+        );
+      }
+    }
+
+    if (query.limit !== undefined && query.limit !== null) {
+      const l = Number(query.limit);
+      if (!Number.isInteger(l) || l < 1 || l > 50) {
+        throw new BadRequestException(
+          'limit must be an integer between 1 and 50.',
+        );
+      }
+    }
+
+    if (query.minBudget !== undefined && query.minBudget !== null) {
+      const minB = Number(query.minBudget);
+      if (
+        !Number.isFinite(minB) ||
+        minB < 0 ||
+        minB > MAX_RECOMMENDATION_BUDGET_VND
+      ) {
+        throw new BadRequestException(
+          `minBudget must be a finite number between 0 and ${MAX_RECOMMENDATION_BUDGET_VND}.`,
+        );
+      }
+    }
+
+    if (query.maxBudget !== undefined && query.maxBudget !== null) {
+      const maxB = Number(query.maxBudget);
+      if (
+        !Number.isFinite(maxB) ||
+        maxB < 0 ||
+        maxB > MAX_RECOMMENDATION_BUDGET_VND
+      ) {
+        throw new BadRequestException(
+          `maxBudget must be a finite number between 0 and ${MAX_RECOMMENDATION_BUDGET_VND}.`,
+        );
+      }
+    }
+
     if (
       query.minBudget !== undefined &&
       query.maxBudget !== undefined &&
@@ -1831,21 +1880,42 @@ export class RestaurantsService {
       );
     }
 
-    const limitNum = Math.max(
-      1,
-      Math.min(50, Math.floor(Number(query.limit) || 10)),
-    );
+    if (typeof query.keyword === 'string' && query.keyword.length > 128) {
+      throw new BadRequestException('keyword must not exceed 128 characters.');
+    }
+    if (typeof query.cuisines === 'string' && query.cuisines.length > 256) {
+      throw new BadRequestException('cuisines must not exceed 256 characters.');
+    }
+    if (typeof query.categories === 'string' && query.categories.length > 256) {
+      throw new BadRequestException(
+        'categories must not exceed 256 characters.',
+      );
+    }
+
+    const sanitizeTextParam = (raw?: string): string =>
+      typeof raw === 'string'
+        ? raw
+            // Strip ASCII control characters (NUL..US, DEL) before trimming
+            .replace(/[\x00-\x1f\x7f]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+        : '';
+
+    const limitNum =
+      query.limit !== undefined && query.limit !== null
+        ? Number(query.limit)
+        : 10;
     const radiusKm =
-      query.radiusKm !== undefined && Number.isFinite(Number(query.radiusKm))
-        ? Math.max(0.1, Math.min(100, Number(query.radiusKm)))
+      query.radiusKm !== undefined && query.radiusKm !== null
+        ? Number(query.radiusKm)
         : 10;
     const preferences = extractPreferenceTerms(
-      query.cuisines,
-      query.categories,
+      sanitizeTextParam(query.cuisines),
+      sanitizeTextParam(query.categories),
     );
     const isVegetarianOnly = query.isVegetarian === 'true';
 
-    const keywordTrimmed = query.keyword?.trim() || '';
+    const keywordTrimmed = sanitizeTextParam(query.keyword);
     const hasBudgetFilter =
       query.minBudget !== undefined || query.maxBudget !== undefined;
 

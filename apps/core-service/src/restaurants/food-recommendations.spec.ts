@@ -439,4 +439,99 @@ describe('M10.9 Food Search & Recommendation Integration', () => {
       expect(validated.size).toBe(6);
     });
   });
+
+  describe('M10.10 recommendation edge-case hardening & DTO hygiene', () => {
+    it('rejects negative/excessive budgets, invalid radiusKm, invalid limit, and oversized text params at service boundary', async () => {
+      await expect(
+        controller.getFoodRecommendations({ minBudget: -1 }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        controller.getFoodRecommendations({ maxBudget: 99_000_000 }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        controller.getFoodRecommendations({ radiusKm: 0 }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        controller.getFoodRecommendations({ radiusKm: 150 }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        controller.getFoodRecommendations({ limit: 0 }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        controller.getFoodRecommendations({ limit: 51 }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        controller.getFoodRecommendations({ limit: 2.5 }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        controller.getFoodRecommendations({ keyword: 'a'.repeat(129) }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        controller.getFoodRecommendations({ cuisines: 'x'.repeat(257) }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('handles whitespace-only keywords, control characters, non-existent cuisines, and restaurants without available dishes cleanly', async () => {
+      // Whitespace-only keyword is treated cleanly as no keyword filter
+      const wsRes = await controller.getFoodRecommendations({
+        keyword: '   \t\n  ',
+        limit: 5,
+      });
+      expect(wsRes.meta.strategy).toBe('deterministic');
+      expect(wsRes.data.length).toBeGreaterThan(0);
+
+      // Control characters + regex metacharacters in keyword must not crash
+      const specialRes = await controller.getFoodRecommendations({
+        keyword: 'Phở\u0000[invalid(regex',
+      });
+      expect(Array.isArray(specialRes.data)).toBe(true);
+
+      // Non-existent cuisine returns clean empty result
+      restaurantModel.find.mockReturnValue(createChainMock([]));
+      menuItemModel.find.mockReturnValue(createChainMock([]));
+      const emptyRes = await controller.getFoodRecommendations({
+        cuisines: 'NonExistentMartianCuisine',
+      });
+      expect(emptyRes.data).toEqual([]);
+      expect(emptyRes.meta.total).toBe(0);
+      expect(emptyRes.meta.strategy).toBe('deterministic');
+
+      // Open restaurant with zero available dishes returns recommendedDishes: [] when no dish-required filter is set
+      restaurantModel.find.mockReturnValue(
+        createChainMock([sampleRestaurants[0]]),
+      );
+      menuItemModel.find.mockReturnValue(createChainMock([]));
+      const noDishRes = await controller.getFoodRecommendations({ limit: 5 });
+      expect(noDishRes.data).toHaveLength(1);
+      expect(noDishRes.data[0].recommendedDishes).toEqual([]);
+    });
+
+    it('omits bogus nested restaurant stub on unpopulated ObjectId dish references in recommendedDishes', async () => {
+      const restObjId = new Types.ObjectId();
+      restaurantModel.find.mockReturnValue(
+        createChainMock([
+          {
+            ...sampleRestaurants[0],
+            _id: restObjId,
+          },
+        ]),
+      );
+      menuItemModel.find.mockReturnValue(
+        createChainMock([
+          {
+            ...sampleDishes[0],
+            restaurantId: restObjId, // BSON ObjectId (unpopulated)
+          },
+        ]),
+      );
+
+      const res = await controller.getFoodRecommendations({ limit: 5 });
+      expect(res.data).toHaveLength(1);
+      expect(res.data[0].recommendedDishes).toHaveLength(1);
+      expect(res.data[0].recommendedDishes[0].restaurantId).toBe(
+        restObjId.toHexString(),
+      );
+      expect(res.data[0].recommendedDishes[0].restaurant).toBeUndefined();
+    });
+  });
 });
