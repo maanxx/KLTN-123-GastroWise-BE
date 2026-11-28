@@ -29,12 +29,33 @@ import {
   formatRestaurantTagsString,
   normalizeRestaurantRating,
   normalizeRestaurantTags,
+  parseRestaurantPriceVnd,
 } from '@shared/utils/restaurant-normalizer.util';
 import {
   evaluateRestaurantDataQuality,
   IngestionValidationError,
 } from '@shared/ingestion';
 import { ValidateRestaurantDataQualityDto } from './dto/validate-restaurant-data-quality.dto';
+import { QueryDishesDto } from './dto/query-dishes.dto';
+
+export interface RestaurantListExtraFilters {
+  district?: string;
+  area?: string;
+  cuisine?: string;
+  minPrice?: number;
+  maxPrice?: number;
+  minRating?: number;
+  status?: 'open' | 'closed' | 'pending' | 'all';
+}
+
+const MAX_PAGE_LIMIT = 100;
+const MAX_PAGE_NUMBER = 1000;
+const MAX_MANUAL_SCAN_LIMIT = 500;
+const MAX_MENU_LEGACY_LIMIT = 200;
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 @Injectable()
 export class RestaurantsService {
@@ -72,12 +93,38 @@ export class RestaurantsService {
     this.internalAiKey = key;
   }
 
-  async getMenu(idOrSlug: string) {
+  async getMenuWithMeta(idOrSlug: string) {
     const restaurant = await this.findOne(idOrSlug);
-    return this.menuItemModel.find({ restaurantId: restaurant._id }).exec();
+    const filter = { restaurantId: restaurant._id };
+    const [dbCount, fetched] = await Promise.all([
+      this.menuItemModel.countDocuments(filter).exec(),
+      this.menuItemModel
+        .find(filter)
+        .sort({ isFeatured: -1, createdAt: -1 })
+        .limit(MAX_MENU_LEGACY_LIMIT + 1)
+        .exec(),
+    ]);
+
+    const items = fetched.slice(0, MAX_MENU_LEGACY_LIMIT);
+    const totalCount = Math.max(dbCount, fetched.length);
+    const isTruncated =
+      fetched.length > MAX_MENU_LEGACY_LIMIT || dbCount > MAX_MENU_LEGACY_LIMIT;
+
+    return {
+      items,
+      totalCount,
+      limit: MAX_MENU_LEGACY_LIMIT,
+      isTruncated,
+      successorEndpoint: `/api/v1/restaurants/${String(restaurant._id)}/dishes`,
+    };
   }
 
-  async getAllMenuItems(search?: string, restaurantId?: string) {
+  async getMenu(idOrSlug: string) {
+    const { items } = await this.getMenuWithMeta(idOrSlug);
+    return items;
+  }
+
+  async getAllMenuItemsWithMeta(search?: string, restaurantId?: string) {
     const filter: any = {};
     if (restaurantId && restaurantId !== 'all') {
       if (Types.ObjectId.isValid(restaurantId)) {
@@ -85,13 +132,228 @@ export class RestaurantsService {
       }
     }
     if (search) {
-      filter.name = { $regex: search, $options: 'i' };
+      filter.name = { $regex: escapeRegex(search.trim()), $options: 'i' };
     }
-    return this.menuItemModel
-      .find(filter)
-      .populate('restaurantId', 'tenQuan diaChi')
-      .sort({ isFeatured: -1, createdAt: -1 })
+    const [dbCount, fetched] = await Promise.all([
+      this.menuItemModel.countDocuments(filter).exec(),
+      this.menuItemModel
+        .find(filter)
+        .populate('restaurantId', 'tenQuan diaChi')
+        .sort({ isFeatured: -1, createdAt: -1 })
+        .limit(MAX_MENU_LEGACY_LIMIT + 1)
+        .exec(),
+    ]);
+
+    const items = fetched.slice(0, MAX_MENU_LEGACY_LIMIT);
+    const totalCount = Math.max(dbCount, fetched.length);
+    const isTruncated =
+      fetched.length > MAX_MENU_LEGACY_LIMIT || dbCount > MAX_MENU_LEGACY_LIMIT;
+
+    return {
+      items,
+      totalCount,
+      limit: MAX_MENU_LEGACY_LIMIT,
+      isTruncated,
+      successorEndpoint: '/api/v1/dishes',
+    };
+  }
+
+  async getAllMenuItems(search?: string, restaurantId?: string) {
+    const { items } = await this.getAllMenuItemsWithMeta(search, restaurantId);
+    return items;
+  }
+
+  private mapDishToDTO(raw: any) {
+    const d = raw?.toObject ? raw.toObject() : raw;
+    const populatedRest =
+      d.restaurantId &&
+      typeof d.restaurantId === 'object' &&
+      '_id' in d.restaurantId
+        ? d.restaurantId
+        : null;
+    const restaurantIdStr = populatedRest
+      ? String(populatedRest._id)
+      : d.restaurantId
+        ? String(d.restaurantId)
+        : null;
+
+    return {
+      id: d._id ? String(d._id) : d.id,
+      _id: d._id ? String(d._id) : d.id,
+      restaurantId: restaurantIdStr,
+      ...(populatedRest
+        ? {
+            restaurant: {
+              id: String(populatedRest._id),
+              tenQuan: populatedRest.tenQuan,
+              diaChi: populatedRest.diaChi,
+              lat: populatedRest.lat,
+              lon: populatedRest.lon,
+              location: populatedRest.location ?? null,
+            },
+          }
+        : {}),
+      name: d.name,
+      description: d.description || '',
+      price: typeof d.price === 'number' ? d.price : Number(d.price) || 0,
+      image: d.image || '',
+      isVegetarian: Boolean(d.isVegetarian),
+      calories: d.calories ?? null,
+      tags: Array.isArray(d.tags) ? d.tags : [],
+      isAvailable: d.isAvailable !== false,
+      isFeatured: Boolean(d.isFeatured),
+      createdAt: d.createdAt,
+      updatedAt: d.updatedAt,
+    };
+  }
+
+  async findDishes(query: QueryDishesDto = {}) {
+    const pageNum = Math.max(
+      1,
+      Math.min(MAX_PAGE_NUMBER, Math.floor(Number(query.page) || 1)),
+    );
+    const limitNum = Math.max(
+      1,
+      Math.min(MAX_PAGE_LIMIT, Math.floor(Number(query.limit) || 20)),
+    );
+    const skip = (pageNum - 1) * limitNum;
+
+    if (
+      query.minPrice !== undefined &&
+      query.maxPrice !== undefined &&
+      Number(query.minPrice) > Number(query.maxPrice)
+    ) {
+      throw new BadRequestException(
+        'minPrice cannot be greater than maxPrice.',
+      );
+    }
+
+    const andConditions: Array<Record<string, unknown>> = [];
+
+    if (query.restaurantId && query.restaurantId !== 'all') {
+      if (
+        !Types.ObjectId.isValid(query.restaurantId) ||
+        !/^[0-9a-fA-F]{24}$/.test(query.restaurantId)
+      ) {
+        throw new BadRequestException(
+          `Invalid restaurantId "${query.restaurantId}". Expected a 24-character hex ObjectId.`,
+        );
+      }
+      andConditions.push({
+        restaurantId: new Types.ObjectId(query.restaurantId),
+      });
+    }
+
+    if (query.minPrice !== undefined || query.maxPrice !== undefined) {
+      const priceRange: Record<string, number> = {};
+      if (query.minPrice !== undefined) priceRange.$gte = Number(query.minPrice);
+      if (query.maxPrice !== undefined) priceRange.$lte = Number(query.maxPrice);
+      andConditions.push({ price: priceRange });
+    }
+
+    // Both `category` and `tag` map onto MenuItem.tags with explicit AND semantics
+    // so providing both filters narrows results to dishes matching BOTH tags.
+    const categoryVal = (query.category || '').trim();
+    if (categoryVal && categoryVal !== 'all') {
+      andConditions.push({
+        tags: { $regex: new RegExp(escapeRegex(categoryVal), 'i') },
+      });
+    }
+
+    const tagVal = (query.tag || '').trim();
+    if (tagVal && tagVal !== 'all') {
+      andConditions.push({
+        tags: { $regex: new RegExp(escapeRegex(tagVal), 'i') },
+      });
+    }
+
+    if (query.isAvailable === 'true') {
+      andConditions.push({ isAvailable: true });
+    } else if (query.isAvailable === 'false') {
+      andConditions.push({ isAvailable: false });
+    }
+
+    if (query.isVegetarian === 'true') {
+      andConditions.push({ isVegetarian: true });
+    } else if (query.isVegetarian === 'false') {
+      andConditions.push({ isVegetarian: false });
+    }
+
+    if (query.search && query.search.trim().length > 0) {
+      const safeSearch = escapeRegex(query.search.trim());
+      andConditions.push({
+        $or: [
+          { name: { $regex: safeSearch, $options: 'i' } },
+          { description: { $regex: safeSearch, $options: 'i' } },
+          { tags: { $regex: safeSearch, $options: 'i' } },
+        ],
+      });
+    }
+
+    const filter: Record<string, unknown> =
+      andConditions.length === 0
+        ? {}
+        : andConditions.length === 1
+          ? andConditions[0]
+          : { $and: andConditions };
+
+    const sortDir = query.order === 'asc' ? 1 : -1;
+    const sortMap: Record<string, Record<string, 1 | -1>> = {
+      price: { price: sortDir, _id: 1 },
+      name: { name: sortDir, _id: 1 },
+      createdAt: { createdAt: sortDir, _id: 1 },
+      isFeatured: { isFeatured: -1, createdAt: -1 },
+    };
+    const sortSpec =
+      (query.sortBy && sortMap[query.sortBy]) || sortMap.isFeatured;
+
+    const [total, rawItems] = await Promise.all([
+      this.menuItemModel.countDocuments(filter).exec(),
+      this.menuItemModel
+        .find(filter)
+        .populate('restaurantId', 'tenQuan diaChi lat lon location')
+        .sort(sortSpec)
+        .skip(skip)
+        .limit(limitNum)
+        .lean()
+        .exec(),
+    ]);
+
+    return {
+      data: rawItems.map((item) => this.mapDishToDTO(item)),
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum),
+    };
+  }
+
+  async findDishesByRestaurant(idOrSlug: string, query: QueryDishesDto = {}) {
+    const restaurant = await this.findOne(idOrSlug);
+    return this.findDishes({
+      ...query,
+      restaurantId: String(restaurant._id),
+    });
+  }
+
+  async findDishById(id: string) {
+    if (!id || !Types.ObjectId.isValid(id) || !/^[0-9a-fA-F]{24}$/.test(id)) {
+      throw new BadRequestException(
+        `Invalid dish ID "${id}". Expected a 24-character hex ObjectId.`,
+      );
+    }
+
+    const dish = await this.menuItemModel
+      .findById(id)
+      .populate('restaurantId', 'tenQuan diaChi lat lon location')
+      .lean()
       .exec();
+
+    if (!dish) {
+      throw new NotFoundException(`Dish with ID "${id}" not found`);
+    }
+
+    return this.mapDishToDTO(dish);
   }
 
   async createMenuItem(restaurantId: string, dto: any) {
@@ -789,8 +1051,9 @@ export class RestaurantsService {
       contactPhone: r.contactPhone || r.phone || '0901 234 567',
       description: r.description || '',
       lat: r.lat,
-      lng: r.lon || r.lng,
-      location: r.location,
+      lon: r.lon ?? r.lng,
+      lng: r.lon ?? r.lng,
+      location: r.location ?? null,
       shopeeUrl: r.urlGoc || null,
       distance: r.distance,
       status: r.status || 'open',
@@ -811,13 +1074,31 @@ export class RestaurantsService {
     search: string = '',
     city: string = '',
     tags: string = '',
+    extraFilters: RestaurantListExtraFilters = {},
   ): Promise<any> {
-    const pageNum = Number(page) || 1;
-    const limitNum = Number(limit) || 32;
+    const pageNum = Math.max(
+      1,
+      Math.min(MAX_PAGE_NUMBER, Math.floor(Number(page) || 1)),
+    );
+    const limitNum = Math.max(
+      1,
+      Math.min(MAX_PAGE_LIMIT, Math.floor(Number(limit) || 32)),
+    );
     const skip = (pageNum - 1) * limitNum;
+
+    if (
+      extraFilters.minPrice !== undefined &&
+      extraFilters.maxPrice !== undefined &&
+      Number(extraFilters.minPrice) > Number(extraFilters.maxPrice)
+    ) {
+      throw new BadRequestException(
+        'minPrice cannot be greater than maxPrice.',
+      );
+    }
 
     // 1. Setup Sort
     const sortOptions: any = {};
+    const effectiveSortBy = sortBy === 'rating' ? 'diemTrungBinh' : sortBy;
     const allowedSortFields = [
       'diemTrungBinh',
       'diemKhongGian',
@@ -827,71 +1108,121 @@ export class RestaurantsService {
       'diemGiaCa',
     ];
     const sortField =
-      allowedSortFields.includes(sortBy) && sortBy !== 'default'
-        ? sortBy
+      allowedSortFields.includes(effectiveSortBy) &&
+      effectiveSortBy !== 'default'
+        ? effectiveSortBy
         : 'diemTrungBinh';
     const sortDirection = order === 'asc' ? 1 : -1;
     sortOptions[sortField] = sortDirection;
 
     // 2. Setup Filter
-    const filterQuery: any = {};
+    const andConditions: Array<Record<string, unknown>> = [];
+    if (extraFilters.status && extraFilters.status !== 'all') {
+      andConditions.push({ status: extraFilters.status });
+    }
+
     if (city) {
       if (city === 'hanoi') {
-        filterQuery['diaChi'] = {
-          $regex:
-            /Hà Nội|Ha Noi|HN|Hanoi|Ba Đình|Ba Dinh|Hoàn Kiếm|Hoan Kiem|Tây Hồ|Tay Ho|Long Biên|Long Bien|Cầu Giấy|Cau Giay|Đống Đa|Dong Da|Hai Bà Trưng|Hai Ba Trung|Hoàng Mai|Hoang Mai|Thanh Xuân|Thanh Xuan|Sóc Sơn|Soc Son|Đông Anh|Dong Anh|Gia Lâm|Gia Lam|Nam Từ Liêm|Nam Tu Liem|Bắc Từ Liêm|Bac Tu Liem|Thanh Trì|Thanh Tri|Hà Đông|Ha Dong|Sơn Tây|Son Tay/i,
-        };
+        andConditions.push({
+          diaChi: {
+            $regex:
+              /Hà Nội|Ha Noi|HN|Hanoi|Ba Đình|Ba Dinh|Hoàn Kiếm|Hoan Kiem|Tây Hồ|Tay Ho|Long Biên|Long Bien|Cầu Giấy|Cau Giay|Đống Đa|Dong Da|Hai Bà Trưng|Hai Ba Trung|Hoàng Mai|Hoang Mai|Thanh Xuân|Thanh Xuan|Sóc Sơn|Soc Son|Đông Anh|Dong Anh|Gia Lâm|Gia Lam|Nam Từ Liêm|Nam Tu Liem|Bắc Từ Liêm|Bac Tu Liem|Thanh Trì|Thanh Tri|Hà Đông|Ha Dong|Sơn Tây|Son Tay/i,
+          },
+        });
       } else if (city === 'hcmc') {
-        filterQuery['diaChi'] = {
-          $regex:
-            /Hồ Chí Minh|Ho Chi Minh|TP\.?\s?HCM|TPHCM|Sài Gòn|Sai Gon|HCM|Thủ Đức|Thu Duc|Gò Vấp|Go Vap|Bình Thạnh|Binh Thanh|Tân Bình|Tan Binh|Tân Phú|Tan Phu|Phú Nhuận|Phu Nhuan|Bình Tân|Binh Tan|Củ Chi|Cu Chi|Hóc Môn|Hoc Mon|Bình Chánh|Binh Chanh|Nhà Bè|Nha Be|Cần Giờ|Can Gio|Quận\s?1|District\s?1|Q\.?1|Quận\s?3|District\s?3|Q\.?3|Quận\s?4|District\s?4|Q\.?4|Quận\s?5|District\s?5|Q\.?5|Quận\s?6|District\s?6|Q\.?6|Quận\s?7|District\s?7|Q\.?7|Quận\s?8|District\s?8|Q\.?8|Quận\s?10|District\s?10|Q\.?10|Quận\s?11|District\s?11|Q\.?11|Quận\s?12|District\s?12|Q\.?12/i,
-        };
+        andConditions.push({
+          diaChi: {
+            $regex:
+              /Hồ Chí Minh|Ho Chi Minh|TP\.?\s?HCM|TPHCM|Sài Gòn|Sai Gon|HCM|Thủ Đức|Thu Duc|Gò Vấp|Go Vap|Bình Thạnh|Binh Thanh|Tân Bình|Tan Binh|Tân Phú|Tan Phu|Phú Nhuận|Phu Nhuan|Bình Tân|Binh Tan|Củ Chi|Cu Chi|Hóc Môn|Hoc Mon|Bình Chánh|Binh Chanh|Nhà Bè|Nha Be|Cần Giờ|Can Gio|Quận\s?1|District\s?1|Q\.?1|Quận\s?3|District\s?3|Q\.?3|Quận\s?4|District\s?4|Q\.?4|Quận\s?5|District\s?5|Q\.?5|Quận\s?6|District\s?6|Q\.?6|Quận\s?7|District\s?7|Q\.?7|Quận\s?8|District\s?8|Q\.?8|Quận\s?10|District\s?10|Q\.?10|Quận\s?11|District\s?11|Q\.?11|Quận\s?12|District\s?12|Q\.?12/i,
+          },
+        });
+      } else {
+        const safeCity = escapeRegex(city.trim());
+        andConditions.push({
+          $or: [
+            { cityId: { $regex: new RegExp(`^${safeCity}$`, 'i') } },
+            { diaChi: { $regex: safeCity, $options: 'i' } },
+          ],
+        });
       }
     }
+
+    const districtOrArea = (
+      extraFilters.district ||
+      extraFilters.area ||
+      ''
+    ).trim();
+    if (districtOrArea) {
+      andConditions.push({
+        diaChi: { $regex: escapeRegex(districtOrArea), $options: 'i' },
+      });
+    }
+
     const scoreFieldToCheck = sortField;
-    if (rating && rating !== 'all') {
+    if (extraFilters.minRating !== undefined) {
+      const minR = Number(extraFilters.minRating);
+      andConditions.push({
+        $or: [
+          { [scoreFieldToCheck]: { $gte: minR * 2 } },
+          { [scoreFieldToCheck]: { $gte: minR, $lte: 5.0 } },
+        ],
+      });
+    } else if (rating && rating !== 'all') {
       switch (rating) {
         case 'gte4_5':
         case 'gte9':
-          filterQuery['$or'] = [
-            { [scoreFieldToCheck]: { $gte: 9.0 } },
-            { [scoreFieldToCheck]: { $gte: 4.5, $lte: 5.0 } },
-          ];
+          andConditions.push({
+            $or: [
+              { [scoreFieldToCheck]: { $gte: 9.0 } },
+              { [scoreFieldToCheck]: { $gte: 4.5, $lte: 5.0 } },
+            ],
+          });
           break;
         case 'gte4':
         case '8to9':
-          filterQuery['$or'] = [
-            { [scoreFieldToCheck]: { $gte: 8.0 } },
-            { [scoreFieldToCheck]: { $gte: 4.0, $lte: 5.0 } },
-          ];
+          andConditions.push({
+            $or: [
+              { [scoreFieldToCheck]: { $gte: 8.0 } },
+              { [scoreFieldToCheck]: { $gte: 4.0, $lte: 5.0 } },
+            ],
+          });
           break;
         case 'gte3_5':
         case '7to8':
-          filterQuery['$or'] = [
-            { [scoreFieldToCheck]: { $gte: 7.0 } },
-            { [scoreFieldToCheck]: { $gte: 3.5, $lte: 5.0 } },
-          ];
+          andConditions.push({
+            $or: [
+              { [scoreFieldToCheck]: { $gte: 7.0 } },
+              { [scoreFieldToCheck]: { $gte: 3.5, $lte: 5.0 } },
+            ],
+          });
           break;
         case 'gte3':
         case '6to7':
-          filterQuery['$or'] = [
-            { [scoreFieldToCheck]: { $gte: 6.0 } },
-            { [scoreFieldToCheck]: { $gte: 3.0, $lte: 5.0 } },
-          ];
+          andConditions.push({
+            $or: [
+              { [scoreFieldToCheck]: { $gte: 6.0 } },
+              { [scoreFieldToCheck]: { $gte: 3.0, $lte: 5.0 } },
+            ],
+          });
           break;
         case 'lt6':
-          filterQuery[scoreFieldToCheck] = { $lt: 6.0 };
+          andConditions.push({ [scoreFieldToCheck]: { $lt: 6.0 } });
           break;
       }
     }
 
-    if (tags && tags !== 'Tất cả') {
-      const tagList = tags
+    const combinedTags = [tags, extraFilters.cuisine]
+      .filter((t) => typeof t === 'string' && t.trim() && t.trim() !== 'Tất cả')
+      .join(',');
+    if (combinedTags) {
+      const tagList = combinedTags
         .split(',')
-        .map((t) => t.trim())
+        .map((t) => escapeRegex(t.trim()))
         .filter(Boolean);
       if (tagList.length > 0) {
-        filterQuery['tags'] = { $regex: new RegExp(tagList.join('|'), 'i') };
+        andConditions.push({
+          tags: { $regex: new RegExp(tagList.join('|'), 'i') },
+        });
       }
     }
 
@@ -899,6 +1230,7 @@ export class RestaurantsService {
     const aiIndexMap: Record<string, number> = {};
     let isAiSearch = false;
     if (search && search.trim() !== '') {
+      const safeSearch = escapeRegex(search.trim());
       isAiSearch = true;
       try {
         const payload = {
@@ -922,48 +1254,85 @@ export class RestaurantsService {
         const recommendedIds = recommendedItems.map((item: any) => item.id);
 
         if (recommendedIds.length > 0) {
-          filterQuery['_id'] = { $in: recommendedIds };
+          andConditions.push({ _id: { $in: recommendedIds } });
           recommendedItems.forEach((item: any, index: number) => {
             aiIndexMap[item.id] = index;
           });
         } else {
-          filterQuery['$or'] = [
-            { tenQuan: { $regex: search, $options: 'i' } },
-            { name: { $regex: search, $options: 'i' } },
-            { tags: { $regex: search, $options: 'i' } },
-            { cuisines: { $regex: search, $options: 'i' } },
-            { diaChi: { $regex: search, $options: 'i' } },
-            { address: { $regex: search, $options: 'i' } },
-          ];
+          andConditions.push({
+            $or: [
+              { tenQuan: { $regex: safeSearch, $options: 'i' } },
+              { name: { $regex: safeSearch, $options: 'i' } },
+              { tags: { $regex: safeSearch, $options: 'i' } },
+              { cuisines: { $regex: safeSearch, $options: 'i' } },
+              { diaChi: { $regex: safeSearch, $options: 'i' } },
+              { address: { $regex: safeSearch, $options: 'i' } },
+            ],
+          });
           isAiSearch = false;
         }
       } catch (error: any) {
         console.error('Lỗi kết nối AI:', error.message);
-        filterQuery['$or'] = [
-          { tenQuan: { $regex: search, $options: 'i' } },
-          { name: { $regex: search, $options: 'i' } },
-          { tags: { $regex: search, $options: 'i' } },
-          { cuisines: { $regex: search, $options: 'i' } },
-          { diaChi: { $regex: search, $options: 'i' } },
-          { address: { $regex: search, $options: 'i' } },
-        ];
+        andConditions.push({
+          $or: [
+            { tenQuan: { $regex: safeSearch, $options: 'i' } },
+            { name: { $regex: safeSearch, $options: 'i' } },
+            { tags: { $regex: safeSearch, $options: 'i' } },
+            { cuisines: { $regex: safeSearch, $options: 'i' } },
+            { diaChi: { $regex: safeSearch, $options: 'i' } },
+            { address: { $regex: safeSearch, $options: 'i' } },
+          ],
+        });
         isAiSearch = false;
       }
     }
 
+    const filterQuery: Record<string, unknown> =
+      andConditions.length === 0
+        ? {}
+        : andConditions.length === 1
+          ? andConditions[0]
+          : { $and: andConditions };
+
     // 3. Xác định chế độ xử lý
     const isOpenNowBool = openNow === 'true';
     const isSortDistance = sortBy === 'distance' && userLat && userLon;
-    const isManualProcessing = isOpenNowBool || isSortDistance || isAiSearch;
+    const isPriceFilterOrSort =
+      extraFilters.minPrice !== undefined ||
+      extraFilters.maxPrice !== undefined ||
+      sortBy === 'price';
+    const isManualProcessing =
+      isOpenNowBool || isSortDistance || isAiSearch || isPriceFilterOrSort;
 
     let data: any[] = [];
     let total = 0;
+    let isBoundedResult = false;
+    let totalMatchingBeforePostFilter: number | undefined;
 
     if (isManualProcessing) {
-      let allCandidates = await this.restaurantModel
-        .find(filterQuery)
+      const rawMatchingTotal = await this.restaurantModel
+        .countDocuments(filterQuery)
+        .exec();
+      const manualCursor = this.restaurantModel.find(filterQuery);
+      const sortedManualCursor =
+        typeof manualCursor.sort === 'function'
+          ? manualCursor.sort(sortOptions)
+          : manualCursor;
+      const fetchedCandidates = await sortedManualCursor
+        .limit(MAX_MANUAL_SCAN_LIMIT + 1)
         .lean()
         .exec();
+
+      isBoundedResult =
+        fetchedCandidates.length > MAX_MANUAL_SCAN_LIMIT ||
+        rawMatchingTotal > MAX_MANUAL_SCAN_LIMIT;
+      if (isBoundedResult) {
+        totalMatchingBeforePostFilter = Math.max(
+          rawMatchingTotal,
+          fetchedCandidates.length,
+        );
+      }
+      let allCandidates = fetchedCandidates.slice(0, MAX_MANUAL_SCAN_LIMIT);
 
       if (userLat && userLon) {
         const userPoint = parseValidCoordinatePair(userLat, userLon);
@@ -983,13 +1352,40 @@ export class RestaurantsService {
         }
       }
 
+      const hasInMemoryPostFilter =
+        isOpenNowBool ||
+        extraFilters.minPrice !== undefined ||
+        extraFilters.maxPrice !== undefined;
+
       if (isOpenNowBool) {
         allCandidates = allCandidates.filter((res: any) =>
           this.checkIsOpen(res.openingTime || res.gioMoCua),
         );
       }
 
-      if (isAiSearch && sortBy === 'diemTrungBinh') {
+      if (
+        extraFilters.minPrice !== undefined ||
+        extraFilters.maxPrice !== undefined
+      ) {
+        allCandidates = allCandidates.filter((res: any) => {
+          const parsedVnd = parseRestaurantPriceVnd(res.giaCa || res.priceRange);
+          if (
+            extraFilters.minPrice !== undefined &&
+            parsedVnd < Number(extraFilters.minPrice)
+          ) {
+            return false;
+          }
+          if (
+            extraFilters.maxPrice !== undefined &&
+            parsedVnd > Number(extraFilters.maxPrice)
+          ) {
+            return false;
+          }
+          return true;
+        });
+      }
+
+      if (isAiSearch && sortField === 'diemTrungBinh' && sortBy !== 'price') {
         allCandidates.sort((a: any, b: any) => {
           if (order === 'asc') {
             return (a.diemTrungBinh || 0) - (b.diemTrungBinh || 0);
@@ -997,6 +1393,12 @@ export class RestaurantsService {
           const idxA = aiIndexMap[a._id.toString()] ?? 9999;
           const idxB = aiIndexMap[b._id.toString()] ?? 9999;
           return idxA - idxB;
+        });
+      } else if (sortBy === 'price') {
+        allCandidates.sort((a: any, b: any) => {
+          const pA = parseRestaurantPriceVnd(a.giaCa || a.priceRange);
+          const pB = parseRestaurantPriceVnd(b.giaCa || b.priceRange);
+          return sortDirection === 1 ? pA - pB : pB - pA;
         });
       } else if (isSortDistance) {
         allCandidates.sort((a: any, b: any) => {
@@ -1018,7 +1420,9 @@ export class RestaurantsService {
         });
       }
 
-      total = allCandidates.length;
+      total = hasInMemoryPostFilter
+        ? allCandidates.length
+        : Math.max(rawMatchingTotal, allCandidates.length);
       data = allCandidates
         .slice(skip, skip + limitNum)
         .map((res) => this.mapRestaurantToDTO(res));
@@ -1036,14 +1440,29 @@ export class RestaurantsService {
     return {
       data,
       total,
+      page: pageNum,
+      limit: limitNum,
       currentPage: pageNum,
       totalPages: Math.ceil(total / limitNum),
       sortBy: sortBy,
       order: order,
+      isBoundedResult,
+      ...(isBoundedResult
+        ? {
+            evaluatedWindowLimit: MAX_MANUAL_SCAN_LIMIT,
+            totalMatchingBeforePostFilter,
+          }
+        : {}),
     };
   }
 
   async findOne(idOrSlug: string): Promise<RestaurantDocument> {
+    if (!idOrSlug || !/^[a-zA-Z0-9_-]{1,128}$/.test(idOrSlug)) {
+      throw new BadRequestException(
+        `Invalid restaurant ID or slug "${idOrSlug}".`,
+      );
+    }
+
     let restaurant: RestaurantDocument | null = null;
     if (
       Types.ObjectId.isValid(idOrSlug) &&
@@ -1057,9 +1476,10 @@ export class RestaurantsService {
         .exec();
     }
     if (!restaurant) {
+      const safeSlug = escapeRegex(idOrSlug);
       restaurant = await this.restaurantModel
         .findOne({
-          urlGoc: { $regex: `${idOrSlug}$`, $options: 'i' },
+          urlGoc: { $regex: `${safeSlug}$`, $options: 'i' },
         })
         .exec();
     }

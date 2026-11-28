@@ -1,0 +1,116 @@
+name: Backend CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+      - 'feat/**'
+      - 'feature/**'
+      - 'fix/**'
+      - 'refactor/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  backend-quality:
+    name: Build, Typecheck, Lint & Test (NestJS Monorepo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NODE_ENV: test
+      CI: 'true'
+      # Isolated local-only test configuration (never connects to MongoDB Atlas or production)
+      MONGO_URI: mongodb://127.0.0.1:27017/gastro_core_test
+      CORE_MONGO_URI: mongodb://127.0.0.1:27017/gastro_core_test
+      PLANNING_MONGO_URI: mongodb://127.0.0.1:27017/gastro_planning_test
+      JWT_SECRET: ci-isolated-test-jwt-secret
+      INTERNAL_API_KEY: ci-isolated-test-internal-key
+      AI_SERVICE_INTERNAL_KEY: ci-isolated-test-ai-key
+      GASTROWISE_ALLOW_LOCAL_INGESTION: 'false'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check git diff whitespace & conflict markers
+        run: |
+          git diff --check
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" && -n "${GITHUB_BASE_REF:-}" ]]; then
+            git diff --check "origin/${GITHUB_BASE_REF}...HEAD"
+          elif git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+            git diff --check HEAD~1 HEAD
+          fi
+
+      - name: Setup Node.js 24 (matches service Dockerfiles)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies (deterministic npm ci)
+        run: npm ci --no-audit --no-fund
+
+      - name: ESLint check (advisory — tracks pre-existing legacy lint debt)
+        id: eslint_check
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npx eslint "{src,apps,libs,test}/**/*.ts" | tee /tmp/eslint-report.txt
+        shell: bash
+
+      - name: Publish ESLint summary
+        if: always()
+        run: |
+          {
+            echo "### Backend CI — ESLint Advisory Summary"
+            echo "- Outcome: \`${{ steps.eslint_check.outcome }}\` (non-blocking while legacy \`@typescript-eslint/no-unsafe-*\` debt is remediated)"
+            echo '```text'
+            tail -n 10 /tmp/eslint-report.txt 2>/dev/null || echo "No ESLint output recorded."
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: TypeScript compilation check
+        run: npx tsc -p tsconfig.build.json --noEmit
+
+      - name: Build shared library and all backend services
+        run: |
+          npm run build:shared
+          npm run build:all
+
+      - name: Run microservices test suite
+        run: npm run test:microservices
+
+  python-utility-check:
+    name: Python Utility Scripts Syntax Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate syntax of tracked Python scripts
+        run: |
+          mapfile -t PY_FILES < <(git ls-files '*.py')
+          if [[ "${#PY_FILES[@]}" -eq 0 ]]; then
+            echo "No tracked Python files found."
+            exit 0
+          fi
+          python3 -m py_compile "${PY_FILES[@]}"
+          echo "Compiled ${#PY_FILES[@]} tracked Python script(s) cleanly."
