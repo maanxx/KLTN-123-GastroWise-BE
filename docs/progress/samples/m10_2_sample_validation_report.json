@@ -1,0 +1,103 @@
+{
+  "batchId": "m10_2_sample_dryrun_v1",
+  "mode": "dry-run",
+  "source": "foody_shopeefood",
+  "targetDb": "gastro_core_test",
+  "targetUriRedacted": "mongodb://gastro_core_svc:***@mongo-test:27017/gastro_core_test?authSource=gastro_core_test",
+  "checksumSha256": "4ff2344f4456331badb12ee146f3f9415d14b6a6593340f8997172fcc8d5057b",
+  "rawStagedCount": 0,
+  "plannedInserts": 4,
+  "plannedUpdates": 0,
+  "duplicatesSkipped": 2,
+  "metrics": {
+    "raw_scraped_count": 7,
+    "valid_record_count": 4,
+    "inserted_count": 0,
+    "updated_count": 0,
+    "rejected_count": 1,
+    "duplicate_count": 2,
+    "invalid_or_missing_coords_count": 1,
+    "rating_10pt_explicit_count": 1,
+    "rating_unrated_zero_count": 1,
+    "rating_ambiguous_count": 1,
+    "missing_tags_count": 1,
+    "missing_price_count": 2,
+    "missing_address_count": 1
+  },
+  "validationErrors": [
+    {
+      "recordIndex": 6,
+      "field": "Name",
+      "errorCode": "MISSING_NAME",
+      "reason": "Missing required restaurant Name / tenQuan.",
+      "severity": "error",
+      "sourceId": "4000999"
+    }
+  ],
+  "warnings": [
+    {
+      "recordIndex": 0,
+      "field": "PriceMin/PriceMax",
+      "errorCode": "MISSING_OR_ZERO_PRICE",
+      "reason": "Price range is missing or 0; storing empty giaCa without fabrication.",
+      "severity": "warning",
+      "sourceId": "1000070216"
+    },
+    {
+      "recordIndex": 2,
+      "field": "Latitude/Longtitude",
+      "errorCode": "INVALID_OR_MISSING_COORDINATES",
+      "reason": "Coordinates are missing, out of WGS84 bounds, or [0, 0]; storing location=null without fabrication.",
+      "severity": "warning",
+      "sourceId": "2000451"
+    },
+    {
+      "recordIndex": 3,
+      "field": "RestaurantID/slug/name+address",
+      "errorCode": "DUPLICATE_IN_BATCH",
+      "reason": "Skipped duplicate record in batch (foody_shopeefood::1163155).",
+      "severity": "warning",
+      "sourceId": "1163155"
+    },
+    {
+      "recordIndex": 4,
+      "field": "RestaurantID/slug/name+address",
+      "errorCode": "DUPLICATE_IN_BATCH",
+      "reason": "Skipped duplicate record in batch (foody_shopeefood::2000499).",
+      "severity": "warning",
+      "sourceId": "2000499"
+    },
+    {
+      "recordIndex": 5,
+      "field": "Address",
+      "errorCode": "MISSING_ADDRESS",
+      "reason": "Address is missing; leaving diaChi empty without fabrication.",
+      "severity": "warning",
+      "sourceId": "3000100"
+    },
+    {
+      "recordIndex": 5,
+      "field": "AvgRating",
+      "errorCode": "AMBIGUOUS_RATING_SCALE",
+      "reason": "Rating 4.1 in [0, 5] lacks explicit scale metadata; flagged as ratingScale='ambiguous'.",
+      "severity": "warning",
+      "sourceId": "3000100"
+    },
+    {
+      "recordIndex": 5,
+      "field": "PriceMin/PriceMax",
+      "errorCode": "MISSING_OR_ZERO_PRICE",
+      "reason": "Price range is missing or 0; storing empty giaCa without fabrication.",
+      "severity": "warning",
+      "sourceId": "3000100"
+    },
+    {
+      "recordIndex": 5,
+      "field": "tags",
+      "errorCode": "MISSING_TAGS",
+      "reason": "No cuisines, categories, or keywords found; storing empty tags.",
+      "severity": "warning",
+      "sourceId": "3000100"
+    }
+  ]
+}

@@ -9,3 +9,4 @@ export * from './utils/geo.utils';
 export * from './utils/restaurant-normalizer.util';
 export * from './utils/correlation-id.middleware';
 export * from './migrations';
+export * from './ingestion';
