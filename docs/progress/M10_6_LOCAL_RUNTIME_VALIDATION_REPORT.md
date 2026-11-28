@@ -2,7 +2,7 @@
 
 - **Date:** 2026-11-28
 - **Repository:** `maanxx/KLTN-123-GastroWise-BE`
-- **Branch:** `feat/m10-6-local-runtime-validation` (branched from `main` @ `4529579`)
+- **Branch:** `feat/m10-6-local-runtime-validation` (branched from `main` @ `4529579`; merged `origin/main` @ `18a2020` including PR #18)
 - **Environment:** Isolated Local Docker Desktop (`29.6.2`) / Docker Compose (`v5.3.1`)
 - **Database Safety:** 100% isolated local `mongo:7.0` container (`gastrowise-mongo-test`) with SCRAM `--auth`; zero MongoDB Atlas or production connections; zero remote migrations; existing `mongo_test_data` volume preserved untouched.
 
@@ -22,23 +22,40 @@ All five GastroWise runtime services run on the isolated Docker bridge network `
 
 ---
 
-## 2. Actual Startup & Inspection Commands
+## 2. Local Startup & Inspection Procedure
+
+Every `docker compose` command requires `--env-file .env.docker.local` because `docker-compose.yml` uses fail-fast `${VAR:?...}` credential interpolation (never use MongoDB Atlas credentials, never run remote migrations, and never execute `docker compose down -v`):
 
 ```bash
-# Verify Docker runtime & compose stack
-docker info --format '{{.ServerVersion}}'
-docker compose version
-docker compose ps --format 'table {{.Name}}\t{{.Service}}\t{{.Status}}\t{{.Ports}}'
+# 1. Copy environment template to gitignored local Docker env file
+cp .env.example .env.docker.local
 
-# Start or verify isolated stack without removing volumes (never use `down -v`)
-docker compose up -d
+# 2. Edit .env.docker.local with local-only credentials (never commit; never use Atlas URIs)
+
+# 3. Validate Docker Compose configuration (fail-fast check)
+docker compose --env-file .env.docker.local config -q
+
+# 4. Build backend and AI services
+docker compose --env-file .env.docker.local build
+
+# 5. Start isolated local containers (preserving existing mongo_test_data volume)
+docker compose --env-file .env.docker.local up -d
+
+# 6. Verify container health and inspect logs
+docker compose --env-file .env.docker.local ps --format 'table {{.Name}}\t{{.Service}}\t{{.Status}}\t{{.Ports}}'
+docker compose --env-file .env.docker.local logs --tail=20
+
+# 7. Verify gateway and service connectivity
+curl -sS http://127.0.0.1:8080/health
+curl -sS "http://127.0.0.1:8080/api/v1/restaurants?page=1&limit=5"
+curl -sS "http://127.0.0.1:8080/api/v1/dishes?page=1&limit=5"
 ```
 
 ---
 
 ## 3. Actual Container Status & Restart Behavior
 
-Observed via `docker compose ps` and `docker inspect`:
+Observed via `docker compose --env-file .env.docker.local ps` and `docker inspect` (post-M10.6.1 rebuild):
 
 | Container | State | Health | Restart Count | Network |
 |---|---|---|---:|---|
@@ -48,7 +65,7 @@ Observed via `docker compose ps` and `docker inspect`:
 | `gastrowise-ai-service` | `running` | `healthy` | `0` | `kltn-123-gastrowise-be_gastrowise_network` |
 | `gastrowise-nginx-gateway` | `running` | `healthy` | `0` | `kltn-123-gastrowise-be_gastrowise_network` |
 
-All containers reported `0` restarts over 3+ hours of uptime with clean startup logs (`Nest application successfully started` on Core `0.0.0.0:3001` and Planning `0.0.0.0:3003`, `200 OK` probes on AI `5000` and Nginx `8080`).
+All five containers reported `running` + `healthy` with `0` restarts (`gastrowise-ai-service` and `gastrowise-nginx-gateway` `Up 4 hours (healthy)`; rebuilt `gastrowise-core-service`, `gastrowise-planning-service`, and `gastrowise-mongo-test` `Up 8 minutes (healthy)` during M10.6.2 verification) and clean startup logs (`Nest application successfully started` on Core `0.0.0.0:3001` and Planning `0.0.0.0:3003`, `200 OK` probes on AI `5000` and Nginx `8080`).
 
 ---
 
@@ -84,8 +101,9 @@ All containers reported `0` restarts over 3+ hours of uptime with clean startup 
 1. **Fixed — `planning-service` startup dependency race (`docker-compose.yml`):**
    - **Finding:** `planning-service.depends_on.core-service` used `condition: service_started` instead of `condition: service_healthy`.
    - **Fix:** Updated to `condition: service_healthy` in `docker-compose.yml` so `planning-service` waits until `core-service` passes `/health/ready` before accepting traffic.
-2. **Observed (Documented, Not Changed) — Duplicate `X-Correlation-Id` response header:**
-   - Nginx sets `add_header X-Correlation-Id $corr_id always;` while Core Service also returns `X-Correlation-Id`, causing two identical `X-Correlation-Id` headers on proxied responses. Recommend using `proxy_hide_header X-Correlation-Id;` in `nginx/nginx.conf` in a follow-up gateway polish task.
+2. **Fixed in M10.6.1 — Duplicate `X-Correlation-Id` response header (`nginx/nginx.conf`):**
+   - **Finding:** Nginx set `add_header X-Correlation-Id $corr_id always;` while Core Service also returned `X-Correlation-Id`, causing two identical `X-Correlation-Id` headers on proxied responses.
+   - **Fix:** Added `proxy_hide_header X-Correlation-Id;` in `nginx/nginx.conf` (Section 7.3) and verified `X-Correlation-Id header count: 1`.
 3. **Observed (Documented, Not Changed) — Health route path:**
    - Core and Planning expose `/health` and `/health/ready` (not `/health/live`). Docker Compose healthchecks already target `/health/ready` correctly.
 
@@ -108,15 +126,25 @@ All containers reported `0` restarts over 3+ hours of uptime with clean startup 
   ```
 - **Observed AI Repository Branch / Commit:** `feature/m10-ai-data-readiness` (`3159c15`, `[feat]: thien implement ai mongo data readiness and live cross-service validation`).
 - **Build Prerequisites:** Docker Desktop / Engine with Compose v2+, `KLTN-123-GastroWise-AI/Dockerfile` (`python:3.12-slim`) and `requirements.txt` present in `../KLTN-123-GastroWise-AI`.
-- **Exact Local Startup Procedure (never use `down -v`):**
+- **Exact Local Startup Procedure (never use `docker compose down -v`):**
   ```bash
   cd KLTN-123-GastroWise-BE
+  # 1. Copy template to gitignored local env file
   cp .env.example .env.docker.local
-  # Edit .env.docker.local with local-only credentials (never commit; never use Atlas URIs)
+  # 2. Configure local-only credentials in .env.docker.local (never commit; never use Atlas URIs)
+  # 3. Validate Compose configuration
   docker compose --env-file .env.docker.local config -q
+  # 4. Build services
   docker compose --env-file .env.docker.local build
+  # 5. Start containers
   docker compose --env-file .env.docker.local up -d
+  # 6. Verify container health and logs
   docker compose --env-file .env.docker.local ps
+  docker compose --env-file .env.docker.local logs --tail=20
+  # 7. Verify gateway and service connectivity
+  curl -sS http://127.0.0.1:8080/health
+  curl -sS "http://127.0.0.1:8080/api/v1/restaurants?page=1&limit=5"
+  curl -sS "http://127.0.0.1:8080/api/v1/dishes?page=1&limit=5"
   ```
 
 ### 7.3 Nginx Gateway Hardening (`nginx/nginx.conf`)
