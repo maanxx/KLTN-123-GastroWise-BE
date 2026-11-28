@@ -9,6 +9,7 @@ import {
   NormalizedRestaurantCandidate,
   ParsedRawRecord,
   RejectedRecordSample,
+  SUPPORTED_INGESTION_SOURCES,
 } from './ingestion.types';
 import {
   computeBatchChecksumSha256,
@@ -16,7 +17,10 @@ import {
   parseRawIngestionInput,
   RawInputFormat,
 } from './ingestion.staging';
-import { validateAndNormalizeRestaurantRecord } from './ingestion.normalizer';
+import {
+  isSupportedIngestionSource,
+  validateAndNormalizeRestaurantRecord,
+} from './ingestion.normalizer';
 
 export const MAX_REJECTED_SAMPLE_RECORDS = 50 as const;
 export const MAX_DUPLICATE_CANDIDATE_SAMPLES = 50 as const;
@@ -198,7 +202,13 @@ export function buildDataQualityReport(params: {
 export function evaluateRestaurantDataQuality(
   options: EvaluateDataQualityOptions,
 ): DataQualityEvaluationResult {
-  const source = options.source || EXTERNAL_SOURCE_FOODY;
+  const rawSource = options.source?.trim() || EXTERNAL_SOURCE_FOODY;
+  const source = rawSource.toLowerCase();
+  if (!isSupportedIngestionSource(source)) {
+    throw new IngestionValidationError(
+      `Unsupported batch source "${rawSource}". Supported sources: ${SUPPORTED_INGESTION_SOURCES.join(', ')}.`,
+    );
+  }
   const maxRejectedSample =
     options.maxRejectedSample ?? MAX_REJECTED_SAMPLE_RECORDS;
 
@@ -245,7 +255,11 @@ export function evaluateRestaurantDataQuality(
   const seenNameAddr = new Set<string>();
 
   for (const parsed of parsedRecords) {
-    const outcome = validateAndNormalizeRestaurantRecord(parsed, batchId);
+    const outcome = validateAndNormalizeRestaurantRecord(
+      parsed,
+      batchId,
+      source,
+    );
 
     if (!outcome.candidate) {
       errors.push(...outcome.errors);

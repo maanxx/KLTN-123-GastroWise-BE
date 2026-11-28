@@ -328,4 +328,136 @@ describe('M10.3 Restaurant Data Quality & Ingestion Readiness', () => {
       IngestionValidationError,
     );
   });
+
+  describe('Source provenance propagation (M10.3.1)', () => {
+    it('propagates source="shopeefood" when records omit externalSource and keeps 10-point Foody rating compatibility', () => {
+      const res = evaluateRestaurantDataQuality({
+        source: 'shopeefood',
+        records: [
+          {
+            RestaurantID: 'sf-101',
+            Name: 'Trà Sữa Gong Cha',
+            Address: '88 Nguyễn Huệ, Q1',
+            Latitude: 10.774,
+            Longtitude: 106.703,
+            AvgRating: 8.4,
+          },
+        ],
+      });
+
+      expect(res.source).toBe('shopeefood');
+      expect(res.validatedCandidates).toHaveLength(1);
+      expect(res.validatedCandidates[0].externalSource).toBe('shopeefood');
+      expect(res.validatedCandidates[0].diemTrungBinh).toBe(4.2);
+      expect(res.validatedCandidates[0].ratingScale).toBe('10_point');
+    });
+
+    it('propagates source="foody" when records omit externalSource', () => {
+      const res = evaluateRestaurantDataQuality({
+        source: 'foody',
+        records: [
+          {
+            RestaurantID: 'fd-202',
+            Name: 'Phở Hòa Pasteur',
+            Address: '260C Pasteur, Q3',
+            Latitude: 10.785,
+            Longtitude: 106.688,
+            AvgRating: 4.4,
+          },
+        ],
+      });
+
+      expect(res.source).toBe('foody');
+      expect(res.validatedCandidates).toHaveLength(1);
+      expect(res.validatedCandidates[0].externalSource).toBe('foody');
+      expect(res.validatedCandidates[0].ratingScale).toBe('10_point');
+      expect(res.validatedCandidates[0].diemTrungBinh).toBe(2.2);
+    });
+
+    it('preserves explicit record-level externalSource over batch default without silent relabeling', () => {
+      const res = evaluateRestaurantDataQuality({
+        source: 'shopeefood',
+        records: [
+          {
+            RestaurantID: 'mix-src-1',
+            Name: 'Quán Mặc Định ShopeeFood',
+            AvgRating: 8.0,
+          },
+          {
+            RestaurantID: 'mix-src-2',
+            Name: 'Quán Explicit Foody',
+            externalSource: 'foody',
+            AvgRating: 9.0,
+          },
+        ],
+      });
+
+      expect(res.source).toBe('shopeefood');
+      expect(res.validatedCandidates).toHaveLength(2);
+      expect(res.validatedCandidates[0].externalSource).toBe('shopeefood');
+      expect(res.validatedCandidates[1].externalSource).toBe('foody');
+    });
+
+    it('rejects unsupported batch source and unsupported record-level externalSource', () => {
+      expect(() =>
+        evaluateRestaurantDataQuality({
+          source: 'unsupported_batch_source',
+          records: [{ RestaurantID: '1', Name: 'Test' }],
+        }),
+      ).toThrow(IngestionValidationError);
+
+      const perRecordRes = evaluateRestaurantDataQuality({
+        source: 'shopeefood',
+        records: [
+          {
+            RestaurantID: 'bad-rec-src',
+            Name: 'Quán Nguồn Lạ',
+            externalSource: 'unknown_per_record_source',
+          },
+        ],
+      });
+
+      expect(perRecordRes.report.rejectedRecords).toBe(1);
+      expect(perRecordRes.errors[0].errorCode).toBe(
+        'UNSUPPORTED_SOURCE_FORMAT',
+      );
+    });
+
+    it('preserves source provenance identically for rawContent JSON and records array inputs and redacts URL credentials', () => {
+      const rawJson = JSON.stringify([
+        {
+          RestaurantID: 'raw-sf-1',
+          Name: 'Bánh Mì Ô Môi',
+          AvgRating: 8.6,
+        },
+        {
+          RestaurantID: 'raw-fd-2',
+          Name: 'Cơm Tấm Mộc',
+          externalSource: 'foody',
+          AvgRating: 8.8,
+        },
+        {
+          RestaurantID: 'raw-bad-url',
+          Name: 'Quán URL Có Secret',
+          MicrositeUrl: 'https://user:supersecret@bad host/path?token=abc123',
+        },
+      ]);
+
+      const rawRes = evaluateRestaurantDataQuality({
+        rawContent: rawJson,
+        format: 'json',
+        source: 'shopeefood',
+      });
+
+      expect(rawRes.source).toBe('shopeefood');
+      expect(rawRes.validatedCandidates).toHaveLength(2);
+      expect(rawRes.validatedCandidates[0].externalSource).toBe('shopeefood');
+      expect(rawRes.validatedCandidates[1].externalSource).toBe('foody');
+      expect(rawRes.report.rejectedRecords).toBe(1);
+      expect(String(rawRes.errors[0].originalValue)).not.toContain(
+        'supersecret',
+      );
+      expect(String(rawRes.errors[0].originalValue)).not.toContain('abc123');
+    });
+  });
 });

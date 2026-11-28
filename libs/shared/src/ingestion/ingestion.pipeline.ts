@@ -33,6 +33,7 @@ import {
   stageRawIngestionRecords,
 } from './ingestion.staging';
 import {
+  isSupportedIngestionSource,
   RecordNormalizationOutcome,
   validateAndNormalizeRestaurantRecord,
 } from './ingestion.normalizer';
@@ -593,7 +594,13 @@ export async function runRestaurantIngestionPipeline(
 
   const dryRun = mode === 'dry-run';
   const now = options.now || new Date();
-  const source = options.source || 'foody_shopeefood';
+  const rawSource = options.source?.trim() || 'foody_shopeefood';
+  const source = rawSource.toLowerCase();
+  if (!isSupportedIngestionSource(source)) {
+    throw new IngestionValidationError(
+      `Unsupported batch source "${rawSource}".`,
+    );
+  }
   const checksumSha256 = computeBatchChecksumSha256(options.rawContent);
   const batchId =
     options.batchId?.trim() || createIngestionBatchId(checksumSha256, now);
@@ -650,7 +657,11 @@ export async function runRestaurantIngestionPipeline(
   };
 
   for (const parsed of parsedRecords) {
-    const outcome = validateAndNormalizeRestaurantRecord(parsed, batchId);
+    const outcome = validateAndNormalizeRestaurantRecord(
+      parsed,
+      batchId,
+      source,
+    );
 
     if (!outcome.candidate) {
       metrics.rejected_count += 1;

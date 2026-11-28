@@ -24,6 +24,28 @@ export interface RecordNormalizationOutcome {
   missingAddress: boolean;
 }
 
+export function isSupportedIngestionSource(source: string): boolean {
+  const normalized = source.trim().toLowerCase();
+  return (SUPPORTED_INGESTION_SOURCES as readonly string[]).includes(
+    normalized,
+  );
+}
+
+export function isFoodyFamilySource(source: string): boolean {
+  const normalized = source.trim().toLowerCase();
+  return (
+    normalized === EXTERNAL_SOURCE_FOODY ||
+    normalized === 'shopeefood' ||
+    normalized === 'foody'
+  );
+}
+
+function redactUrlCredentials(rawUrl: string): string {
+  return rawUrl
+    .replace(/(https?:\/\/)([^/@\s]+@)/gi, '$1***@')
+    .replace(/([?&](?:token|key|secret|password|auth)=)[^&\s]+/gi, '$1***');
+}
+
 function normalizeDisplayText(raw: string): string {
   const withoutControls = Array.from(raw.normalize('NFC'))
     .map((ch) => {
@@ -452,6 +474,7 @@ function readExplicitRatingScaleInput(
 export function validateAndNormalizeRestaurantRecord(
   parsed: ParsedRawRecord,
   batchId: string,
+  defaultSource: string = EXTERNAL_SOURCE_FOODY,
 ): RecordNormalizationOutcome {
   const { recordIndex, payload } = parsed;
   const errors: IngestionValidationIssue[] = [];
@@ -491,17 +514,21 @@ export function validateAndNormalizeRestaurantRecord(
     'externalSourceId',
   ]);
   const rawExternalSource = readText(payload, ['externalSource', 'source']);
-  const externalSource = rawExternalSource || EXTERNAL_SOURCE_FOODY;
-  const supportedSources = SUPPORTED_INGESTION_SOURCES as readonly string[];
-  if (!supportedSources.includes(externalSource.toLowerCase())) {
+  const effectiveDefaultSource = defaultSource.trim() || EXTERNAL_SOURCE_FOODY;
+  const resolvedRawSource = rawExternalSource || effectiveDefaultSource;
+  const normalizedSource = resolvedRawSource.toLowerCase();
+  const externalSource = isSupportedIngestionSource(normalizedSource)
+    ? normalizedSource
+    : resolvedRawSource;
+  if (!isSupportedIngestionSource(normalizedSource)) {
     errors.push({
       recordIndex,
       field: 'externalSource',
       errorCode: 'UNSUPPORTED_SOURCE_FORMAT',
-      reason: `Unsupported externalSource "${externalSource}". Supported sources: ${SUPPORTED_INGESTION_SOURCES.join(', ')}.`,
+      reason: `Unsupported externalSource "${resolvedRawSource}". Supported sources: ${SUPPORTED_INGESTION_SOURCES.join(', ')}.`,
       severity: 'error',
       sourceId: externalSourceId || undefined,
-      originalValue: externalSource,
+      originalValue: resolvedRawSource,
     });
   }
 
@@ -604,7 +631,7 @@ export function validateAndNormalizeRestaurantRecord(
         'Source URL must be a valid HTTP/HTTPS URL or relative Foody path.',
       severity: 'error',
       sourceId: externalSourceId || undefined,
-      originalValue: rawMicrosite,
+      originalValue: redactUrlCredentials(rawMicrosite),
     });
   } else if (derivedFromSlug) {
     infos.push({
@@ -697,7 +724,7 @@ export function validateAndNormalizeRestaurantRecord(
     diemTrungBinh = 0;
     ratingScale =
       explicitScale ??
-      (externalSource === EXTERNAL_SOURCE_FOODY ? '10_point' : 'ambiguous');
+      (isFoodyFamilySource(externalSource) ? '10_point' : 'ambiguous');
     ratingNormalizedFlag = ratingScale !== 'ambiguous';
     ratingKind = 'unrated_zero';
   } else {
@@ -705,7 +732,7 @@ export function validateAndNormalizeRestaurantRecord(
       explicitScale ?? undefined;
     if (!resolvedInputScale) {
       if (
-        externalSource === EXTERNAL_SOURCE_FOODY ||
+        isFoodyFamilySource(externalSource) ||
         rawRatingInput > 5 ||
         Object.keys(subscores).length > 0
       ) {
