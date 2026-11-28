@@ -11,7 +11,7 @@
 | Collection | Schema File | Owner | Key Fields | Indexes & Deduplication |
 |---|---|---|---|---|
 | `restaurants` | `apps/core-service/src/restaurants/schemas/restaurant.schema.ts` | Core Service (`gastro_core_test`) | `tenQuan`, `diaChi`, `cityId`, `diemTrungBinh`, `giaCa`, `tags`, `lat`, `lon`, `location` (GeoJSON Point or `null`), `avatarUrl`, `urlGoc`, `slug`, `status`, `externalSource`, `externalSourceId`, `ingestionBatchId` | `2dsphere` on `location`, `{ status: 1, diemTrungBinh: -1 }`, text index, partial `{ externalSource: 1, externalSourceId: 1 }` |
-| `menu_items` | `apps/core-service/src/restaurants/schemas/menu-item.schema.ts` | Core Service (`gastro_core_test`) | `restaurantId` (ObjectId ref `Restaurant`), `name`, `description`, `price` (`>= 0`), `image`, `isVegetarian`, `calories`, `tags: string[]`, `isAvailable`, `isFeatured`, plus optional M10.7 provenance fields (`externalSource`, `externalSourceId`, `ingestionBatchId`) | `{ restaurantId: 1 }` and partial `{ externalSource: 1, externalSourceId: 1 }` |
+| `menu_items` | `apps/core-service/src/restaurants/schemas/menu-item.schema.ts` | Core Service (`gastro_core_test`) | `restaurantId` (ObjectId ref `Restaurant`), `name`, `description`, `price` (`>= 0`), `image`, `isVegetarian`, `calories`, `tags: string[]`, `isAvailable`, `isFeatured`, plus optional M10.7 provenance fields (`externalSource`, `externalSourceId`, `ingestionBatchId`, sanitized bounded `sourceMetadata`) | `{ restaurantId: 1 }` and partial `{ externalSource: 1, externalSourceId: 1 }` |
 
 No competing schemas or collections were introduced; all existing API contracts (`GET /api/v1/restaurants`, `GET /api/v1/dishes`, `GET /api/v1/restaurants/:id/dishes`, and legacy menu endpoints) remain 100% compatible.
 
@@ -22,7 +22,7 @@ No competing schemas or collections were introduced; all existing API contracts 
 1. **Normalization (`libs/shared/src/ingestion/dish-ingestion.normalizer.ts` & `ingestion.normalizer.ts`):**
    - Extracts both standalone `dishes` arrays and nested `dishes` / `menu` / `menuItems` inside ShopeeFood restaurant payloads.
    - Normalizes Unicode NFC text/whitespace, Vietnamese formatted prices (`"75.000đ"`, `"68,000 VND"`, `"45k"`, numeric VND), deduplicated `tags`/`category`, optional booleans/calories, and HTTP(S) image URLs (rejecting `javascript:`, malformed URLs, or credential-bearing URLs).
-   - Preserves `externalSource`, `externalSourceId`, and optional `sourceMetadata`.
+   - Preserves `externalSource`, `externalSourceId`, and sanitized, bounded `sourceMetadata` (recursively redacted via `sanitizeRawPreview` before persistence in `menu_items`, and never exposed in public Dish DTOs).
 2. **Validation & Partial-Failure Isolation:**
    - Validates required fields, non-negative bounded prices (`<= 50,000,000 VND`), coordinates (null-safe GeoJSON via M10.3), image URLs, and **restaurant-dish relationships** (`DISH_ORPHAN_RESTAURANT` rejects dishes referencing nonexistent restaurants without aborting valid records).
 3. **Idempotent Core Persistence (`libs/shared/src/ingestion/food-dataset.pipeline.ts`):**

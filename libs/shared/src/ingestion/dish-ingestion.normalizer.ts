@@ -3,7 +3,10 @@ import {
   IngestionValidationIssue,
   SUPPORTED_INGESTION_SOURCES,
 } from './ingestion.types';
-import { sanitizeDiagnosticValue } from './ingestion.sanitizer';
+import {
+  sanitizeDiagnosticValue,
+  sanitizeRawPreview,
+} from './ingestion.sanitizer';
 
 export const MENU_ITEMS_COLLECTION = 'menu_items' as const;
 export const MAX_REASONABLE_DISH_PRICE_VND = 50_000_000;
@@ -372,6 +375,20 @@ export function validateAndNormalizeDishRecord(
   const isAvailable = parseBooleanValue(p.isAvailable ?? p.is_available, true);
   const isFeatured = parseBooleanValue(p.isFeatured ?? p.is_featured, false);
 
+  let sanitizedMetadata: Record<string, unknown> | undefined;
+  if (
+    p.sourceMetadata &&
+    typeof p.sourceMetadata === 'object' &&
+    !Array.isArray(p.sourceMetadata)
+  ) {
+    const cleaned = sanitizeRawPreview(
+      p.sourceMetadata as Record<string, unknown>,
+    );
+    if (Object.keys(cleaned).length > 0) {
+      sanitizedMetadata = cleaned;
+    }
+  }
+
   return {
     valid: true,
     candidate: {
@@ -390,9 +407,7 @@ export function validateAndNormalizeDishRecord(
       isAvailable,
       isFeatured,
       ingestionBatchId: batchId,
-      ...(p.sourceMetadata && typeof p.sourceMetadata === 'object'
-        ? { sourceMetadata: p.sourceMetadata as Record<string, unknown> }
-        : {}),
+      ...(sanitizedMetadata ? { sourceMetadata: sanitizedMetadata } : {}),
     },
     errors: [],
     warnings,

@@ -49,6 +49,9 @@ export class MenuItem {
 
   @Prop({ required: false })
   ingestionBatchId?: string;
+
+  @Prop({ type: mongoose.Schema.Types.Mixed, required: false })
+  sourceMetadata?: Record<string, unknown>;
 }
 
 export const MenuItemSchema = SchemaFactory.createForClass(MenuItem);

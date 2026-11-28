@@ -73,6 +73,7 @@ function computeDishContentDigest(
     tags: candidate.tags,
     isAvailable: candidate.isAvailable,
     isFeatured: candidate.isFeatured,
+    sourceMetadata: candidate.sourceMetadata ?? null,
   };
   return crypto
     .createHash('sha256')
@@ -374,6 +375,9 @@ export async function runLocalFoodDatasetIngestionPipeline(
           };
           if (candidate.calories !== undefined) {
             setPayload.calories = candidate.calories;
+          }
+          if (candidate.sourceMetadata !== undefined) {
+            setPayload.sourceMetadata = candidate.sourceMetadata;
           }
 
           bulkOps.push({

@@ -12,10 +12,13 @@ import { runLocalFoodDatasetIngestionPipeline } from './food-dataset.pipeline';
 import {
   EXTERNAL_SOURCE_FOODY,
   INGESTION_BATCHES_COLLECTION,
+  IngestionValidationError,
   RAW_STAGING_COLLECTION,
   RESTAURANTS_COLLECTION,
 } from './ingestion.types';
+import { assertLocalIngestionTargetOnly } from './ingestion.connection';
 import { MENU_ITEMS_COLLECTION } from './dish-ingestion.normalizer';
+import { parseFoodDatasetCliArgs } from '../../../../scripts/ingestion/ingest-food-dataset';
 
 type Doc = Record<string, unknown>;
 
@@ -406,6 +409,106 @@ describe('M10.7 Local Food Dataset & Ingestion Pipeline', () => {
       expect(result.dishes.inserted).toBe(1);
       const restDoc = collections.get(RESTAURANTS_COLLECTION)!.docs[0];
       expect(restDoc.location).toBeNull();
+    });
+
+    it('persists sanitized, bounded sourceMetadata on menu_items and strips credentials/tokens before storage', async () => {
+      const dataset = JSON.stringify({
+        restaurants: [
+          {
+            RestaurantID: 888001,
+            Name: 'Quán Metadata Test',
+            Address: '45 Lê Lợi, Quận 1',
+            Latitude: 10.774,
+            Longtitude: 106.701,
+            AvgRating: 8.5,
+          },
+        ],
+        dishes: [
+          {
+            dishId: 'dish-meta-1',
+            restaurantExternalId: '888001',
+            name: 'Bún Bò Huế',
+            price: '65.000đ',
+            sourceMetadata: {
+              crawlBatch: 'sf-2026-11',
+              originalCategoryId: 42,
+              apiKey: 'super-secret-key',
+              authorization: 'Bearer eyJhbGciOiJIUzI1NiJ9',
+              sourceUrl:
+                'https://user:mySecretPass@partner.example/api?token=leak123&page=1',
+            },
+          },
+        ],
+      });
+
+      const { db, collections } = createMockDb();
+      const result = await runLocalFoodDatasetIngestionPipeline(db, {
+        rawContent: dataset,
+        source: 'shopeefood',
+        batchId: 'm107-meta-1',
+        mode: 'apply',
+      });
+
+      expect(result.dishes.inserted).toBe(1);
+      const dishDoc = collections.get(MENU_ITEMS_COLLECTION)!.docs[0];
+      const storedMeta = dishDoc.sourceMetadata as Record<string, unknown>;
+      expect(storedMeta).toBeDefined();
+      expect(storedMeta.crawlBatch).toBe('sf-2026-11');
+      expect(storedMeta.originalCategoryId).toBe(42);
+      expect(storedMeta.apiKey).toBeUndefined();
+      expect(storedMeta.authorization).toBeUndefined();
+      const serializedMeta = JSON.stringify(storedMeta);
+      expect(serializedMeta).not.toContain('super-secret-key');
+      expect(serializedMeta).not.toContain('mySecretPass');
+      expect(serializedMeta).not.toContain('leak123');
+      expect(serializedMeta).not.toContain('eyJhbGciOiJIUzI1NiJ9');
+    });
+
+    it('enforces local-only gastro_core_test DB target and --apply write guard', () => {
+      // Blocks Atlas SRV, remote hosts, and production/planning databases
+      expect(() =>
+        assertLocalIngestionTargetOnly(
+          'mongodb+srv://user:pass@cluster0.mongodb.net/gastro_core_test',
+          'gastro_core_test',
+        ),
+      ).toThrow(IngestionValidationError);
+      expect(() =>
+        assertLocalIngestionTargetOnly(
+          'mongodb://db.example.com:27017/gastro_core_test',
+          'gastro_core_test',
+        ),
+      ).toThrow(IngestionValidationError);
+      expect(() =>
+        assertLocalIngestionTargetOnly(
+          'mongodb://127.0.0.1:27017/gastro_core',
+          'gastro_core',
+        ),
+      ).toThrow(IngestionValidationError);
+      expect(() =>
+        assertLocalIngestionTargetOnly(
+          'mongodb://127.0.0.1:27017/gastro_planning_test',
+          'gastro_planning_test',
+        ),
+      ).toThrow(IngestionValidationError);
+      expect(
+        assertLocalIngestionTargetOnly(
+          'mongodb://gastro_core_svc:pass@mongo-test:27017/gastro_core_test?authSource=gastro_core_test',
+          'gastro_core_test',
+        ),
+      ).toEqual({ host: 'mongo-test', dbName: 'gastro_core_test' });
+
+      // CLI --apply requires GASTROWISE_ALLOW_LOCAL_INGESTION=true; --dry-run does not
+      expect(() =>
+        parseFoodDatasetCliArgs(['--file=sample.json', '--apply'], {}),
+      ).toThrow(IngestionValidationError);
+      expect(
+        parseFoodDatasetCliArgs(['--file=sample.json', '--dry-run'], {}).mode,
+      ).toBe('dry-run');
+      expect(
+        parseFoodDatasetCliArgs(['--file=sample.json', '--apply'], {
+          GASTROWISE_ALLOW_LOCAL_INGESTION: 'true',
+        }).mode,
+      ).toBe('apply');
     });
   });
 });
