@@ -133,11 +133,12 @@ RestaurantSchema.index({ status: 1, diemTrungBinh: -1 });
 // [TASK-PERF-01] Text index for full-text search across restaurant name and tags
 RestaurantSchema.index({ tenQuan: 'text', tags: 'text' });
 
-// [M10.2.1] Targeted ingestion deduplication & safe batch rollback indexes
+// [M10.2.1] Targeted ingestion deduplication & safe batch rollback indexes.
+// Note: Unique enforcement (`uniq_external_source_id_partial`) is rolled out explicitly
+// via `rolloutIngestionIndexes()` AFTER `preflightExternalSourceUniqueIndex()` confirms 0 duplicates.
 RestaurantSchema.index(
   { externalSource: 1, externalSourceId: 1 },
   {
-    unique: true,
     partialFilterExpression: {
       externalSource: { $type: 'string' },
       externalSourceId: { $type: 'string' },

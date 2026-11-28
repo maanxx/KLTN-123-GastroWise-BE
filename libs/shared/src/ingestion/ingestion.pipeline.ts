@@ -39,6 +39,7 @@ export interface RunIngestionOptions {
   targetDb?: string;
   targetUriRedacted?: string;
   now?: Date;
+  maxDedupResultsPerChunkFactor?: number;
 }
 
 export type RecoveryAction = 'auto' | 'complete' | 'compensate';
@@ -457,7 +458,13 @@ const MAX_RESULTS_PER_CHUNK_FACTOR = 4;
 async function fetchTargetedMatchingRestaurants(
   restaurantsCol: Collection<RestaurantDocRecord>,
   candidates: readonly NormalizedRestaurantCandidate[],
+  resultsPerChunkFactor: number = MAX_RESULTS_PER_CHUNK_FACTOR,
 ): Promise<RestaurantDocRecord[]> {
+  if (!Number.isInteger(resultsPerChunkFactor) || resultsPerChunkFactor < 1) {
+    throw new IngestionValidationError(
+      `Invalid maxDedupResultsPerChunkFactor=${String(resultsPerChunkFactor)}: expected integer >= 1.`,
+    );
+  }
   if (candidates.length === 0) {
     return [];
   }
@@ -529,7 +536,7 @@ async function fetchTargetedMatchingRestaurants(
       continue;
     }
 
-    const chunkLimit = chunk.length * MAX_RESULTS_PER_CHUNK_FACTOR;
+    const chunkLimit = chunk.length * resultsPerChunkFactor;
     const cursor = restaurantsCol.find(
       { $or: orClauses },
       { projection: TARGETED_LOOKUP_PROJECTION },
@@ -542,10 +549,15 @@ async function fetchTargetedMatchingRestaurants(
                 toArray: () => Promise<RestaurantDocRecord[]>;
               };
             }
-          ).limit(chunkLimit)
+          ).limit(chunkLimit + 1)
         : cursor;
 
     const docs = await boundedCursor.toArray();
+    if (docs.length > chunkLimit) {
+      throw new IngestionValidationError(
+        `Deduplication lookup overflow for chunk starting at index ${i} (${chunk.length} candidates): fetched ${docs.length} docs exceeding chunk limit ${chunkLimit}. Refusing to proceed with an incomplete deduplication result set.`,
+      );
+    }
 
     for (const doc of docs) {
       byDocId.set(String(doc._id), doc);
@@ -566,9 +578,9 @@ export async function runRestaurantIngestionPipeline(
   options: RunIngestionOptions,
 ): Promise<IngestionBatchSummary> {
   const mode: IngestionMode = options.mode || 'dry-run';
-  if (mode === 'rollback' || mode === 'recover') {
+  if (mode !== 'dry-run' && mode !== 'apply') {
     throw new IngestionValidationError(
-      'Use rollbackIngestionBatch() or recoverIngestionBatch() for rollback/recovery operations.',
+      `Unsupported mode "${mode}" for runRestaurantIngestionPipeline(): use rollbackIngestionBatch(), recoverIngestionBatch(), preflightExternalSourceUniqueIndex(), or rolloutIngestionIndexes().`,
     );
   }
 
@@ -713,6 +725,7 @@ export async function runRestaurantIngestionPipeline(
   const existingDocs = await fetchTargetedMatchingRestaurants(
     restaurantsCol,
     deduplicatedCandidates,
+    options.maxDedupResultsPerChunkFactor,
   );
 
   const existingByTier1 = new Map<string, RestaurantDocRecord>();

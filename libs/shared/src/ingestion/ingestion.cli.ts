@@ -31,6 +31,8 @@ export function parseIngestionCliArgs(
   let reportOutPath: string | undefined;
   let sawApplyFlag = false;
   let sawDryRunFlag = false;
+  let sawPreflightIndexes = false;
+  let sawEnsureIndexes = false;
 
   for (const arg of argv) {
     if (
@@ -74,6 +76,10 @@ export function parseIngestionCliArgs(
         );
       }
       recoverAction = val;
+    } else if (arg === '--preflight-indexes') {
+      sawPreflightIndexes = true;
+    } else if (arg === '--ensure-indexes') {
+      sawEnsureIndexes = true;
     } else if (arg.startsWith('--report-out=')) {
       reportOutPath = arg.slice('--report-out='.length).trim();
     } else {
@@ -89,10 +95,38 @@ export function parseIngestionCliArgs(
     );
   }
 
-  if (rollbackBatchId !== undefined && recoverBatchId !== undefined) {
+  const specialModeCount =
+    Number(rollbackBatchId !== undefined) +
+    Number(recoverBatchId !== undefined) +
+    Number(sawPreflightIndexes) +
+    Number(sawEnsureIndexes);
+  if (specialModeCount > 1) {
     throw new IngestionValidationError(
-      'Cannot specify both --rollback and --recover in the same invocation.',
+      'Cannot combine --rollback, --recover, --preflight-indexes, or --ensure-indexes in the same invocation.',
     );
+  }
+
+  if (sawPreflightIndexes) {
+    if (sawApplyFlag) {
+      throw new IngestionValidationError(
+        '--preflight-indexes is read-only and cannot be combined with --apply. Use --ensure-indexes --apply to create indexes after a clean preflight.',
+      );
+    }
+    return {
+      mode: 'preflight-indexes',
+      dryRun: true,
+      format,
+      reportOutPath,
+    };
+  }
+
+  if (sawEnsureIndexes) {
+    return {
+      mode: 'ensure-indexes',
+      dryRun: !sawApplyFlag,
+      format,
+      reportOutPath,
+    };
   }
 
   if (rollbackBatchId !== undefined) {

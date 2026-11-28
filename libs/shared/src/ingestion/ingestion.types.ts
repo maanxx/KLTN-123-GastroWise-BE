@@ -8,7 +8,13 @@ export const INGESTION_BATCHES_COLLECTION = 'ingestion_batches' as const;
 export const RESTAURANTS_COLLECTION = 'restaurants' as const;
 export const APPROVED_INGESTION_DB_NAME = 'gastro_core_test' as const;
 
-export type IngestionMode = 'dry-run' | 'apply' | 'rollback' | 'recover';
+export type IngestionMode =
+  | 'dry-run'
+  | 'apply'
+  | 'rollback'
+  | 'recover'
+  | 'preflight-indexes'
+  | 'ensure-indexes';
 
 export type IngestionBatchStatus =
   | 'pending'
@@ -203,6 +209,31 @@ export interface IngestionRecoveryResult {
   restoredUpdatedCount: number;
   conflicts: IngestionRollbackConflict[];
   standaloneLimitationNote: string;
+}
+
+export interface ExternalSourceDuplicateGroup {
+  externalSource: string;
+  externalSourceId: string;
+  count: number;
+  docIds: string[];
+  names: string[];
+}
+
+export interface IngestionIndexPreflightReport {
+  collection: string;
+  indexName: string;
+  indexSpec: { externalSource: 1; externalSourceId: 1 };
+  partialFilterExpression: {
+    externalSource: { $type: 'string' };
+    externalSourceId: { $type: 'string' };
+  };
+  scannedCount: number;
+  duplicateGroupCount: number;
+  duplicates: ExternalSourceDuplicateGroup[];
+  safeToCreateUniqueIndex: boolean;
+  indexCreated: boolean;
+  dryRun: boolean;
+  remediationSteps: string[];
 }
 
 export class IngestionValidationError extends Error {

@@ -11,13 +11,14 @@
 
 | File | Summary of Hardening Changes |
 |---|---|
-| `libs/shared/src/ingestion/ingestion.types.ts` | Added `APPROVED_INGESTION_DB_NAME`, `'recover'` mode, 5-state batch lifecycle (`pending`, `applied`, `failed`, `rolled_back`, `recovery_required`), `matched_count` metric, `postIngestionDigest` & protected-field snapshots, `IngestionRollbackConflict`, and `IngestionRecoveryResult`. |
+| `libs/shared/src/ingestion/ingestion.types.ts` | Added `APPROVED_INGESTION_DB_NAME`, `'recover'`, `'preflight-indexes'`, and `'ensure-indexes'` modes, 5-state batch lifecycle (`pending`, `applied`, `failed`, `rolled_back`, `recovery_required`), `matched_count` metric, `postIngestionDigest` & protected-field snapshots, `IngestionRollbackConflict`, `IngestionRecoveryResult`, `ExternalSourceDuplicateGroup`, and `IngestionIndexPreflightReport`. |
 | `libs/shared/src/ingestion/ingestion.connection.ts` | Replaced basic remote check with strict structural `mongodb://` parser, explicit host allowlist, mandatory `/gastro_core_test` URI path validation, `CORE_DB_NAME` equality check, forbidden DB blocklist, and `authSource` validation. |
 | `libs/shared/src/ingestion/ingestion.normalizer.ts` | Restricted `foodyReviewsCount` fallback so native `reviewsCount` is never mapped unless explicit provenance (`_reviewsCountIsFoodySource === true` or `crawlerSource === 'crawl_shopeefood'`) is provided. |
-| `libs/shared/src/ingestion/ingestion.pipeline.ts` | Replaced unbounded `find({}).toArray()` with chunked targeted `$or` queries (`fetchTargetedMatchingRestaurants`); fixed `updated_count` (`modifiedCount`) vs `matched_count`; enforced `batchId` uniqueness; added write-ahead `'pending'` ledger persistence + `'failed'`/`'recovery_required'` handling; added `recoverIngestionBatch()`; upgraded `rollbackIngestionBatch()` to compare-and-set verification with structured conflicts. |
-| `libs/shared/src/ingestion/ingestion.cli.ts` & `scripts/ingestion/ingest.ts` | Added `--recover=<batchId>` and `--recover-action=auto\|complete\|compensate` (dry-run by default). |
-| `apps/core-service/src/restaurants/schemas/restaurant.schema.ts` | Declared ingestion provenance/revision/digest/normalized-key fields and added indexes `{ externalSource: 1, externalSourceId: 1 }` (unique partial), `{ slug: 1 }` (sparse), `{ urlGoc: 1 }` (sparse), `{ normalizedNameAddressKey: 1 }` (sparse), `{ tenQuan: 1, diaChi: 1 }`, and `{ ingestionBatchId: 1 }` (sparse). |
-| `libs/shared/src/ingestion/ingestion.pipeline.spec.ts` | Added regression & fault-injection suites covering DB guard rejections, `foodyReviewsCount` provenance, indexed dedup filters with result limits, `matched_count` vs `updated_count`, `deleteOne` protected-field CAS race checks, tracked catalog field CAS race checks, missing docs, LIFO overlap ordering, repeated rollback, and crash recovery. |
+| `libs/shared/src/ingestion/ingestion.pipeline.ts` | Replaced unbounded `find({}).toArray()` with chunked targeted `$or` queries (`fetchTargetedMatchingRestaurants`) using a `limit(chunkLimit + 1)` overflow sentinel (aborting with `IngestionValidationError` before any writes if exceeded); fixed `updated_count` (`modifiedCount`) vs `matched_count`; enforced `batchId` uniqueness; added write-ahead `'pending'` ledger persistence + `'failed'`/`'recovery_required'` handling; added `recoverIngestionBatch()`; upgraded `rollbackIngestionBatch()` to compare-and-set verification with structured conflicts. |
+| `libs/shared/src/ingestion/ingestion.index-preflight.ts` | Added non-destructive `preflightExternalSourceUniqueIndex(db)` aggregation audit and fail-closed `rolloutIngestionIndexes(db, { dryRun })` that refuses to create `uniq_external_source_id_partial` when duplicate `(externalSource, externalSourceId)` groups exist. |
+| `libs/shared/src/ingestion/ingestion.cli.ts` & `scripts/ingestion/ingest.ts` | Added `--recover=<batchId>`, `--recover-action=auto\|complete\|compensate`, `--preflight-indexes` (read-only), and `--ensure-indexes` (dry-run by default; requires `--apply` after clean preflight). |
+| `apps/core-service/src/restaurants/schemas/restaurant.schema.ts` | Declared ingestion provenance/revision/digest/normalized-key fields and aligned dedup/rollback lookup indexes while removing unsafe boot-time `unique: true` on `(externalSource, externalSourceId)` so partial unique index creation happens only via controlled post-preflight rollout. |
+| `libs/shared/src/ingestion/ingestion.pipeline.spec.ts` | Added regression & fault-injection suites covering DB guard rejections, `foodyReviewsCount` provenance, indexed dedup filters, `limit + 1` cursor overflow detection (boundary pass + fail-before-writes), `matched_count` vs `updated_count`, `deleteOne` & `updateOne` CAS race checks, missing docs, LIFO overlap ordering, crash recovery, index preflight duplicate reporting, dry-run/apply rollout blocking, CLI index flags, and schema non-auto-unique assertion. |
 | `docs/progress/samples/m10_2_sample_validation_report.json` | Updated dry-run output against `gastro_core_test` (`matched_count: 0` included). |
 | `docs/progress/M10_2_INGESTION_IMPLEMENTATION_REPORT.md` | Updated pipeline flow, rollback conflict protection, and recovery CLI instructions. |
 
@@ -30,9 +31,10 @@
 | 1 | `ingestion.connection.ts` relied only on `isRemoteOrAtlasMongoUri()` without checking URI DB path or matching `CORE_DB_NAME`. | Could accept `mongodb://localhost:27017/gastro_core`, unapproved non-dotted hostnames (`prod-mongo`), or conflicting `CORE_DB_NAME` vs URI DB path. | Enforced explicit host allowlist (`localhost`, `127.0.0.1`, `::1`, `[::1]`, `mongo-test`, `gastrowise-mongo-test`), mandatory `/gastro_core_test` URI path matching `CORE_DB_NAME`, and explicit rejection of `gastro_core`, `gastrowise`, multi-host clusters, `mongodb+srv://`, and mismatched configs. |
 | 2 | `rollbackIngestionBatch()` matched only `{ _id: backup.docId }` without checking post-ingestion state. | Could overwrite changes made after ingestion (manual edits, user interactions, or overlapping batches). | Recorded deterministic `postIngestionDigest` + `expectedPostUpdatedAt` + protected field state; verified pre-rollback digest & atomic CAS filter; returns structured `IngestionRollbackConflict` instead of overwriting/deleting changed docs. |
 | 3 | `runRestaurantIngestionPipeline()` wrote to `restaurants` before creating batch ledger and silently upserted `ingestion_batches` (`upsert: true`). | Crashes after `bulkWrite` left un-tracked writes; reusing an existing `batchId` could overwrite prior rollback snapshots. | Rejects existing `batchId` reuse upfront; writes `status: 'pending'` ledger BEFORE mutating `restaurants`; transitions failures cleanly to `'failed'` or `'recovery_required'`; provides `recoverIngestionBatch()`. |
-| 4 | Deduplication called `restaurantsCol.find({}).toArray()` (unbounded scan), and M10.2.1 initial targeted lookup used an unindexed `$regex` on `tenQuan` alone and `externalSourceId: { $in }` missing the compound index prefix. | Full-collection scan or unindexed broad `tenQuan` scans retrieving unrelated same-name restaurants across the city. | Replaced with index-aligned predicates (`(externalSource, externalSourceId)` compound pairs, `{ slug: { $in } }`, `{ urlGoc: { $in } }`, `{ normalizedNameAddressKey: { $in } }`, and compound `{ tenQuan, diaChi }` pairs) plus explicit per-chunk `.limit(chunk.length * 4)` cursor capping and declared schema indexes. *(Note: chunking input alone does not guarantee bounded cardinality if legacy collections contain duplicate un-indexed rows exceeding cap; migration dedup cleans legacy anomalies.)* |
+| 4 | Deduplication called `restaurantsCol.find({}).toArray()` (unbounded scan), initial targeted lookup used an unindexed `$regex` on `tenQuan` alone and `externalSourceId: { $in }`, and bounded `.limit(chunkLimit)` risked silent truncation on crowded legacy datasets. | Full-collection scan, broad city-wide `tenQuan` hits, or silently truncated dedup result sets causing missed matches and duplicate inserts. | Replaced with index-aligned predicates (`(externalSource, externalSourceId)` compound pairs, `{ slug: { $in } }`, `{ urlGoc: { $in } }`, `{ normalizedNameAddressKey: { $in } }`, and compound `{ tenQuan, diaChi }` pairs) plus `.limit(chunkLimit + 1)` overflow detection that aborts with `IngestionValidationError` before any staging, ledger, or restaurant writes occur. |
 | 5 | `metrics.updated_count` read `bulkResult.matchedCount`. | Reported unchanged matched documents as modified updates. | Added `metrics.matched_count = bulkResult.matchedCount` and set `metrics.updated_count = bulkResult.modifiedCount`. |
 | 6 | `ingestion.normalizer.ts` unconditionally fell back from `TotalReview` to `payload.reviewsCount`. | Could misclassify native GastroWise `reviewsCount` as `foodyReviewsCount`. | Restricted `payload.reviewsCount` fallback strictly to explicit Foody provenance markers (`_reviewsCountIsFoodySource === true` or `crawlerSource === 'crawl_shopeefood'`). |
+| 7 | `RestaurantSchema` declared `unique: true` directly on `{ externalSource: 1, externalSourceId: 1 }`. | Mongoose runtime `autoIndex` on startup would fail (E11000) if legacy duplicate `(externalSource, externalSourceId)` pairs existed. | Removed boot-time `unique: true` from `RestaurantSchema` while keeping non-unique lookup index metadata; introduced non-destructive `preflightExternalSourceUniqueIndex()` and fail-closed `rolloutIngestionIndexes()` to inspect collisions and remediate manually before creating `uniq_external_source_id_partial`. |
 
 ---
 
@@ -72,23 +74,34 @@
 
 ---
 
-## 6. Verification & Test Execution Results
+## 6. Deduplication Completeness & Safe Index Rollout
 
-All checks below ran cleanly after final code edits:
+- **Dedup Overflow Sentinel (`limit + 1`):** `fetchTargetedMatchingRestaurants()` computes `chunkLimit = chunk.length * resultsPerChunkFactor` (default factor `4`, customizable via `options.maxDedupResultsPerChunkFactor`), queries `.limit(chunkLimit + 1)`, and throws `IngestionValidationError` whenever `docs.length > chunkLimit`. Because dedup executes prior to raw-staging and `'pending'` ledger persistence, an overflow aborts cleanly with zero writes to `restaurants`, `restaurants_raw_staging`, or `ingestion_batches`.
+- **Safe Partial Unique Index Rollout (`uniq_external_source_id_partial`):**
+  1. **No unsafe boot-time `unique: true`:** `RestaurantSchema` keeps `{ externalSource: 1, externalSourceId: 1 }` as a non-unique lookup index so Core Service startup cannot crash if legacy collections still contain duplicate source IDs.
+  2. **Non-destructive Preflight (`--preflight-indexes`):** `preflightExternalSourceUniqueIndex(db)` aggregates `{ externalSource: { $type: 'string' }, externalSourceId: { $type: 'string' } }` groups with `count > 1`, reporting affected `docIds`, `names`, and step-by-step remediation instructions without deleting or merging any documents.
+  3. **Controlled Index Creation (`--ensure-indexes` / `--ensure-indexes --apply`):** `rolloutIngestionIndexes(db, { dryRun })` refuses index creation with `IngestionValidationError` citing offending `(externalSource, externalSourceId)` pairs and `docIds` if `duplicateGroupCount > 0`. Only when `duplicateGroupCount === 0` and `--apply` is passed does it create `uniq_external_source_id_partial` (`unique: true`, `partialFilterExpression: { externalSource: { $type: 'string' }, externalSourceId: { $type: 'string' } }`) alongside supporting dedup/rollback indexes.
+
+---
+
+## 7. Verification & Test Execution Results
+
+All local checks below ran cleanly after final code edits:
 
 | Command | Exit Code | Observed Output Summary |
 |---|---:|---|
 | `npm run build:all` | `0` | Built `core-service` and `planning-service` cleanly. |
 | `npx tsc -p tsconfig.build.json --noEmit` | `0` | Strict TypeScript typecheck passed (`0` errors). |
 | `npx eslint "libs/shared/src/ingestion/*.ts" scripts/ingestion/ingest.ts apps/core-service/src/restaurants/schemas/restaurant.schema.ts` | `0` | `0` errors, `0` warnings across all hardened/added files. |
-| `npm run test:microservices` | `0` | **33 passed / 33 suites, 217 passed / 217 tests, 0 failures, 0 skipped.** |
+| `npm run test:microservices` | `0` | **33 passed / 33 suites, 224 passed / 224 tests, 0 failures, 0 skipped.** |
 | `git diff --check` | `0` | Zero whitespace errors or conflict markers. |
-| Isolated Docker CLI `--dry-run` (`m10_2_1_sample_dryrun` on `gastro_core_test`) | `0` | `rawStagedCount=0`, `plannedInserts=4`, `matched_count=0`, `updated_count=0`; zero DB writes (`[m10_2_sample_validation_report.json](../samples/m10_2_sample_validation_report.json)`). |
-| Isolated Docker CLI negative guard test (`MONGODB_URI_CORE=.../gastro_core` + `CORE_DB_NAME=gastro_core_test`) | `0` | Refused immediately with `IngestionValidationError` (`FORBIDDEN_URI_GUARD_BLOCKED_OK`). |
+| Prior isolated Docker CLI `--dry-run` (`m10_2_1_sample_dryrun` on `gastro_core_test`) | `0` | Earlier M10.2.1 run on `gastro_core_test`: `rawStagedCount=0`, `plannedInserts=4`, `matched_count=0`, `updated_count=0`; zero DB writes (`[m10_2_sample_validation_report.json](../samples/m10_2_sample_validation_report.json)`). |
+
+*(Remote GitHub Actions workflow execution for PR #15 happens upon pushing to `origin/fix/m10-2-1-ingestion-safety-hardening` and was not directly observed locally.)*
 
 ---
 
-## 7. Remaining Limitations
+## 8. Remaining Limitations
 
 - Replica-set MongoDB transactions remain unused on standalone Docker `mongo-test`; atomicity across `restaurants` + `ingestion_batches` relies on write-ahead `'pending'` ledgers + recovery (`--recover`).
 - Live Atlas ingestion remains intentionally blocked until staging audit `BLK-11`, `V005` backfill, and replica-set environment review complete.

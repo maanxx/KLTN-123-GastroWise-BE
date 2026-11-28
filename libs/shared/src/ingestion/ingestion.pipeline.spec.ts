@@ -1,5 +1,6 @@
 import { ObjectId } from 'mongodb';
 import type { Db } from 'mongodb';
+import { RestaurantSchema } from '../../../../apps/core-service/src/restaurants/schemas/restaurant.schema';
 import {
   assertLocalIngestionTargetOnly,
   buildRawStagingDocuments,
@@ -9,13 +10,16 @@ import {
   IngestionValidationError,
   parseIngestionCliArgs,
   parseRawIngestionInput,
+  preflightExternalSourceUniqueIndex,
   RAW_STAGING_COLLECTION,
   recoverIngestionBatch,
   resolveIngestionDatabaseConfig,
   RESTAURANTS_COLLECTION,
   rollbackIngestionBatch,
+  rolloutIngestionIndexes,
   runRestaurantIngestionPipeline,
   STANDALONE_MONGODB_LIMITATION_NOTE,
+  UNIQUE_EXTERNAL_SOURCE_INDEX_NAME,
   validateAndNormalizeRestaurantRecord,
 } from './index';
 
@@ -95,6 +99,14 @@ function matchesFilter(
         if (Boolean(condObj.$exists) !== exists) return false;
         continue;
       }
+      if ('$type' in condObj && condObj.$type === 'string') {
+        if (typeof val !== 'string') return false;
+        continue;
+      }
+      if ('$gt' in condObj && typeof condObj.$gt === 'number') {
+        if (typeof val !== 'number' || val <= condObj.$gt) return false;
+        continue;
+      }
       if ('$regex' in condObj && typeof condObj.$regex === 'string') {
         const opts =
           typeof condObj.$options === 'string' ? condObj.$options : '';
@@ -151,6 +163,10 @@ class InMemoryMongoCollection {
   public readonly findLimits: Array<number | undefined> = [];
   public readonly deleteOneFilters: Array<Record<string, unknown>> = [];
   public readonly updateOneFilters: Array<Record<string, unknown>> = [];
+  public readonly createdIndexes: Array<{
+    spec: Record<string, unknown>;
+    options: Record<string, unknown>;
+  }> = [];
   public beforeInsertOne?: (doc: Record<string, unknown>) => void;
   public beforeUpdateOne?: (
     filter: Record<string, unknown>,
@@ -182,6 +198,84 @@ class InMemoryMongoCollection {
   findOne(filter: Record<string, unknown> = {}): Promise<StoredDoc | null> {
     const found = this.docs.find((d) => matchesFilter(d, filter));
     return Promise.resolve(found ? { ...found } : null);
+  }
+
+  countDocuments(filter: Record<string, unknown> = {}): Promise<number> {
+    return Promise.resolve(
+      this.docs.filter((d) => matchesFilter(d, filter)).length,
+    );
+  }
+
+  createIndex(
+    spec: Record<string, unknown>,
+    options: Record<string, unknown> = {},
+  ): Promise<string> {
+    this.createdIndexes.push({ spec: { ...spec }, options: { ...options } });
+    return Promise.resolve(
+      typeof options.name === 'string'
+        ? options.name
+        : Object.keys(spec).join('_'),
+    );
+  }
+
+  aggregate(pipeline: Array<Record<string, unknown>>) {
+    let rows: Array<Record<string, unknown>> = this.docs.map((d) => ({
+      ...d,
+    }));
+
+    for (const stage of pipeline) {
+      if ('$match' in stage && stage.$match) {
+        const matchFilter = stage.$match as Record<string, unknown>;
+        rows = rows.filter((r) => matchesFilter(r as StoredDoc, matchFilter));
+      } else if ('$group' in stage && stage.$group) {
+        const groupSpec = stage.$group as Record<string, unknown>;
+        const idSpec = groupSpec._id as Record<string, string>;
+        const grouped = new Map<
+          string,
+          {
+            _id: Record<string, unknown>;
+            count: number;
+            docIds: unknown[];
+            names: unknown[];
+          }
+        >();
+
+        for (const row of rows) {
+          const groupId: Record<string, unknown> = {};
+          for (const [k, expr] of Object.entries(idSpec)) {
+            const fieldName = expr.startsWith('$') ? expr.slice(1) : expr;
+            groupId[k] = row[fieldName];
+          }
+          const mapKey = JSON.stringify(groupId);
+          const bucket = grouped.get(mapKey) ?? {
+            _id: groupId,
+            count: 0,
+            docIds: [],
+            names: [],
+          };
+          bucket.count += 1;
+          bucket.docIds.push(row._id);
+          bucket.names.push(row.tenQuan);
+          grouped.set(mapKey, bucket);
+        }
+
+        rows = Array.from(grouped.values());
+      } else if ('$sort' in stage && stage.$sort) {
+        const sortSpec = stage.$sort as Record<string, number>;
+        const [[sortKey, sortDir]] = Object.entries(sortSpec);
+        rows.sort((a, b) => {
+          const av = typeof a[sortKey] === 'number' ? a[sortKey] : 0;
+          const bv = typeof b[sortKey] === 'number' ? b[sortKey] : 0;
+          return sortDir < 0 ? bv - av : av - bv;
+        });
+      } else if ('$limit' in stage && typeof stage.$limit === 'number') {
+        rows = rows.slice(0, stage.$limit);
+      }
+    }
+
+    return {
+      toArray: () => Promise.resolve(rows),
+    };
   }
 
   insertOne(doc: Record<string, unknown>) {
@@ -1185,8 +1279,249 @@ describe('M10.2.1 Ingestion Safety Hardening & Recovery', () => {
       expect(clauses.some((c) => 'tenQuan' in c && !('diaChi' in c))).toBe(
         false,
       );
-      // Bounded cursor limit enforced per chunk
-      expect(collections[RESTAURANTS_COLLECTION].findLimits[0]).toBe(4);
+      // Bounded cursor limit+1 overflow sentinel enforced per chunk
+      expect(collections[RESTAURANTS_COLLECTION].findLimits[0]).toBe(5);
+    });
+  });
+
+  describe('Final review fixes: dedup limit+1 overflow & safe index rollout', () => {
+    const singleCandidateJson = JSON.stringify([
+      {
+        RestaurantID: '9500',
+        Name: 'Bánh Mì Huynh Hoa',
+        Address: '26 Lê Thị Riêng, Q1',
+        ResUrlRewrite: 'banh-mi-huynh-hoa',
+        MicrositeUrl: '/ho-chi-minh/banh-mi-huynh-hoa',
+        Latitude: 10.7712,
+        Longtitude: 106.6915,
+        Category: 'Bánh mì',
+        PriceRange: '50k - 70k',
+        AvgRating: 8.8,
+      },
+    ]);
+
+    it('requests limit+1 and passes cleanly when matches equal chunkLimit without overflow', async () => {
+      const existingId = new ObjectId();
+      const { db, collections } = createInMemoryDb([
+        {
+          _id: existingId,
+          tenQuan: 'Bánh Mì Huynh Hoa',
+          diaChi: '26 Lê Thị Riêng, Q1',
+          slug: 'banh-mi-huynh-hoa',
+          urlGoc: 'https://www.foody.vn/ho-chi-minh/banh-mi-huynh-hoa',
+          externalSource: EXTERNAL_SOURCE_FOODY,
+          externalSourceId: '9500',
+          diemDanhGia: 4.4,
+          sourceRatingRaw: 8.8,
+          sourceRatingScale: 10,
+          createdAt: new Date('2026-01-01T00:00:00Z'),
+          updatedAt: new Date('2026-01-01T00:00:00Z'),
+        },
+      ]);
+
+      const summary = await runRestaurantIngestionPipeline(db, {
+        rawContent: singleCandidateJson,
+        format: 'json',
+        mode: 'apply',
+        batchId: 'batch-dedup-exact-boundary',
+        maxDedupResultsPerChunkFactor: 1,
+      });
+
+      expect(collections[RESTAURANTS_COLLECTION].findLimits[0]).toBe(2);
+      expect(summary.metrics.matched_count).toBe(1);
+      expect(summary.metrics.updated_count).toBe(1);
+      expect(summary.metrics.inserted_count).toBe(0);
+    });
+
+    it('detects dedup cursor limit overflow (> chunkLimit) and aborts before any writes', async () => {
+      const legacyId1 = new ObjectId();
+      const legacyId2 = new ObjectId();
+      const { db, collections } = createInMemoryDb([
+        {
+          _id: legacyId1,
+          tenQuan: 'Bánh Mì Huynh Hoa Legacy A',
+          diaChi: '26 Lê Thị Riêng, Q1',
+          slug: 'banh-mi-huynh-hoa',
+          createdAt: new Date('2025-01-01T00:00:00Z'),
+          updatedAt: new Date('2025-01-01T00:00:00Z'),
+        },
+        {
+          _id: legacyId2,
+          tenQuan: 'Bánh Mì Huynh Hoa Legacy B',
+          diaChi: '26 Lê Thị Riêng, Q1',
+          urlGoc: 'https://www.foody.vn/ho-chi-minh/banh-mi-huynh-hoa',
+          createdAt: new Date('2025-01-02T00:00:00Z'),
+          updatedAt: new Date('2025-01-02T00:00:00Z'),
+        },
+      ]);
+
+      await expect(
+        runRestaurantIngestionPipeline(db, {
+          rawContent: singleCandidateJson,
+          format: 'json',
+          mode: 'apply',
+          batchId: 'batch-dedup-overflow',
+          maxDedupResultsPerChunkFactor: 1,
+        }),
+      ).rejects.toThrow(IngestionValidationError);
+
+      // Requested limit+1 = 2, overflow detected (> 1) before any writes occur
+      expect(collections[RESTAURANTS_COLLECTION].findLimits[0]).toBe(2);
+      expect(collections[RESTAURANTS_COLLECTION].docs).toHaveLength(2);
+      expect(collections[RAW_STAGING_COLLECTION].docs).toHaveLength(0);
+      expect(collections[INGESTION_BATCHES_COLLECTION].docs).toHaveLength(0);
+    });
+
+    it('rejects invalid maxDedupResultsPerChunkFactor values', async () => {
+      const { db } = createInMemoryDb([]);
+      await expect(
+        runRestaurantIngestionPipeline(db, {
+          rawContent: singleCandidateJson,
+          format: 'json',
+          mode: 'dry-run',
+          batchId: 'batch-invalid-factor',
+          maxDedupResultsPerChunkFactor: 0,
+        }),
+      ).rejects.toThrow(IngestionValidationError);
+    });
+
+    it('preflights duplicate (externalSource, externalSourceId) pairs non-destructively and blocks unique index rollout', async () => {
+      const dupId1 = new ObjectId();
+      const dupId2 = new ObjectId();
+      const { db, collections } = createInMemoryDb([
+        {
+          _id: dupId1,
+          tenQuan: 'Quán Duplicate A',
+          externalSource: EXTERNAL_SOURCE_FOODY,
+          externalSourceId: '8888',
+        },
+        {
+          _id: dupId2,
+          tenQuan: 'Quán Duplicate B',
+          externalSource: EXTERNAL_SOURCE_FOODY,
+          externalSourceId: '8888',
+        },
+        {
+          _id: new ObjectId(),
+          tenQuan: 'Quán Clean',
+          externalSource: EXTERNAL_SOURCE_FOODY,
+          externalSourceId: '8889',
+        },
+      ]);
+
+      const report = await preflightExternalSourceUniqueIndex(db);
+      expect(report.scannedCount).toBe(3);
+      expect(report.duplicateGroupCount).toBe(1);
+      expect(report.safeToCreateUniqueIndex).toBe(false);
+      expect(report.indexCreated).toBe(false);
+      expect(report.duplicates[0]).toMatchObject({
+        externalSource: EXTERNAL_SOURCE_FOODY,
+        externalSourceId: '8888',
+        count: 2,
+      });
+      expect(report.duplicates[0].docIds).toEqual(
+        expect.arrayContaining([dupId1.toString(), dupId2.toString()]),
+      );
+      expect(report.remediationSteps.length).toBeGreaterThan(0);
+
+      // Both dryRun and apply rollout must refuse to create unique index or alter data
+      await expect(
+        rolloutIngestionIndexes(db, { dryRun: true }),
+      ).rejects.toThrow(IngestionValidationError);
+      await expect(
+        rolloutIngestionIndexes(db, { dryRun: false }),
+      ).rejects.toThrow(IngestionValidationError);
+
+      expect(collections[RESTAURANTS_COLLECTION].docs).toHaveLength(3);
+      expect(collections[RESTAURANTS_COLLECTION].createdIndexes).toHaveLength(
+        0,
+      );
+    });
+
+    it('rolls out partial unique index cleanly only after zero duplicates are verified', async () => {
+      const { db, collections } = createInMemoryDb([
+        {
+          _id: new ObjectId(),
+          tenQuan: 'Quán Clean A',
+          externalSource: EXTERNAL_SOURCE_FOODY,
+          externalSourceId: '9901',
+        },
+        {
+          _id: new ObjectId(),
+          tenQuan: 'Quán Clean B',
+          externalSource: EXTERNAL_SOURCE_FOODY,
+          externalSourceId: '9902',
+        },
+      ]);
+
+      const dryPreview = await rolloutIngestionIndexes(db, { dryRun: true });
+      expect(dryPreview.safeToCreateUniqueIndex).toBe(true);
+      expect(dryPreview.indexCreated).toBe(false);
+      expect(dryPreview.dryRun).toBe(true);
+      expect(collections[RESTAURANTS_COLLECTION].createdIndexes).toHaveLength(
+        0,
+      );
+
+      const applied = await rolloutIngestionIndexes(db, { dryRun: false });
+      expect(applied.safeToCreateUniqueIndex).toBe(true);
+      expect(applied.indexCreated).toBe(true);
+      expect(applied.dryRun).toBe(false);
+
+      const uniqueIdxCall =
+        collections[RESTAURANTS_COLLECTION].createdIndexes[0];
+      expect(uniqueIdxCall.spec).toEqual({
+        externalSource: 1,
+        externalSourceId: 1,
+      });
+      expect(uniqueIdxCall.options).toEqual({
+        name: UNIQUE_EXTERNAL_SOURCE_INDEX_NAME,
+        unique: true,
+        partialFilterExpression: {
+          externalSource: { $type: 'string' },
+          externalSourceId: { $type: 'string' },
+        },
+      });
+    });
+
+    it('validates --preflight-indexes and --ensure-indexes CLI flags safely', () => {
+      expect(parseIngestionCliArgs(['--preflight-indexes'])).toEqual({
+        mode: 'preflight-indexes',
+        dryRun: true,
+        format: 'auto',
+        reportOutPath: undefined,
+      });
+
+      expect(() =>
+        parseIngestionCliArgs(['--preflight-indexes', '--apply']),
+      ).toThrow(IngestionValidationError);
+
+      expect(parseIngestionCliArgs(['--ensure-indexes'])).toEqual({
+        mode: 'ensure-indexes',
+        dryRun: true,
+        format: 'auto',
+        reportOutPath: undefined,
+      });
+
+      expect(parseIngestionCliArgs(['--ensure-indexes', '--apply'])).toEqual({
+        mode: 'ensure-indexes',
+        dryRun: false,
+        format: 'auto',
+        reportOutPath: undefined,
+      });
+
+      expect(() =>
+        parseIngestionCliArgs(['--preflight-indexes', '--ensure-indexes']),
+      ).toThrow(IngestionValidationError);
+    });
+
+    it('does not attach boot-time unique:true on RestaurantSchema (externalSource, externalSourceId) index', () => {
+      const schemaIndexes = RestaurantSchema.indexes();
+      const extIndex = schemaIndexes.find(
+        ([spec]) => 'externalSource' in spec && 'externalSourceId' in spec,
+      );
+      expect(extIndex).toBeDefined();
+      const [, extOpts] = extIndex!;
+      expect((extOpts as { unique?: boolean }).unique).not.toBe(true);
     });
   });
 });
