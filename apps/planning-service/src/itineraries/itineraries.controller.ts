@@ -57,8 +57,9 @@ export class ItinerariesController {
   @UseGuards(JwtAuthGuard)
   @Get(':id')
   async getItineraryById(@Request() req, @Param('id') id: string) {
-    const userId = req.user.userId || req.user.sub;
-    return this.itinerariesService.getItineraryById(id, userId);
+    const actorId = req.user.userId || req.user.sub;
+    const actorRole = req.user.role || 'user';
+    return this.itinerariesService.getItineraryById(id, actorId, actorRole);
   }
 
   /**

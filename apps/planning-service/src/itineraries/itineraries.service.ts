@@ -200,6 +200,8 @@ export class ItinerariesService {
         restaurant_lat: sLat,
         restaurant_lng: sLng,
         restaurant_address: stop.restaurant_address || stop.address || '',
+        restaurant_rating: stop.restaurant_rating ?? stop.rating,
+        restaurant_image: stop.restaurant_image ?? stop.featured_image,
         meal_type:
           stop.meal_type ||
           this.inferMealType(
@@ -244,7 +246,10 @@ export class ItinerariesService {
     const userLat = startPoint.lat;
     const userLng = startPoint.lon;
     const userBudget = dto.budget || 250000;
-    const desiredStops = Math.min(Math.max(dto.desired_stops || 3, 2), 6);
+    const desiredStops = Math.min(
+      Math.max(dto.desired_stops ?? dto.stop_count ?? 3, 2),
+      6,
+    );
     const routingMode = dto.routing_mode || 'motorbike';
     const startMins = parseTimeToMinutes(dto.start_time || '11:00');
 
@@ -330,6 +335,8 @@ export class ItinerariesService {
         return {
           id: r.restaurant_id,
           name: r.name,
+          address: r.address || '',
+          featured_image: r.featured_image || '',
           lat: point.lat,
           lon: point.lon,
           meal_type: this.inferMealType(normalizedTags, r.name),
@@ -394,6 +401,9 @@ export class ItinerariesService {
               restaurant_name: cand.name || 'Nhà hàng GastroWise',
               restaurant_lat: cand.lat,
               restaurant_lng: cand.lon,
+              restaurant_address: cand.address || '',
+              restaurant_rating: cand.rating,
+              restaurant_image: cand.featured_image || undefined,
               meal_type: s.meal_type || cand.meal_type || 'main',
               arrival_time: s.arrival_time,
               departure_time: s.departure_time,
@@ -417,15 +427,21 @@ export class ItinerariesService {
         optimizedBy = aiResult.solver;
       }
     } catch (aiErr: any) {
+      const errStatus =
+        typeof aiErr?.getStatus === 'function'
+          ? aiErr.getStatus()
+          : aiErr?.status ?? aiErr?.response?.status;
       if (
         aiErr instanceof UnauthorizedException ||
-        aiErr?.status === 401 ||
-        aiErr?.status === 403 ||
-        aiErr?.response?.status === 401 ||
-        aiErr?.response?.status === 403
+        aiErr instanceof ForbiddenException ||
+        aiErr instanceof BadRequestException ||
+        errStatus === 400 ||
+        errStatus === 401 ||
+        errStatus === 403 ||
+        errStatus === 422
       ) {
         this.logger.error(
-          `AI Route Optimizer authentication failed: ${aiErr.message}. Aborting itinerary generation.`,
+          `AI Route Optimizer rejected request (HTTP ${errStatus || 'unknown'}): ${aiErr.message}. Aborting itinerary generation without partial persistence.`,
         );
         throw aiErr;
       }
@@ -442,6 +458,9 @@ export class ItinerariesService {
           restaurant_name: c.name,
           restaurant_lat: c.lat,
           restaurant_lng: c.lon,
+          restaurant_address: c.address || '',
+          restaurant_rating: c.rating,
+          restaurant_image: c.featured_image || undefined,
           meal_type: c.meal_type,
           tags: c.tags,
           estimated_cost: c.avg_price,
@@ -499,7 +518,11 @@ export class ItinerariesService {
     return this.itineraryModel.find().sort({ created_at: -1 }).exec();
   }
 
-  async getItineraryById(id: string, userId?: string): Promise<Itinerary> {
+  async getItineraryById(
+    id: string,
+    actorId?: string,
+    actorRole?: string,
+  ): Promise<Itinerary> {
     if (!Types.ObjectId.isValid(id) || !/^[0-9a-fA-F]{24}$/.test(id)) {
       throw new NotFoundException(
         `Lộ trình với ID "${id}" không hợp lệ hoặc không tồn tại.`,
@@ -508,6 +531,14 @@ export class ItinerariesService {
     const itinerary = await this.itineraryModel.findById(id).exec();
     if (!itinerary) {
       throw new NotFoundException('Không tìm thấy lộ trình');
+    }
+    if (actorRole !== 'admin') {
+      const ownerId = itinerary.user_id?.toString();
+      if (ownerId && actorId && ownerId !== actorId) {
+        throw new ForbiddenException(
+          'Access Denied: You do not own this itinerary.',
+        );
+      }
     }
     return itinerary;
   }
@@ -527,7 +558,7 @@ export class ItinerariesService {
       throw new NotFoundException('Không tìm thấy lộ trình để sắp xếp lại.');
     }
 
-    if (actorRole && actorRole !== 'admin') {
+    if (actorRole !== 'admin') {
       const ownerId = itinerary.user_id?.toString();
       if (ownerId && actorId && ownerId !== actorId) {
         throw new ForbiddenException(
@@ -598,7 +629,7 @@ export class ItinerariesService {
       throw new NotFoundException('Không tìm thấy lộ trình để thêm điểm dừng.');
     }
 
-    if (actorRole && actorRole !== 'admin') {
+    if (actorRole !== 'admin') {
       const ownerId = itinerary.user_id?.toString();
       if (ownerId && actorId && ownerId !== actorId) {
         throw new ForbiddenException(
@@ -642,6 +673,8 @@ export class ItinerariesService {
       restaurant_lat: restPoint.lat,
       restaurant_lng: restPoint.lon,
       restaurant_address: restaurant.address || '',
+      restaurant_rating: restaurant.rating,
+      restaurant_image: restaurant.featured_image || undefined,
       meal_type: this.inferMealType(
         normalizeRestaurantTags(restaurant.tags),
         restaurant.name || '',
@@ -700,7 +733,7 @@ export class ItinerariesService {
       throw new NotFoundException('Không tìm thấy lộ trình để xóa điểm dừng.');
     }
 
-    if (actorRole && actorRole !== 'admin') {
+    if (actorRole !== 'admin') {
       const ownerId = itinerary.user_id?.toString();
       if (ownerId && actorId && ownerId !== actorId) {
         throw new ForbiddenException(
@@ -761,7 +794,7 @@ export class ItinerariesService {
       throw new NotFoundException('Không tìm thấy lộ trình để tính toán lại.');
     }
 
-    if (actorRole && actorRole !== 'admin') {
+    if (actorRole !== 'admin') {
       const ownerId = itinerary.user_id?.toString();
       if (ownerId && actorId && ownerId !== actorId) {
         throw new ForbiddenException(
@@ -837,7 +870,7 @@ export class ItinerariesService {
       );
     }
 
-    if (actorRole && actorRole !== 'admin') {
+    if (actorRole !== 'admin') {
       const ownerId = itinerary.user_id?.toString();
       if (ownerId && actorId && ownerId !== actorId) {
         throw new ForbiddenException(
@@ -871,19 +904,31 @@ export class ItinerariesService {
     if (newStatus === 'completed') {
       const ownerIdStr = updated.user_id?.toString();
       if (ownerIdStr) {
-        this.coreApiClient.recordInteraction({
-          userId: ownerIdStr,
-          restaurantId: updated.stops?.[0]?.restaurant_id || '',
-          interactionType: 'itinerary_complete',
-          metadata: { totalStops: updated.stops?.length || 0, itineraryId: id },
+        Promise.resolve(
+          this.coreApiClient.recordInteraction({
+            userId: ownerIdStr,
+            restaurantId: updated.stops?.[0]?.restaurant_id || '',
+            interactionType: 'itinerary_complete',
+            metadata: { totalStops: updated.stops?.length || 0, itineraryId: id },
+          }),
+        ).catch((err) => {
+          this.logger.warn(
+            `Non-blocking recordInteraction failed for completed itinerary ${id}: ${err?.message || err}`,
+          );
         });
 
         if (updated.stops && updated.stops.length > 0) {
           const restaurantIds = updated.stops.map((s) => s.restaurant_id);
-          this.coreApiClient.applyFeedback(ownerIdStr, {
-            completedItineraryId: id,
-            restaurantIds,
-            rating: 5,
+          Promise.resolve(
+            this.coreApiClient.applyFeedback(ownerIdStr, {
+              completedItineraryId: id,
+              restaurantIds,
+              rating: 5,
+            }),
+          ).catch((err) => {
+            this.logger.warn(
+              `Non-blocking applyFeedback failed for completed itinerary ${id}: ${err?.message || err}`,
+            );
           });
         }
       }
@@ -906,7 +951,7 @@ export class ItinerariesService {
       throw new NotFoundException('Không tìm thấy lộ trình để xóa.');
     }
 
-    if (actorRole && actorRole !== 'admin') {
+    if (actorRole !== 'admin') {
       const ownerId = itinerary.user_id?.toString();
       if (ownerId && actorId && ownerId !== actorId) {
         throw new ForbiddenException(
