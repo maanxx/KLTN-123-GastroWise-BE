@@ -1,0 +1,194 @@
+{
+  "restaurants": [
+    {
+      "RestaurantID": 9001001,
+      "Name": "Phở Hòa Pasteur",
+      "Address": "260C Pasteur, Phường Võ Thị Sáu, Quận 3, TP. HCM",
+      "CityID": 217,
+      "City": "TP. HCM",
+      "District": "Quận 3",
+      "PriceMin": 65000,
+      "PriceMax": 95000,
+      "Latitude": 10.7852,
+      "Longtitude": 106.6879,
+      "IsActive": true,
+      "IsDelete": false,
+      "TotalReview": 320,
+      "AvgRating": 9.0,
+      "Cuisines": [{ "Name": "Món Việt" }],
+      "LstCategory": [{ "Name": "Mì phở" }],
+      "MicrositeUrl": "/ho-chi-minh/pho-hoa-pasteur",
+      "ResUrlRewrite": "pho-hoa-pasteur",
+      "PictureModel": {
+        "ImageUrl": "https://images.unsplash.com/photo-1582878826629-29b7ad1cdc43?w=600"
+      },
+      "OpeningTime": [
+        { "TimeOpen": { "Hours": 6, "Minutes": 0 }, "TimeClose": { "Hours": 22, "Minutes": 30 } }
+      ],
+      "dishes": [
+        {
+          "dishId": "sf-dish-9001001-1",
+          "name": "Phở Tái Nạm",
+          "description": "Phở bò nước dùng hầm xương 12 giờ",
+          "price": "75.000đ",
+          "category": "Món chính",
+          "tags": ["Phở", "Bò"],
+          "imageUrl": "https://images.unsplash.com/photo-1582878826629-29b7ad1cdc43?w=400",
+          "isAvailable": true,
+          "isFeatured": true,
+          "isVegetarian": false,
+          "calories": 520
+        },
+        {
+          "dishId": "sf-dish-9001001-2",
+          "name": "Phở Đặc Biệt Tô Lớn",
+          "description": "Đầy đủ tái, nạm, gầu, gân, bò viên",
+          "price": 95000,
+          "category": "Món chính",
+          "tags": ["Phở", "Đặc biệt"],
+          "imageUrl": "https://images.unsplash.com/photo-1555126634-323283e090fa?w=400",
+          "isAvailable": true,
+          "isFeatured": true
+        }
+      ]
+    },
+    {
+      "RestaurantID": 9001002,
+      "Name": "Bánh Mì Huynh Hoa",
+      "Address": "26 Lê Thị Riêng, Phường Bến Thành, Quận 1, TP. HCM",
+      "CityID": 217,
+      "City": "TP. HCM",
+      "District": "Quận 1",
+      "PriceMin": 55000,
+      "PriceMax": 75000,
+      "Latitude": 10.7712,
+      "Longtitude": 106.6915,
+      "IsActive": true,
+      "IsDelete": false,
+      "TotalReview": 510,
+      "AvgRating": 8.8,
+      "Cuisines": [{ "Name": "Món Việt" }],
+      "LstCategory": [{ "Name": "Bánh mì" }],
+      "MicrositeUrl": "/ho-chi-minh/banh-mi-huynh-hoa",
+      "ResUrlRewrite": "banh-mi-huynh-hoa",
+      "PictureModel": {
+        "ImageUrl": "https://images.unsplash.com/photo-1600454309261-3dc9b7597637?w=600"
+      },
+      "OpeningTime": [
+        { "TimeOpen": { "Hours": 6, "Minutes": 0 }, "TimeClose": { "Hours": 22, "Minutes": 0 } }
+      ]
+    },
+    {
+      "RestaurantID": 9001003,
+      "Name": "Cơm Tấm Ba Ghiền",
+      "Address": "84 Đặng Văn Ngữ, Phường 10, Quận Phú Nhuận, TP. HCM",
+      "CityID": 217,
+      "City": "TP. HCM",
+      "District": "Quận Phú Nhuận",
+      "PriceMin": 50000,
+      "PriceMax": 90000,
+      "Latitude": 10.7955,
+      "Longtitude": 106.6716,
+      "IsActive": true,
+      "IsDelete": false,
+      "TotalReview": 290,
+      "AvgRating": 8.6,
+      "Cuisines": [{ "Name": "Món Việt" }],
+      "LstCategory": [{ "Name": "Cơm tấm" }],
+      "MicrositeUrl": "/ho-chi-minh/com-tam-ba-ghien",
+      "ResUrlRewrite": "com-tam-ba-ghien",
+      "PictureModel": {
+        "ImageUrl": "https://images.unsplash.com/photo-1512058564366-18510be2db19?w=600"
+      },
+      "OpeningTime": [
+        { "TimeOpen": { "Hours": 7, "Minutes": 30 }, "TimeClose": { "Hours": 21, "Minutes": 0 } }
+      ]
+    },
+    {
+      "RestaurantID": 9001001,
+      "Name": "Phở Hòa Pasteur (Duplicate ID)",
+      "Address": "260C Pasteur, Quận 3, TP. HCM",
+      "CityID": 217,
+      "Latitude": 10.7852,
+      "Longtitude": 106.6879,
+      "AvgRating": 9.0
+    },
+    {
+      "RestaurantID": 9001999,
+      "Name": "",
+      "Address": "Invalid Restaurant Missing Name",
+      "CityID": 217
+    }
+  ],
+  "dishes": [
+    {
+      "dishId": "sf-dish-9001002-1",
+      "restaurantExternalId": "9001002",
+      "name": "Bánh Mì Thập Cẩm Đặc Biệt",
+      "description": "Pate, bơ, chả lụa, thịt nguội, giò thủ",
+      "price": "68,000 VND",
+      "category": "Bánh mì",
+      "tags": ["Ăn vặt", "Đặc sản Sài Gòn"],
+      "imageUrl": "https://images.unsplash.com/photo-1600454309261-3dc9b7597637?w=400",
+      "isAvailable": true,
+      "isFeatured": true
+    },
+    {
+      "dishId": "sf-dish-9001002-2",
+      "restaurantExternalId": "9001002",
+      "name": "Bánh Mì Chay Đậu Hũ Nấm",
+      "description": "Đậu hũ chiên giòn, nấm đông cô, đồ chua",
+      "price": "45k",
+      "category": "Bánh mì",
+      "tags": ["Ăn chay"],
+      "isVegetarian": true,
+      "isAvailable": true
+    },
+    {
+      "dishId": "sf-dish-9001003-1",
+      "restaurantExternalId": "9001003",
+      "name": "Cơm Tấm Sườn Bì Chả",
+      "description": "Sườn nướng mật ong, bì, chả trứng, mỡ hành",
+      "price": 72000,
+      "category": "Cơm tấm",
+      "tags": ["Món chính", "Sườn nướng"],
+      "imageUrl": "https://images.unsplash.com/photo-1512058564366-18510be2db19?w=400",
+      "isAvailable": true,
+      "isFeatured": true
+    },
+    {
+      "dishId": "sf-dish-9001003-2",
+      "restaurantExternalId": "9001003",
+      "name": "Trà Đá Đường",
+      "description": "Trà đá giải khát",
+      "price": "10.000đ",
+      "category": "Đồ uống",
+      "isVegetarian": true,
+      "isAvailable": true
+    },
+    {
+      "dishId": "sf-dish-9001002-1",
+      "restaurantExternalId": "9001002",
+      "name": "Bánh Mì Thập Cẩm (Duplicate Dish ID)",
+      "price": 68000
+    },
+    {
+      "dishId": "sf-dish-bad-price",
+      "restaurantExternalId": "9001002",
+      "name": "Món Giá Âm",
+      "price": -15000
+    },
+    {
+      "dishId": "sf-dish-missing-name",
+      "restaurantExternalId": "9001003",
+      "name": "",
+      "price": 40000
+    },
+    {
+      "dishId": "sf-dish-orphan",
+      "restaurantExternalId": "99999999",
+      "name": "Món Không Có Nhà Hàng",
+      "price": 50000
+    }
+  ]
+}

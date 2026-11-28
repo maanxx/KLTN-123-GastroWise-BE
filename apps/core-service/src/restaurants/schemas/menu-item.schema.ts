@@ -39,6 +39,33 @@ export class MenuItem {
 
   @Prop({ default: false })
   isFeatured: boolean; // Món đặc trưng (Chef's Choice)
+
+  // --- M10.7 Controlled Ingestion Provenance & Deduplication ---
+  @Prop({ required: false })
+  externalSource?: string;
+
+  @Prop({ required: false })
+  externalSourceId?: string;
+
+  @Prop({ required: false })
+  ingestionBatchId?: string;
+
+  @Prop({ type: mongoose.Schema.Types.Mixed, required: false })
+  sourceMetadata?: Record<string, unknown>;
 }
 
 export const MenuItemSchema = SchemaFactory.createForClass(MenuItem);
+
+MenuItemSchema.index({ restaurantId: 1 });
+MenuItemSchema.index(
+  { externalSource: 1, externalSourceId: 1 },
+  {
+    name: 'uniq_dish_external_source_id_partial',
+    unique: true,
+    partialFilterExpression: {
+      externalSource: { $type: 'string' },
+      externalSourceId: { $type: 'string' },
+    },
+  },
+);
+MenuItemSchema.index({ ingestionBatchId: 1 }, { sparse: true });

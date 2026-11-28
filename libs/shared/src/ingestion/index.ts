@@ -7,3 +7,5 @@ export * from './ingestion.data-quality';
 export * from './ingestion.pipeline';
 export * from './ingestion.index-preflight';
 export * from './ingestion.cli';
+export * from './dish-ingestion.normalizer';
+export * from './food-dataset.pipeline';
