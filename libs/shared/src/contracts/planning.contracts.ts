@@ -20,10 +20,12 @@ export class ItineraryStopSnapshot {
 export class OptimizedStopResult {
   restaurant_id: string;
   order_index: number;
+  meal_type?: string;
   arrival_time: string;
   departure_time: string;
   transit_time_mins: number;
   distance_km: number;
+  estimated_cost?: number;
 }
 
 export class RouteOptimizationResult {

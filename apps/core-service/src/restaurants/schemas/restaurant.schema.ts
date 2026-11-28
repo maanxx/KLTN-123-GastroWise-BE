@@ -2,6 +2,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import mongoose, { HydratedDocument } from 'mongoose';
 import { isValidGeoJsonPoint } from '@shared/utils/geo.utils';
+import { formatRestaurantTagsString } from '@shared/utils/restaurant-normalizer.util';
 
 export type RestaurantDocument = HydratedDocument<Restaurant>;
 
@@ -14,7 +15,13 @@ export class Restaurant {
   @Prop() diaChi: string;
   @Prop() gioMoCua: string;
   @Prop() giaCa: string;
-  @Prop() tags: string;
+  @Prop({
+    type: mongoose.Schema.Types.Mixed,
+    default: '',
+    set: (val: unknown) => formatRestaurantTagsString(val),
+    get: (val: unknown) => formatRestaurantTagsString(val),
+  })
+  tags: string;
 
   @Prop({ min: -90, max: 90, required: false }) lat?: number;
   @Prop({ min: -180, max: 180, required: false }) lon?: number;

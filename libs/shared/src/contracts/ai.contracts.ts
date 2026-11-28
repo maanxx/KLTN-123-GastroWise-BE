@@ -3,6 +3,61 @@
  * Synchronized against KLTN-123-GastroWise-AI OpenAPI 3.1.0 & runtime callers (M7.3.9).
  */
 
+export class RecommendRequest {
+  query: string;
+  candidate_ids?: string[] | null = [];
+  user_gps?: number[] | null;
+  city_filter?: string | null;
+  taste_vector?: number[] | null;
+  dietary_exclusions?: string[] | null = [];
+}
+
+export class RecommendTasteScore {
+  id: string;
+  name: string;
+  tags: string;
+  S_taste: number;
+  distance_km: number;
+  price: number;
+  explanation?: string | null;
+}
+
+export class RecommendResponse {
+  sort_by: string;
+  scores: RecommendTasteScore[];
+}
+
+export class WeatherRecommendRequest {
+  user_gps?: number[] | null;
+  temperature?: number | null;
+  weather_condition?: string | null;
+}
+
+export class WeatherInfo {
+  temperature: number;
+  condition_text: string;
+  condition_code: number;
+  banner_title: string;
+  banner_desc: string;
+  weather_type: string;
+}
+
+export class WeatherRecommendResponse {
+  weather: WeatherInfo;
+  scores: RecommendTasteScore[];
+}
+
+export class TrainCFRequest {
+  interactions: Array<Record<string, any>>;
+}
+
+export class TrainCFResponse {
+  success: boolean;
+  message: string;
+  user_count: number;
+  item_count: number;
+}
+
 export class HybridRecommendationRequest {
   user_id?: string | null;
   user_gps?: number[] | null;
@@ -61,6 +116,8 @@ export class RouteOptimizeRestaurantItem {
   meal_type?: string;
   avg_price?: number;
   rating?: number;
+  tags?: string;
+  district?: string;
 }
 
 export class RouteOptimizeCanonicalRequest {

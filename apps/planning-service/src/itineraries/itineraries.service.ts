@@ -20,6 +20,13 @@ import {
   extractValidGeoPoint,
   parseValidCoordinatePair,
 } from '@shared/utils/geo.utils';
+import {
+  formatRestaurantTagsString,
+  normalizeRestaurantRating,
+  normalizeRestaurantTags,
+  normalizeStopOrderIndexes,
+  parseRestaurantPriceVnd,
+} from '@shared/utils/restaurant-normalizer.util';
 
 export function calculateHaversineDistanceKm(
   lat1: number,
@@ -68,13 +75,7 @@ export function calculateTasteAffinityScore(
 ): number {
   if (!profile) return 0.5;
   let score = 0.5;
-  const tags = (
-    restaurant.tags
-      ? Array.isArray(restaurant.tags)
-        ? restaurant.tags.join(' ')
-        : restaurant.tags
-      : ''
-  ).toLowerCase();
+  const tags = formatRestaurantTagsString(restaurant.tags).toLowerCase();
   const name = (restaurant.name || restaurant.tenQuan || '').toLowerCase();
   const combined = `${tags} ${name}`;
 
@@ -124,8 +125,8 @@ export class ItinerariesService {
     private readonly httpService: HttpService,
   ) {}
 
-  public inferMealType(tags: string | string[], name: string): string {
-    const tagStr = Array.isArray(tags) ? tags.join(' ') : tags || '';
+  public inferMealType(tags: unknown, name: string): string {
+    const tagStr = formatRestaurantTagsString(tags);
     const combined = `${tagStr} ${name}`.toLowerCase();
     if (/cà phê|cafe|trà sữa|nước|sinh tố/i.test(combined)) return 'cafe';
     if (/chè|bánh ngọt|kem|tráng miệng/i.test(combined)) return 'dessert';
@@ -211,7 +212,7 @@ export class ItinerariesService {
         transit_time_mins: transitMins,
         distance_to_next_km: Number(dist.toFixed(2)),
         estimated_cost: stopCost,
-        tags: Array.isArray(stop.tags) ? stop.tags.join(', ') : stop.tags || '',
+        tags: formatRestaurantTagsString(stop.tags),
       };
     });
 
@@ -307,8 +308,21 @@ export class ItinerariesService {
           point.lat,
           point.lon,
         );
-        const rating = Number(r.rating) || 4.0;
-        const tasteScore = calculateTasteAffinityScore(r, tasteProfile);
+        const { rating } = normalizeRestaurantRating({
+          rating: r.rating,
+          rawRating: r.raw_rating,
+          ratingScale: r.rating_scale,
+        });
+        const normalizedTags = normalizeRestaurantTags(r.tags);
+        const formattedTags = formatRestaurantTagsString(r.tags);
+        const avgPrice = parseRestaurantPriceVnd(
+          r.average_cost ?? r.price_level,
+          50000,
+        );
+        const tasteScore = calculateTasteAffinityScore(
+          { ...r, tags: normalizedTags },
+          tasteProfile,
+        );
         const proximityScore = Math.max(0, 1 - dist / 25);
         const compositeScore =
           (rating / 5.0) * 0.4 + tasteScore * 0.3 + proximityScore * 0.3;
@@ -318,13 +332,13 @@ export class ItinerariesService {
           name: r.name,
           lat: point.lat,
           lon: point.lon,
-          meal_type: this.inferMealType(r.tags || [], r.name),
+          meal_type: this.inferMealType(normalizedTags, r.name),
           open_time: r.open_time?.split('-')[0]?.trim() || '08:00',
           close_time: r.open_time?.split('-')[1]?.trim() || '22:00',
           dining_duration_mins: 45,
-          avg_price: 50000,
+          avg_price: avgPrice,
           rating,
-          tags: Array.isArray(r.tags) ? r.tags.join(', ') : r.tags || '',
+          tags: formattedTags,
           compositeScore,
         };
       })
@@ -345,8 +359,13 @@ export class ItinerariesService {
       const aiResult = await this.aiApiClient.optimizeRoute({
         restaurants: scoredCandidates.slice(0, desiredStops + 2).map((c) => ({
           id: c.id,
+          name: c.name,
           lat: c.lat,
           lng: c.lon,
+          meal_type: c.meal_type,
+          avg_price: c.avg_price,
+          rating: c.rating,
+          tags: c.tags,
           open: c.open_time,
           close: c.close_time,
           duration_mins: c.dining_duration_mins,
@@ -356,46 +375,43 @@ export class ItinerariesService {
         start_time: dto.start_time || '11:00',
         routing_mode: routingMode,
         budget_vnd: userBudget,
+        desired_stops: desiredStops,
       });
 
       if (aiResult && aiResult.stops && aiResult.stops.length > 0) {
         const candidateMap = new Map(scoredCandidates.map((c) => [c.id, c]));
-        const hasZeroBasedOrder = aiResult.stops.some(
-          (s) => typeof s.order_index === 'number' && s.order_index === 0,
-        );
-        optimizedStops = aiResult.stops.map((s, idx) => {
-          const cand = candidateMap.get(s.restaurant_id);
-          if (!cand) {
-            return null;
-          }
-          const normalizedOrderIndex =
-            typeof s.order_index === 'number'
-              ? hasZeroBasedOrder
-                ? s.order_index + 1
-                : s.order_index
-              : idx + 1;
-          return {
-            stop_id: uuidv4(),
-            restaurant_id: s.restaurant_id,
-            order_index: normalizedOrderIndex,
-            restaurant_name: cand.name || 'Nhà hàng GastroWise',
-            restaurant_lat: cand.lat,
-            restaurant_lng: cand.lon,
-            meal_type: cand.meal_type || 'main',
-            arrival_time: s.arrival_time,
-            departure_time: s.departure_time,
-            dining_duration_mins: 45,
-            transit_time_mins: s.transit_time_mins,
-            distance_to_next_km: s.distance_km,
-            estimated_cost: 50000,
-            tags: cand.tags || '',
-          };
-        })
-        .filter((item): item is NonNullable<typeof item> => item !== null);
+        const canonicalStops = normalizeStopOrderIndexes(aiResult.stops);
+        optimizedStops = canonicalStops
+          .map((s) => {
+            const cand = candidateMap.get(s.restaurant_id);
+            if (!cand) {
+              return null;
+            }
+            return {
+              stop_id: uuidv4(),
+              restaurant_id: s.restaurant_id,
+              order_index: s.order_index,
+              restaurant_name: cand.name || 'Nhà hàng GastroWise',
+              restaurant_lat: cand.lat,
+              restaurant_lng: cand.lon,
+              meal_type: s.meal_type || cand.meal_type || 'main',
+              arrival_time: s.arrival_time,
+              departure_time: s.departure_time,
+              dining_duration_mins: cand.dining_duration_mins || 45,
+              transit_time_mins: s.transit_time_mins,
+              distance_to_next_km: s.distance_km,
+              estimated_cost: s.estimated_cost ?? cand.avg_price ?? 50000,
+              tags: cand.tags || '',
+            };
+          })
+          .filter((item): item is NonNullable<typeof item> => item !== null);
 
         totalDistKm = aiResult.total_distance_km;
         totalDurationMins = aiResult.total_duration_mins;
-        totalCost = optimizedStops.length * 50000;
+        totalCost = optimizedStops.reduce(
+          (sum, st) => sum + (Number(st.estimated_cost) || 0),
+          0,
+        );
         remainingBudget = Math.max(0, userBudget - totalCost);
         co2Saved = Number((totalDistKm * 0.12).toFixed(2));
         optimizedBy = aiResult.solver;
@@ -627,14 +643,15 @@ export class ItinerariesService {
       restaurant_lng: restPoint.lon,
       restaurant_address: restaurant.address || '',
       meal_type: this.inferMealType(
-        restaurant.tags || [],
+        normalizeRestaurantTags(restaurant.tags),
         restaurant.name || '',
       ),
       dining_duration_mins: 45,
-      estimated_cost: 50000,
-      tags: Array.isArray(restaurant.tags)
-        ? restaurant.tags.join(', ')
-        : restaurant.tags || '',
+      estimated_cost: parseRestaurantPriceVnd(
+        restaurant.average_cost ?? restaurant.price_level,
+        50000,
+      ),
+      tags: formatRestaurantTagsString(restaurant.tags),
     };
 
     const currentStops = [...itinerary.stops];

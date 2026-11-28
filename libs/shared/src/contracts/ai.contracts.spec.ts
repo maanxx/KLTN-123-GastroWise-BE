@@ -7,6 +7,12 @@ import {
   CopilotMessageResponse,
   RouteOptimizeCanonicalRequest,
   RouteOptimizeResponse,
+  RecommendRequest,
+  RecommendResponse,
+  WeatherRecommendRequest,
+  WeatherRecommendResponse,
+  TrainCFRequest,
+  TrainCFResponse,
 } from './ai.contracts';
 
 describe('Shared AI DTO Contracts (Synchronized with FastAPI OpenAPI)', () => {
@@ -95,5 +101,58 @@ describe('Shared AI DTO Contracts (Synchronized with FastAPI OpenAPI)', () => {
     };
     expect(req.start_location).toHaveLength(2);
     expect(res.status).toBe('EMPTY');
+  });
+
+  it('should align Recommend, WeatherRecommend, and TrainCF DTOs with FastAPI schemas', () => {
+    const recReq: RecommendRequest = {
+      query: 'phở bò',
+      user_gps: [10.7769, 106.7009],
+      dietary_exclusions: [],
+    };
+    const recRes: RecommendResponse = {
+      sort_by: 'relevance',
+      scores: [
+        {
+          id: 'r1',
+          name: 'Phở Hà Nội',
+          tags: 'phở bò nóng',
+          S_taste: 0.9,
+          distance_km: 0.4,
+          price: 60000,
+          explanation: 'Đúng món bạn yêu cầu',
+        },
+      ],
+    };
+    const weatherReq: WeatherRecommendRequest = {
+      user_gps: [10.7769, 106.7009],
+      temperature: 33,
+      weather_condition: 'sunny',
+    };
+    const weatherRes: WeatherRecommendResponse = {
+      weather: {
+        temperature: 33,
+        condition_text: 'Trời nắng nóng',
+        condition_code: 3,
+        banner_title: 'Nắng nóng',
+        banner_desc: 'Món mát',
+        weather_type: 'hot',
+      },
+      scores: recRes.scores,
+    };
+    const cfReq: TrainCFRequest = {
+      interactions: [{ userId: 'u1', targetId: 'r1', eventType: 'REVIEW' }],
+    };
+    const cfRes: TrainCFResponse = {
+      success: true,
+      message: 'OK',
+      user_count: 1,
+      item_count: 1,
+    };
+
+    expect(recReq.query).toBe('phở bò');
+    expect(weatherReq.temperature).toBe(33);
+    expect(weatherRes.weather.weather_type).toBe('hot');
+    expect(cfReq.interactions).toHaveLength(1);
+    expect(cfRes.success).toBe(true);
   });
 });

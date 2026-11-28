@@ -20,6 +20,12 @@ import {
   calculateHaversineDistanceKm,
   estimateTransitTimeMinutes,
 } from '@shared/utils/geo.utils';
+import {
+  DEFAULT_NEUTRAL_RATING,
+  formatRestaurantTagsString,
+  normalizeRestaurantRating,
+  normalizeStopOrderIndexes,
+} from '@shared/utils/restaurant-normalizer.util';
 
 @Injectable()
 export class AiApiClient {
@@ -70,18 +76,39 @@ export class AiApiClient {
       budget: request.budget_vnd ?? 250000,
       routing_mode: request.routing_mode || 'motorbike',
       desired_stops: request.desired_stops ?? (request.restaurants?.length || 3),
-      candidates: (request.restaurants || []).map((r) => ({
-        id: r.id,
-        name: r.name || `Restaurant ${r.id}`,
-        lat: r.lat,
-        lon: (r as any).lon !== undefined ? (r as any).lon : r.lng,
-        meal_type: r.meal_type || 'main',
-        open_time: r.open || '08:00',
-        close_time: r.close || '22:00',
-        dining_duration_mins: r.duration_mins || 45,
-        avg_price: r.avg_price || 50000,
-        rating: r.rating || 4.5,
-      })),
+      candidates: (request.restaurants || []).map((r) => {
+        const normalizedRating =
+          r.rating !== undefined && r.rating !== null
+            ? normalizeRestaurantRating({
+                rating: r.rating,
+                rawRating: (r as any).rawRating,
+                ratingScale: (r as any).ratingScale,
+              }).rating
+            : DEFAULT_NEUTRAL_RATING;
+
+        const normalizedTags =
+          r.tags !== undefined && r.tags !== null
+            ? formatRestaurantTagsString(r.tags)
+            : undefined;
+
+        return {
+          id: r.id,
+          name: r.name?.trim() || `Restaurant ${r.id}`,
+          lat: r.lat,
+          lon: (r as any).lon !== undefined ? (r as any).lon : r.lng,
+          meal_type: r.meal_type || 'main',
+          open_time: r.open || '08:00',
+          close_time: r.close || '22:00',
+          dining_duration_mins: r.duration_mins ?? 45,
+          avg_price:
+            r.avg_price !== undefined && r.avg_price !== null
+              ? r.avg_price
+              : 50000,
+          rating: normalizedRating,
+          tags: normalizedTags,
+          district: r.district,
+        };
+      }),
     };
   }
 
@@ -131,23 +158,21 @@ export class AiApiClient {
         response.data?.stops || response.data?.ordered_stops;
 
       if (Array.isArray(rawStops)) {
-        const hasZeroBasedIndex = rawStops.some(
-          (s: any) => typeof s.order_index === 'number' && s.order_index === 0,
-        );
-        return {
-          stops: rawStops.map((s: any, idx: number) => ({
+        const mappedStops: OptimizedStopResult[] = rawStops.map(
+          (s: any, idx: number) => ({
             restaurant_id: s.id || s.restaurant_id,
             order_index:
-              typeof s.order_index === 'number'
-                ? hasZeroBasedIndex
-                  ? s.order_index + 1
-                  : s.order_index
-                : idx + 1,
+              typeof s.order_index === 'number' ? s.order_index : idx + 1,
+            meal_type: s.meal_type,
             arrival_time: s.arrival_time || s.arrival || '12:00',
             departure_time: s.departure_time || s.departure || '13:00',
             transit_time_mins: s.transit_time_mins ?? s.transit_mins ?? 15,
             distance_km: s.distance_to_next_km ?? s.distance_km ?? 1.5,
-          })),
+            estimated_cost: s.estimated_cost,
+          }),
+        );
+        return {
+          stops: normalizeStopOrderIndexes(mappedStops),
           total_distance_km: response.data.total_distance_km ?? 5.0,
           total_duration_mins: response.data.total_duration_mins ?? 120,
           solver,
